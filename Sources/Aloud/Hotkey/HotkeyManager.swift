@@ -133,6 +133,9 @@ final class HotkeyManager {
         set { engine.handsFreeEnabled = newValue }
     }
 
+    // Whether the event tap is installed and listening.
+    var isActive: Bool { tap != nil }
+
     // Returns false when the tap can't be created (Accessibility not granted).
     @discardableResult
     func start() -> Bool {
