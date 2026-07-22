@@ -48,6 +48,13 @@ struct HotkeyEngine {
         self.handsFreeEnabled = handsFreeEnabled
     }
 
+    // Back to idle, forgetting any held/locked state and pending double-tap.
+    mutating func reset() {
+        isHeld = false
+        isLocked = false
+        lastTapTime = -1
+    }
+
     mutating func handle(type: CGEventType, keyCode: UInt16, flags: CGEventFlags,
                          time: TimeInterval) -> HotkeyAction {
         switch type {
@@ -135,6 +142,13 @@ final class HotkeyManager {
 
     // Whether the event tap is installed and listening.
     var isActive: Bool { tap != nil }
+
+    // End a hands-free session from the UI — equivalent to pressing Esc.
+    func endHandsFree() {
+        guard engine.isLocked else { return }
+        engine.reset()
+        onAction?(.commit)
+    }
 
     // Returns false when the tap can't be created (Accessibility not granted).
     @discardableResult
