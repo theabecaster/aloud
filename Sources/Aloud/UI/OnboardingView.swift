@@ -86,9 +86,12 @@ struct OnboardingView: View {
         .onReceive(poll) { _ in
             micStatus = Permissions.microphone
             axStatus = Permissions.accessibility
-            // Auto-advance when a screen's requirement is met.
-            if step == .microphone, micStatus == .granted { advance() }
-            if step == .accessibility, axStatus == .granted { advance() }
+            // Auto-advance when a screen's requirement is met. Granting
+            // happened in a system dialog or System Settings, and macOS
+            // doesn't hand focus back to us — reclaim it so the flow visibly
+            // continues instead of sitting behind whatever has focus.
+            if step == .microphone, micStatus == .granted { advance(); reclaimFocus() }
+            if step == .accessibility, axStatus == .granted { advance(); reclaimFocus() }
             if step == .model, controller.transcriberState == .ready { advance() }
             if step == .tryIt, !controller.lastTranscription.isEmpty { tryItDone = true }
         }
@@ -374,6 +377,11 @@ struct OnboardingView: View {
         guard let next = Step(rawValue: raw) else { return }
         if next == .tryIt { _ = controller.startListening() }
         withAnimation(.spring(duration: 0.3)) { step = next }
+    }
+
+    private func reclaimFocus() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first { $0.title == "Welcome to Aloud" }?.makeKeyAndOrderFront(nil)
     }
 
     // Mirror of advance(): step backwards, skipping steps that are already
