@@ -19,6 +19,7 @@ final class SettingsStore: ObservableObject {
         replacements = (defaults.data(forKey: Keys.replacements))
             .flatMap { try? JSONDecoder().decode([Replacement].self, from: $0) } ?? []
         soundCues = defaults.object(forKey: Keys.soundCues) as? Bool ?? true
+        liveTyping = defaults.bool(forKey: Keys.liveTyping)
     }
 
     private static func resolveDefaults() -> UserDefaults {
@@ -36,6 +37,7 @@ final class SettingsStore: ObservableObject {
         static let polishLevel = "polishLevel"
         static let replacements = "replacements"
         static let soundCues = "soundCues"
+        static let liveTyping = "liveTyping"
     }
 
     @Published var hotkey: Hotkey {
@@ -61,6 +63,11 @@ final class SettingsStore: ObservableObject {
     }
     @Published var soundCues: Bool {
         didSet { defaults.set(soundCues, forKey: Keys.soundCues) }
+    }
+    // Beta: type words as they're spoken instead of all at once on release.
+    // Defaults to off so everyone gets the proven experience unless they opt in.
+    @Published var liveTyping: Bool {
+        didSet { defaults.set(liveTyping, forKey: Keys.liveTyping) }
     }
 
     private static func loadHotkey(from defaults: UserDefaults) -> Hotkey? {
