@@ -23,6 +23,12 @@ final class DictationController: ObservableObject {
     private let hotkeyManager: HotkeyManager
     private let indicator = RecordingIndicatorPanel()
 
+    // Live typing (beta): active only while a dictation runs with the setting on.
+    private var liveSession: StreamingTranscription?
+    private var liveUpdatesTask: Task<Void, Never>?
+    private let liveTyper = LiveTyper()
+    private var mouseMonitor: Any?
+
     // Test-observable last result (used by the "Try it" onboarding step too).
     @Published private(set) var lastTranscription: String = ""
 
@@ -107,15 +113,103 @@ final class DictationController: ObservableObject {
             phase = .recording
             playCue("Tink")
             indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 })
+            if settings.liveTyping { startLiveTyping() }
         } catch {
             phase = .error(error.localizedDescription)
             indicator.showHint("Couldn’t access the microphone")
         }
     }
 
+    // MARK: live typing (beta)
+
+    private func startLiveTyping() {
+        guard let session = transcriber.makeStreamingTranscription() else { return }
+        liveSession = session
+        liveTyper.reset()
+        recorder.onChunk = { [weak session] chunk in session?.append(samples: chunk) }
+        // If the user clicks somewhere mid-dictation the cursor moves and our
+        // edits would land in the wrong place — freeze and leave the text be.
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            Task { @MainActor in self?.liveTyper.freeze() }
+        }
+        liveUpdatesTask = Task { [weak self] in
+            for await transcript in session.updates {
+                guard let self, self.liveSession === session else { break }
+                let polisher = TextPolisher(level: self.settings.polishLevel,
+                                            replacements: self.settings.replacements)
+                self.liveTyper.apply(polisher.polish(transcript.full))
+            }
+        }
+    }
+
+    // Tear down live-typing state. The typed text itself is handled by the
+    // caller first (final correction, erase, or leave as-is).
+    private func endLiveTyping() {
+        liveUpdatesTask?.cancel()
+        liveUpdatesTask = nil
+        liveSession = nil
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+        mouseMonitor = nil
+        liveTyper.reset()
+    }
+
+    // Live commit: the streaming session was only ever a preview. The final
+    // text comes from the same batch transcription as non-live mode (streamed
+    // window boundaries can drop the odd word), and one last diff pass settles
+    // whatever is on screen into that canonical result.
+    private func commitLive(session: StreamingTranscription, samples: [Float]) {
+        indicator.showTranscribing()
+        phase = .transcribing
+        // Stop preview updates first so a late one can't race the final pass.
+        liveUpdatesTask?.cancel()
+        liveUpdatesTask = nil
+        Task { await session.cancel() }
+        guard Double(samples.count) / AudioRecorder.targetSampleRate >= 0.35 else {
+            liveTyper.eraseAll()
+            endLiveTyping()
+            indicator.hide()
+            phase = .idle
+            return
+        }
+        Task {
+            do {
+                let result = try await transcriber.transcribe(samples: samples)
+                let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let polisher = TextPolisher(level: settings.polishLevel,
+                                            replacements: settings.replacements)
+                let text = polisher.polish(raw)
+                if !text.isEmpty {
+                    liveTyper.apply(text)
+                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration),
+                                   limit: settings.historyLimit)
+                    lastTranscription = text
+                } else {
+                    liveTyper.eraseAll()
+                }
+                endLiveTyping()
+                indicator.hide()
+                phase = .idle
+            } catch {
+                // Keep whatever was already typed — deleting words the user
+                // watched appear would be worse than a rough tail.
+                endLiveTyping()
+                playCue("Basso")
+                indicator.showHint("Couldn’t finish that dictation")
+                phase = .error(error.localizedDescription)
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if case .error = phase { phase = .idle }
+            }
+        }
+    }
+
     private func commitRecording() {
         guard phase == .recording else { return }
         let samples = recorder.stop()
+        if let session = liveSession {
+            commitLive(session: session, samples: samples)
+            return
+        }
         indicator.showTranscribing()
         phase = .transcribing
         // Sub-0.3 s audio is below the model's minimum — treat as accidental tap.
@@ -152,6 +246,11 @@ final class DictationController: ObservableObject {
     private func cancelRecording() {
         guard phase == .recording else { return }
         recorder.cancel()
+        if let session = liveSession {
+            liveTyper.eraseAll()
+            endLiveTyping()
+            Task { await session.cancel() }
+        }
         indicator.hide()
         phase = .idle
     }

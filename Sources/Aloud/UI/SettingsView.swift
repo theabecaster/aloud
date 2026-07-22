@@ -68,6 +68,10 @@ struct GeneralSettings: View {
                 Text("Hold to talk, release to type. Press Esc while holding to cancel.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            } footer: {
+                Text("Double-tap the key to keep listening hands-free; tap once more to finish.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
             }
 
             SwiftUI.Section {
@@ -199,11 +203,18 @@ struct DictationSettings: View {
             }
 
             SwiftUI.Section {
-                LabeledContent("Hands-free") {
-                    Text("Double-tap the dictation key to keep listening; tap again to finish.")
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
-                }
+                Toggle("Live typing", isOn: $settings.liveTyping)
+                Text(settings.liveTyping
+                     ? "Words appear as you say them and settle as Aloud hears more."
+                     : "Everything is typed at once when you release the key.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Beta")
+            } footer: {
+                Text("Beta features are still being polished. Turn them off any time to return to the standard experience.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
             }
         }
         .formStyle(.grouped)
@@ -223,7 +234,7 @@ struct VocabularySettings: View {
                 ContentUnavailableView(
                     "No Replacements",
                     systemImage: "character.book.closed",
-                    description: Text("Fix words Aloud keeps getting wrong — a name, a product, a term of art. “Heard” becomes “Typed”, every time."))
+                    description: Text("Fix words Aloud keeps getting wrong — a name, a product, a term of art. Tell it what it types and what it should be instead, and it's corrected every time."))
                     .frame(maxHeight: .infinity)
             } else {
                 List {
