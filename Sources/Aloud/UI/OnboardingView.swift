@@ -31,15 +31,18 @@ struct OnboardingView: View {
         }
         .frame(width: 560, height: 460)
         .background(.background)
+        .onAppear {
+            // Start the model download quietly right away so it's finished (or
+            // well underway) by the time the user reaches the model screen.
+            Task { await controller.prepareModel() }
+        }
         .onReceive(poll) { _ in
             micStatus = Permissions.microphone
             axStatus = Permissions.accessibility
-            // Auto-advance when a permission screen's requirement is met.
+            // Auto-advance when a screen's requirement is met.
             if step == .microphone, micStatus == .granted { advance() }
-            if step == .accessibility, axStatus == .granted {
-                _ = controller.startListening()
-                advance()
-            }
+            if step == .accessibility, axStatus == .granted { advance() }
+            if step == .model, controller.transcriberState == .ready { advance() }
             if step == .tryIt, !controller.lastTranscription.isEmpty { tryItDone = true }
         }
     }
@@ -60,8 +63,17 @@ struct OnboardingView: View {
     private var welcome: some View {
         screen(symbol: "waveform",
                title: "Welcome to Aloud",
-               message: "Hold a key, speak, and your words appear wherever you’re typing. Everything happens on your Mac — nothing you say ever leaves it.") {
-            primaryButton("Continue") { advance() }
+               message: "Speak instead of typing — your words appear wherever your cursor is. Everything happens on your Mac; nothing you say ever leaves it.") {
+            VStack(spacing: 16) {
+                HStack(spacing: 6) {
+                    Text("Hold")
+                    KeyCap(controller.settings.hotkey.displayName)
+                    Text("· speak · let go")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                primaryButton("Continue") { advance() }
+            }
         }
     }
 
@@ -90,8 +102,8 @@ struct OnboardingView: View {
 
     private var accessibility: some View {
         screen(symbol: "keyboard",
-               title: "Allow Accessibility",
-               message: "This lets your dictation key work in every app, and lets Aloud type the words for you. macOS calls this “Accessibility” access.") {
+               title: "Let Aloud Type for You",
+               message: "This lets your talk key work in every app, and lets Aloud type the words where your cursor is. macOS calls this “Accessibility” access.") {
             VStack(spacing: 12) {
                 if axStatus == .denied {
                     Text("In System Settings, turn on Aloud under Privacy & Security → Accessibility. This screen will move on automatically.")
@@ -107,10 +119,12 @@ struct OnboardingView: View {
         }
     }
 
+    // The download already started in the background when onboarding opened,
+    // so this screen usually just shows progress and auto-advances when ready.
     private var model: some View {
         screen(symbol: "arrow.down.circle",
-               title: "Set Up Your Voice",
-               message: "Aloud downloads its voice recognition once (about 500 MB). After this, dictation works completely offline — forever.") {
+               title: "Setting Up Your Voice",
+               message: "Aloud is downloading its voice recognition — this happens once (about 500 MB). After this, dictation works completely offline, forever.") {
             VStack(spacing: 14) {
                 switch controller.transcriberState {
                 case .modelMissing:
@@ -143,17 +157,12 @@ struct OnboardingView: View {
                 }
             }
         }
-        .onAppear {
-            if controller.transcriber.modelIsDownloaded {
-                Task { await controller.prepareModel() }
-            }
-        }
     }
 
     private var tryIt: some View {
         screen(symbol: "quote.bubble",
                title: "Try It",
-               message: "Click into the field below, hold \(controller.settings.hotkey.displayName), say something, and let go.") {
+               message: "Click the box below, hold \(controller.settings.hotkey.displayName) while you say something, then let go.") {
             VStack(spacing: 16) {
                 TextField("Your words will appear here", text: .constant(controller.lastTranscription))
                     .textFieldStyle(.roundedBorder)
@@ -161,6 +170,14 @@ struct OnboardingView: View {
                 if tryItDone {
                     Label("That’s it — you’re set", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
+                }
+                (Text("Aloud lives in your menu bar — the ")
+                 + Text(Image(systemName: "waveform"))
+                 + Text(" icon at the top of your screen."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                if tryItDone {
                     primaryButton("Done") { onFinished() }
                 } else {
                     Button("Skip for now") { onFinished() }
@@ -212,8 +229,38 @@ struct OnboardingView: View {
         }
     }
 
+    // Skip steps that are already satisfied, so reopening setup (or a re-grant
+    // in System Settings) never replays screens the user has completed.
     private func advance() {
-        guard let next = Step(rawValue: step.rawValue + 1) else { return }
+        var raw = step.rawValue + 1
+        while let candidate = Step(rawValue: raw), isSatisfied(candidate) { raw += 1 }
+        guard let next = Step(rawValue: raw) else { return }
+        if next == .tryIt { _ = controller.startListening() }
         withAnimation(.spring(duration: 0.3)) { step = next }
+    }
+
+    private func isSatisfied(_ s: Step) -> Bool {
+        switch s {
+        case .microphone: return Permissions.microphone == .granted
+        case .accessibility: return Permissions.accessibility == .granted
+        case .model: return controller.transcriberState == .ready
+        case .welcome, .tryIt: return false
+        }
+    }
+}
+
+// A keyboard-key look for naming the talk key, so "hold Right ⌘" reads as a
+// physical key rather than jargon.
+struct KeyCap: View {
+    let label: String
+    init(_ label: String) { self.label = label }
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 12, weight: .semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator, lineWidth: 0.5))
     }
 }

@@ -101,7 +101,7 @@ final class SettingsStoreTests: XCTestCase {
 
 final class HotkeyDisplayTests: XCTestCase {
     func testDisplayNames() {
-        XCTAssertEqual(Hotkey.default.displayName, "⌘ (right)")
+        XCTAssertEqual(Hotkey.default.displayName, "Right ⌘")
         let withMods = Hotkey(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue, isModifierKey: false)
         XCTAssertEqual(withMods.displayName, "⌘Space")
     }
