@@ -13,7 +13,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pendingUpdate: Updater.LatestRelease?
     private var phaseObservation: AnyCancellable?
 
+    // File identity of our executable at launch. If the bundle on disk is
+    // later replaced (manual update) or trashed, this instance is a zombie:
+    // clicking the new app only focuses us, so the update never runs.
+    private lazy var launchExecutableID: UInt64? = Self.executableFileID()
+
+    private static func executableFileID() -> UInt64? {
+        guard let path = Bundle.main.executablePath,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        else { return nil }
+        return (attrs[.systemFileNumber] as? NSNumber)?.uint64Value
+    }
+
+    private var bundleWasReplacedOnDisk: Bool {
+        guard let atLaunch = launchExecutableID else { return false }
+        return Self.executableFileID() != atLaunch
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = launchExecutableID
         AppPaths.ensureStateDir()
         setupStatusItem()
 
@@ -80,6 +98,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let status = NSMenuItem(title: statusLine(), action: nil, keyEquivalent: "")
         status.isEnabled = false
         menu.addItem(status)
+
+        if bundleWasReplacedOnDisk {
+            menu.addItem(withTitle: "Relaunch to Finish Update…",
+                         action: #selector(relaunchFromDisk), keyEquivalent: "").target = self
+        }
 
         if !Permissions.allGranted || !controller.settings.onboardingComplete {
             menu.addItem(withTitle: "Finish Setup…",
@@ -156,6 +179,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openOnboarding() { showOnboarding() }
+
+    // Quit this stale instance and start whatever is on disk in our place.
+    @objc private func relaunchFromDisk() {
+        let path = Bundle.main.bundlePath
+        let relaunch = Process()
+        relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
+        relaunch.arguments = ["-c", "sleep 0.5; /usr/bin/open \"\(path)\""]
+        try? relaunch.run()
+        NSApp.terminate(nil)
+    }
 
     @objc private func downloadModel() {
         Task { await controller.prepareModel() }
