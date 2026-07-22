@@ -77,6 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        if !controller.lastTranscription.isEmpty {
+            menu.addItem(withTitle: "Copy Last Dictation",
+                         action: #selector(copyLastDictation), keyEquivalent: "").target = self
+        }
         menu.addItem(withTitle: "Settings…",
                      action: #selector(openSettings), keyEquivalent: ",").target = self
 
@@ -132,6 +136,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openOnboarding() { showOnboarding() }
+
+    @objc private func copyLastDictation() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(controller.lastTranscription, forType: .string)
+    }
 
     @objc private func openSettings() {
         if let settingsWindow { settingsWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
