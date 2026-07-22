@@ -9,6 +9,10 @@ if let first = cliArgs.first, first.hasPrefix("--") {
     exit(code)
 }
 
+// One-time clean slate for upgrades over any previous version — must run
+// before the state dir, lock file, and SettingsStore touch old state.
+Migration.runCleanSlateIfNeeded()
+
 // Singleton: a second GUI launch hands off to the running one and exits.
 // flock on a file in the state dir — crash-safe (the lock dies with the pid).
 AppPaths.ensureStateDir()
