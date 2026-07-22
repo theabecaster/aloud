@@ -33,8 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        // The user may have flipped permissions in System Settings — recover.
-        if controller.settings.onboardingComplete, Permissions.allGranted {
+        // The user may have flipped permissions in System Settings — recover,
+        // but only when the tap is actually missing. Opening our own menu or
+        // Settings also activates the app, and restarting mid-session would
+        // rebuild the hotkey engine and orphan a live recording (dead Esc).
+        if controller.settings.onboardingComplete, Permissions.allGranted, !controller.isListening {
             _ = controller.startListening()
         }
     }
