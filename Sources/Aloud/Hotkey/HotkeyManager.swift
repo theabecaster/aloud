@@ -156,6 +156,13 @@ final class HotkeyManager {
         onAction?(.commit)
     }
 
+    // Abandon any in-flight hold or hands-free session without committing.
+    func abortSession() {
+        guard engine.isHeld || engine.isLocked else { return }
+        engine.reset()
+        onAction?(.cancel)
+    }
+
     // Returns false when the tap can't be created (Accessibility not granted).
     @discardableResult
     func start() -> Bool {
