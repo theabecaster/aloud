@@ -26,8 +26,9 @@ hold hotkey ──▶ HotkeyManager (CGEventTap)
 
 - `RecordingIndicator`: a small floating `NSPanel` (non-activating, joins all Spaces) with a SwiftUI pulsing waveform, shown only while the key is held. Feedback must be instant (<50 ms) so the user trusts it's listening.
 - **Live typing (beta, off by default).** With the Settings toggle on, a `StreamingTranscription` session re-decodes the whole captured buffer through the normal batch pipeline every ~1 s (full-context hypothesis, so later speech revises earlier words), and `LiveTyper` keeps the focused app in sync — backspacing to the point of divergence and retyping via CGEvent unicode keystrokes with cleared modifier flags (the user is still physically holding the hotkey). On release the full buffer goes through the same batch path one final time and a last diff pass settles the screen, so the end result is identical to non-live mode. A click mid-dictation freezes the typer (the cursor moved; edits would land in the wrong place). Cancel erases everything typed. Headless check: `Aloud --transcribe-live <file> [speed]`; GUI loop: `LIVE=1 bash scripts/loop-test.sh`.
-- Hotkey default: **Right ⌘ (hold)** — chosen because Fn is intercepted by the system for dictation/emoji and F-keys collide with media keys. Rebindable in Settings via a recorder control. Modifier-only hotkeys come from `flagsChanged` events; regular keys from `keyDown`/`keyUp`.
-- Cancel: press Esc while holding → discard recording, nothing typed.
+- Hotkey default: **Right ⌥ (hold)** — Fn is intercepted by the system for dictation/emoji, F-keys collide with media keys, and ⌘/⌃ are navigation modifiers that would poison clicks and keystrokes made while the key is held. Rebindable in Settings via a recorder control. Modifier-only hotkeys come from `flagsChanged` events; regular keys from `keyDown`/`keyUp`.
+- Hands-free (Settings toggle, on by default): double-press the key → recording locks on with nothing held; further hotkey presses are ignored and **Esc finishes + commits**. With the toggle off, double-press never locks.
+- Cancel: press Esc while *holding* → discard recording, nothing typed.
 
 ## Subsystems
 

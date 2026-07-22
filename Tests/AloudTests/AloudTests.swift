@@ -1,33 +1,75 @@
 import XCTest
+import Carbon.HIToolbox
 @testable import Aloud
 
+final class HotkeyNameTests: XCTestCase {
+    // Regression: a saved hotkey on a plain letter key (e.g. X, keyCode 7) crashed
+    // keyName(for:) via an invalid F-key range pattern, killing the menu on open.
+    func testKeyNameNeverTrapsForAnyKeyCode() {
+        for code in UInt16(0)...UInt16(255) {
+            XCTAssertFalse(Hotkey.keyName(for: code).isEmpty)
+        }
+    }
+
+    func testKnownKeyNames() {
+        XCTAssertEqual(Hotkey.keyName(for: UInt16(kVK_F1)), "F1")
+        XCTAssertEqual(Hotkey.keyName(for: UInt16(kVK_F20)), "F20")
+        XCTAssertEqual(Hotkey.keyName(for: UInt16(kVK_RightOption)), "Right ⌥")
+        XCTAssertEqual(Hotkey.keyName(for: UInt16(kVK_ANSI_X)), "X")
+        XCTAssertFalse(Hotkey(keyCode: UInt16(kVK_ANSI_X), modifiers: 0, isModifierKey: false).displayName.isEmpty)
+    }
+}
+
 final class HotkeyEngineTests: XCTestCase {
+    private let key = Hotkey.default.keyCode
+    private let flag = Hotkey.default.modifierFlag!
+
     func testModifierHoldCommit() {
         var engine = HotkeyEngine(hotkey: .default)
-        let flag = Hotkey.default.modifierFlag!
-        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 0), .begin)
-        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 1.0), .commit)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .begin)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.0), .commit)
     }
 
     func testShortTapCancels() {
         var engine = HotkeyEngine(hotkey: .default)
-        let flag = Hotkey.default.modifierFlag!
-        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 0), .begin)
-        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 0.05), .cancel)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .begin)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05), .cancel)
     }
 
     func testEscCancelsWhileHeld() {
         var engine = HotkeyEngine(hotkey: .default)
-        let flag = Hotkey.default.modifierFlag!
-        _ = engine.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
         XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: flag, time: 0.3), .cancel)
         // A later release must not double-fire.
-        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 0.5), .none)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.5), .none)
     }
 
     func testOtherModifierIgnored() {
         var engine = HotkeyEngine(hotkey: .default)
         XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: 58, flags: .maskAlternate, time: 0), .none)
+    }
+
+    func testDoublePressLocksUntilEsc() {
+        var engine = HotkeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05), .cancel)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .lock)
+        // Hotkey presses of any length are ignored while locked.
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 1.0)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.8), .none)
+        // Esc finishes and commits the hands-free session.
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: [], time: 2.0), .commit)
+        XCTAssertFalse(engine.isLocked)
+    }
+
+    func testHandsFreeDisabled() {
+        var engine = HotkeyEngine(hotkey: .default, handsFreeEnabled: false)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .cancel)
+        XCTAssertFalse(engine.isLocked)
     }
 
     func testRegularKeyHotkey() {
@@ -101,7 +143,7 @@ final class SettingsStoreTests: XCTestCase {
 
 final class HotkeyDisplayTests: XCTestCase {
     func testDisplayNames() {
-        XCTAssertEqual(Hotkey.default.displayName, "Right ⌘")
+        XCTAssertEqual(Hotkey.default.displayName, "Right ⌥")
         let withMods = Hotkey(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue, isModifierKey: false)
         XCTAssertEqual(withMods.displayName, "⌘Space")
     }
