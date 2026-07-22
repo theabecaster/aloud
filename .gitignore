@@ -7,5 +7,5 @@ dist/
 xcuserdata/
 DerivedData/
 /eval/results/
-/eval/fixtures/audio/*.wav
+/eval/fixtures/audio/*
 !/eval/fixtures/audio/.gitkeep
