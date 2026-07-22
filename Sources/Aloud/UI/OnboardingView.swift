@@ -192,9 +192,11 @@ struct OnboardingView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 300)
                 Toggle("Type words live as I speak", isOn: $settings.liveTyping)
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 if tryItDone {
                     Label("That’s it — you’re set", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
