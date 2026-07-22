@@ -20,6 +20,12 @@ enum CLI {
                 return 2
             }
             return await transcribe(path: args[1])
+        case "--simulate-hold":
+            // Posts a synthetic press-hold-release of the configured hotkey so
+            // scripts/loop-test.sh can exercise the running GUI's real event
+            // tap + recorder + injector. Requires Accessibility.
+            let seconds = args.count >= 2 ? (Double(args[1]) ?? 3.0) : 3.0
+            return simulateHold(seconds: seconds)
         case "--inject":
             guard args.count >= 2 else {
                 FileHandle.standardError.write(Data("usage: Aloud --inject <text>\n".utf8))
@@ -125,6 +131,33 @@ enum CLI {
         while sem.wait(timeout: .now()) != .success && Date() < deadline {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
         }
+        return 0
+    }
+
+    // MARK: --simulate-hold
+
+    static func simulateHold(seconds: Double) -> Int32 {
+        guard Permissions.accessibility == .granted else {
+            FileHandle.standardError.write(Data("accessibility permission not granted\n".utf8))
+            return 1
+        }
+        let hotkey = SettingsStore.shared.hotkey
+        guard hotkey.isModifierKey, let flag = hotkey.modifierFlag else {
+            FileHandle.standardError.write(Data("--simulate-hold currently supports modifier hotkeys only\n".utf8))
+            return 2
+        }
+        let source = CGEventSource(stateID: .hidSystemState)
+        func post(down: Bool) {
+            guard let e = CGEvent(keyboardEventSource: source,
+                                  virtualKey: CGKeyCode(hotkey.keyCode), keyDown: down) else { return }
+            e.type = .flagsChanged
+            e.flags = down ? flag : []
+            e.post(tap: .cghidEventTap)
+        }
+        FileHandle.standardError.write(Data("holding \(hotkey.displayName) for \(seconds)s\n".utf8))
+        post(down: true)
+        Thread.sleep(forTimeInterval: seconds)
+        post(down: false)
         return 0
     }
 
