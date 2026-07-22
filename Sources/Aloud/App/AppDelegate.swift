@@ -197,13 +197,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func releaseNotesLink(_ url: URL) -> NSView {
+        let link = NSMutableAttributedString(
+            string: "View release notes",
+            attributes: [.link: url, .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)])
+        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 220, height: 16))
+        view.textStorage?.setAttributedString(link)
+        view.isEditable = false
+        view.drawsBackground = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        return view
+    }
+
     @objc private func applyUpdate() {
         guard let update = pendingUpdate else { return }
         let alert = NSAlert()
         alert.messageText = "Update to Aloud \(update.tag)?"
-        alert.informativeText = update.notes.isEmpty
-            ? "Aloud will update and reopen. Takes a few seconds."
-            : String(update.notes.prefix(600))
+        alert.informativeText = "Aloud will update and reopen. Takes a few seconds."
+        alert.accessoryView = releaseNotesLink(update.pageURL)
         alert.addButton(withTitle: "Update and Relaunch")
         alert.addButton(withTitle: "Later")
         guard alert.runModal() == .alertFirstButtonReturn else { return }

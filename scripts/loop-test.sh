@@ -19,8 +19,27 @@ cd "$DIR"
 APP_BIN="${APP_BIN:-/Applications/Aloud.app/Contents/MacOS/Aloud}"
 CLI_BIN="${CLI_BIN:-$APP_BIN}"
 PHRASE="the rain in spain stays mainly in the plain"
+BUNDLE_ID="com.abrahamgonzalez.aloud"
 
 [ -x "$APP_BIN" ] || { echo "error: $APP_BIN not found — install the app first" >&2; exit 1; }
+
+# LIVE=1 runs the same loop with the live-typing beta enabled; the setting is
+# restored afterwards. Requires an app restart to pick up the changed default,
+# so we quit any running instance first.
+if [ "${LIVE:-0}" = "1" ]; then
+  PRIOR_LIVE="$(defaults read "$BUNDLE_ID" liveTyping 2>/dev/null || echo "absent")"
+  defaults write "$BUNDLE_ID" liveTyping -bool true
+  pkill -f "Aloud.app/Contents/MacOS/Aloud" 2>/dev/null || true
+  sleep 1
+fi
+restore_live() {
+  [ "${LIVE:-0}" = "1" ] || return 0
+  if [ "$PRIOR_LIVE" = "absent" ]; then
+    defaults delete "$BUNDLE_ID" liveTyping 2>/dev/null || true
+  else
+    defaults write "$BUNDLE_ID" liveTyping -bool "$PRIOR_LIVE"
+  fi
+}
 
 # 1. App running?
 if ! pgrep -qf "Aloud.app/Contents/MacOS/Aloud"; then
@@ -30,7 +49,7 @@ fi
 
 # 2. Synthesize the phrase to play through speakers.
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"; restore_live' EXIT
 say -v Samantha -o "$TMP/phrase.aiff" "$PHRASE"
 DUR="$(afinfo "$TMP/phrase.aiff" | awk '/estimated duration/ {print $3}')"
 HOLD="$(python3 -c "print(float('$DUR') + 1.2)")"

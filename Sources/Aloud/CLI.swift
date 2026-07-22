@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 
 // Headless verbs so agents and CI can verify subsystems with no GUI and no
@@ -20,6 +21,18 @@ enum CLI {
                 return 2
             }
             return await transcribe(path: args[1])
+        case "--transcribe-live":
+            // Streaming-path twin of --transcribe: feeds the file through a
+            // live session in chunks, printing each update to stderr and the
+            // final text to stdout. Verifies the live-typing engine headlessly.
+            // Optional second arg: playback speed multiple (e.g. 1 = realtime,
+            // 4 = 4× faster). Omitted = as fast as possible (single update).
+            guard args.count >= 2 else {
+                FileHandle.standardError.write(Data("usage: Aloud --transcribe-live <audio-file> [speed]\n".utf8))
+                return 2
+            }
+            let speed = args.count >= 3 ? Double(args[2]) : nil
+            return await transcribeLive(path: args[1], speed: speed)
         case "--update-check":
             // Headless updater probe: prints current vs latest and whether an
             // update would apply. Never installs (the GUI owns that).
@@ -70,6 +83,7 @@ enum CLI {
                 "launchAtLogin": settings.launchAtLogin,
                 "microphoneUID": settings.microphoneUID ?? "default",
                 "onboardingComplete": settings.onboardingComplete,
+                "liveTyping": settings.liveTyping,
             ],
             "paths": [
                 "stateDir": AppPaths.stateDir.path,
@@ -109,6 +123,75 @@ enum CLI {
             FileHandle.standardError.write(Data("transcription failed: \(error.localizedDescription)\n".utf8))
             return 1
         }
+    }
+
+    // MARK: --transcribe-live
+
+    static func transcribeLive(path: String, speed: Double? = nil) async -> Int32 {
+        let url = URL(fileURLWithPath: path)
+        guard let samples = loadSamples16k(url) else {
+            FileHandle.standardError.write(Data("couldn't read audio: \(path)\n".utf8))
+            return 2
+        }
+        let transcriber = ParakeetTranscriber()
+        do {
+            let progressPrinter = ProgressPrinter()
+            try await transcriber.prepare { progressPrinter.report($0) }
+            guard let session = transcriber.makeStreamingTranscription() else {
+                FileHandle.standardError.write(Data("engine has no streaming support\n".utf8))
+                return 1
+            }
+            let printer = Task {
+                for await update in session.updates {
+                    FileHandle.standardError.write(Data(
+                        "confirmed='\(update.confirmed)' volatile='\(update.volatile)'\n".utf8))
+                }
+            }
+            // Half-second chunks, like the mic tap would deliver.
+            let chunkSize = 8_000
+            var index = 0
+            while index < samples.count {
+                let end = min(index + chunkSize, samples.count)
+                session.append(samples: Array(samples[index..<end]))
+                index = end
+                if let speed, speed > 0 {
+                    let chunkSeconds = Double(chunkSize) / 16_000 / speed
+                    try? await Task.sleep(nanoseconds: UInt64(chunkSeconds * 1_000_000_000))
+                }
+            }
+            let result = try await session.finish()
+            await printer.value
+            print(result.text)
+            return 0
+        } catch {
+            FileHandle.standardError.write(Data("live transcription failed: \(error.localizedDescription)\n".utf8))
+            return 1
+        }
+    }
+
+    // Decode any readable audio file to 16 kHz mono Float32.
+    private static func loadSamples16k(_ url: URL) -> [Float]? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let sourceFormat = file.processingFormat
+        guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+                                         channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: sourceFormat, to: target),
+              let inBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat,
+                                              frameCapacity: AVAudioFrameCount(file.length)) else { return nil }
+        do { try file.read(into: inBuffer) } catch { return nil }
+        let ratio = target.sampleRate / sourceFormat.sampleRate
+        let capacity = AVAudioFrameCount(Double(inBuffer.frameLength) * ratio) + 16
+        guard let outBuffer = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
+        var fed = false
+        var err: NSError?
+        converter.convert(to: outBuffer, error: &err) { _, status in
+            if fed { status.pointee = .endOfStream; return nil }
+            fed = true
+            status.pointee = .haveData
+            return inBuffer
+        }
+        guard err == nil, let ch = outBuffer.floatChannelData else { return nil }
+        return Array(UnsafeBufferPointer(start: ch[0], count: Int(outBuffer.frameLength)))
     }
 
     // Thread-safe download progress → stderr, deciled so logs stay short.
@@ -247,15 +330,27 @@ enum CLI {
         injector.restore(snap)
         expect(board.string(forType: .string) == "user clipboard", "injector: clipboard restored")
 
-        // 6. Updater semver.
+        // 6. Live-typing diff + headless typer state machine.
+        let diff = TypedTextDiff.from("I went their", to: "I went there today")
+        expect(diff.backspaces == 2 && diff.insertion == "re today", "livetyper: diff rewinds to divergence")
+        expect(TypedTextDiff.from("ok 👍🏽", to: "ok 🎉").backspaces == 1, "livetyper: grapheme backspaces")
+        let typer = LiveTyper(postEvents: false)
+        typer.apply("hello")
+        typer.apply("hello world")
+        let tracked = typer.typed == "hello world"
+        typer.freeze()
+        typer.eraseAll()
+        expect(tracked && typer.typed == "hello world", "livetyper: tracks text, freeze stops edits")
+
+        // 7. Updater semver.
         expect(Updater.semverLess("1.0.0", "1.0.1"), "updater: patch compare")
         expect(Updater.semverLess("v1.9.0", "v1.10.0"), "updater: no lexicographic trap")
         expect(!Updater.semverLess("2.0.0", "1.9.9"), "updater: not less")
 
-        // 7. Doctor JSON emits and parses.
+        // 8. Doctor JSON emits and parses.
         expect(doctor() == 0, "doctor: runs")
 
-        // 8. Settings store round-trip in an isolated suite.
+        // 9. Settings store round-trip in an isolated suite.
         let suiteName = "aloud-selftest-\(getpid())"
         if let d = UserDefaults(suiteName: suiteName) {
             d.removePersistentDomain(forName: suiteName)
