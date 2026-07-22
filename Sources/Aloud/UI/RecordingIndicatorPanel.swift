@@ -10,28 +10,73 @@ final class RecordingIndicatorPanel {
     private var panel: NSPanel?
     private let model = IndicatorModel()
     private var levelTimer: Timer?
+    // Bumped by present() and hide() so a hide's fade-out completion can tell
+    // whether a show snuck in behind it (hands-free is a cancel immediately
+    // followed by a re-show) and must not order the panel out.
+    private var hideGeneration = 0
+    // Hands-free silence reminder: after this long without speech — and only
+    // when the keyboard and mouse are idle too, so it never interrupts someone
+    // editing — the pill switches to "Still listening…". Long on purpose:
+    // most sessions should end before it ever appears.
+    private static let silenceReminderAfter: TimeInterval = 30
+    private static let inputIdleGrace: TimeInterval = 6
+    private static let voiceLevel: Float = 0.1
+    private var lastVoiceTime: TimeInterval = 0
+
+    // Fires when the close button on the locked pill is clicked.
+    var onStopHandsFree: (() -> Void)? {
+        get { model.onStop }
+        set { model.onStop = newValue }
+    }
 
     func show(levelProvider: @escaping () -> Float) {
         model.mode = .recording
         model.hint = nil
         model.isLocked = false
+        model.stillListening = false
         present()
+        panel?.ignoresMouseEvents = true
         levelTimer?.invalidate()
-        levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak model] _ in
+        levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             let level = levelProvider()
-            Task { @MainActor in model?.level = level }
+            Task { @MainActor in
+                guard let self else { return }
+                self.model.level = level
+                self.updateStillListening(level: level)
+            }
         }
     }
 
     // Hands-free lock engaged: keep the live meter, add the lock affordance.
+    // Only the locked pill takes mouse input (for its close button) — everywhere
+    // else the panel stays click-through so it can never swallow a stray click.
     func showLocked() {
         model.isLocked = true
+        panel?.ignoresMouseEvents = false
+        lastVoiceTime = ProcessInfo.processInfo.systemUptime
+    }
+
+    private func updateStillListening(level: Float) {
+        let now = ProcessInfo.processInfo.systemUptime
+        if level > Self.voiceLevel { lastVoiceTime = now }
+        guard model.isLocked, now - lastVoiceTime > Self.silenceReminderAfter else {
+            model.stillListening = false
+            return
+        }
+        // System-wide input idle: typing or mousing means the user is engaged,
+        // not absent — hold the reminder back.
+        let inputIdle = min(
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown),
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown),
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved))
+        model.stillListening = inputIdle > Self.inputIdleGrace
     }
 
     func showTranscribing() {
         levelTimer?.invalidate()
         model.mode = .transcribing
         present()
+        panel?.ignoresMouseEvents = true
     }
 
     func showHint(_ text: String) {
@@ -48,15 +93,22 @@ final class RecordingIndicatorPanel {
         levelTimer?.invalidate()
         levelTimer = nil
         guard let panel else { return }
+        panel.ignoresMouseEvents = true
+        hideGeneration += 1
+        let generation = hideGeneration
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.18
             panel.animator().alphaValue = 0
-        }, completionHandler: {
-            panel.orderOut(nil)
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.hideGeneration == generation else { return }
+                panel.orderOut(nil)
+            }
         })
     }
 
     private func present() {
+        hideGeneration += 1   // invalidate any in-flight hide completion
         let panel = ensurePanel()
         position(panel)
         panel.alphaValue = 0
@@ -102,6 +154,8 @@ final class IndicatorModel: ObservableObject {
     @Published var level: Float = 0
     @Published var hint: String?
     @Published var isLocked = false
+    @Published var stillListening = false
+    var onStop: (() -> Void)?
 }
 
 struct IndicatorView: View {
@@ -111,14 +165,32 @@ struct IndicatorView: View {
         HStack(spacing: 10) {
             switch model.mode {
             case .recording:
+                // Hands-free trades the red mic for an orange one plus a lock —
+                // a quiet "still listening" that users can discover on their own.
                 Image(systemName: "mic.fill")
-                    .foregroundStyle(.red)
-                LevelMeter(level: model.level)
-                    .frame(width: 90, height: 18)
+                    .foregroundStyle(model.isLocked ? Color.orange : Color.red)
+                    .symbolEffect(.pulse, isActive: model.stillListening)
+                if model.stillListening {
+                    Text("Still listening…")
+                        .foregroundStyle(.orange)
+                        .frame(width: 90)
+                } else {
+                    LevelMeter(level: model.level)
+                        .frame(width: 90, height: 18)
+                }
                 if model.isLocked {
                     Image(systemName: "lock.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.orange)
+                    Button {
+                        model.onStop?()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop — or press Esc")
                 }
             case .transcribing:
                 ProgressView()
@@ -140,6 +212,8 @@ struct IndicatorView: View {
         .overlay(Capsule().strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.spring(duration: 0.25), value: model.mode == .recording)
+        .animation(.spring(duration: 0.25), value: model.isLocked)
+        .animation(.spring(duration: 0.25), value: model.stillListening)
     }
 }
 

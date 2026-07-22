@@ -4,7 +4,7 @@ import Carbon.HIToolbox
 // Global push-to-talk via a CGEventTap.
 //
 // Listen-only tap on keyDown/keyUp/flagsChanged. A lone-modifier hotkey (the
-// default, right ⌃) is tracked through flagsChanged transitions; a regular key
+// default, left ⌥) is tracked through flagsChanged transitions; a regular key
 // through keyDown/keyUp with matching modifier flags. Esc while holding cancels;
 // Esc during a hands-free session finishes it.
 //
@@ -46,6 +46,13 @@ struct HotkeyEngine {
     init(hotkey: Hotkey, handsFreeEnabled: Bool = true) {
         self.hotkey = hotkey
         self.handsFreeEnabled = handsFreeEnabled
+    }
+
+    // Back to idle, forgetting any held/locked state and pending double-tap.
+    mutating func reset() {
+        isHeld = false
+        isLocked = false
+        lastTapTime = -1
     }
 
     mutating func handle(type: CGEventType, keyCode: UInt16, flags: CGEventFlags,
@@ -125,12 +132,28 @@ final class HotkeyManager {
 
     var hotkey: Hotkey {
         get { engine.hotkey }
-        set { engine = HotkeyEngine(hotkey: newValue, handsFreeEnabled: engine.handsFreeEnabled) }
+        set {
+            // Same key → keep the engine, and with it any held/locked session.
+            // Rebuilding here mid-dictation would orphan the recording: the
+            // fresh engine forgets isLocked, so Esc stops stopping it.
+            guard newValue != engine.hotkey else { return }
+            engine = HotkeyEngine(hotkey: newValue, handsFreeEnabled: engine.handsFreeEnabled)
+        }
     }
 
     var handsFree: Bool {
         get { engine.handsFreeEnabled }
         set { engine.handsFreeEnabled = newValue }
+    }
+
+    // Whether the event tap is installed and listening.
+    var isActive: Bool { tap != nil }
+
+    // End a hands-free session from the UI — equivalent to pressing Esc.
+    func endHandsFree() {
+        guard engine.isLocked else { return }
+        engine.reset()
+        onAction?(.commit)
     }
 
     // Returns false when the tap can't be created (Accessibility not granted).

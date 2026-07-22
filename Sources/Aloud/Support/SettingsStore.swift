@@ -19,7 +19,7 @@ final class SettingsStore: ObservableObject {
         replacements = (defaults.data(forKey: Keys.replacements))
             .flatMap { try? JSONDecoder().decode([Replacement].self, from: $0) } ?? []
         soundCues = defaults.object(forKey: Keys.soundCues) as? Bool ?? true
-        liveTyping = defaults.bool(forKey: Keys.liveTyping)
+        liveTyping = defaults.object(forKey: Keys.liveTyping) as? Bool ?? true
         handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
     }
 
@@ -66,9 +66,7 @@ final class SettingsStore: ObservableObject {
     @Published var soundCues: Bool {
         didSet { defaults.set(soundCues, forKey: Keys.soundCues) }
     }
-    // Experimental: type words as they're spoken instead of all at once on
-    // release. Off by default so everyone gets the proven experience unless
-    // they opt in.
+    // Type words as they're spoken instead of all at once on release.
     @Published var liveTyping: Bool {
         didSet { defaults.set(liveTyping, forKey: Keys.liveTyping) }
     }

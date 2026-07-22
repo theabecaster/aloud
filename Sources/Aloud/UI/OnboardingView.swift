@@ -5,10 +5,17 @@ import SwiftUI
 // auto-advance the moment the user grants access in System Settings.
 struct OnboardingView: View {
     @ObservedObject var controller: DictationController
+    @ObservedObject private var settings: SettingsStore
     let onFinished: () -> Void
 
+    init(controller: DictationController, onFinished: @escaping () -> Void) {
+        self.controller = controller
+        _settings = ObservedObject(wrappedValue: controller.settings)
+        self.onFinished = onFinished
+    }
+
     enum Step: Int, CaseIterable {
-        case welcome, microphone, accessibility, model, tryIt
+        case welcome, microphone, accessibility, model, liveTyping, tryIt
     }
 
     @State private var step: Step = .welcome
@@ -31,6 +38,27 @@ struct OnboardingView: View {
         }
         .frame(width: 560, height: 460)
         .background(.background)
+        .overlay(alignment: .bottomLeading) {
+            if step != .welcome {
+                Button {
+                    retreat()
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(.bordered)
+                .padding(.leading, 20)
+                .padding(.bottom, 20)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if step == .liveTyping {
+                Button("Next") { advance() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 20)
+            }
+        }
         .onAppear {
             // Start the model download quietly right away so it's finished (or
             // well underway) by the time the user reaches the model screen.
@@ -54,6 +82,7 @@ struct OnboardingView: View {
         case .microphone: microphone
         case .accessibility: accessibility
         case .model: model
+        case .liveTyping: liveTyping
         case .tryIt: tryIt
         }
     }
@@ -65,13 +94,18 @@ struct OnboardingView: View {
                title: "Welcome to Aloud",
                message: "Speak instead of typing — your words appear wherever your cursor is. Everything happens on your Mac; nothing you say ever leaves it.") {
             VStack(spacing: 16) {
-                HStack(spacing: 6) {
-                    Text("Hold")
-                    KeyCap(controller.settings.hotkey.displayName)
-                    Text("· speak · let go")
+                VStack(spacing: 10) {
+                    HStack(spacing: 6) {
+                        Text("Hold")
+                        HotkeyRecorderView(hotkey: settings.hotkey) { controller.updateHotkey($0) }
+                        Text("· speak · let go")
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    Text("That’s your talk key. \(Hotkey.default.displayName) works great — or click it to pick your own.")
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
                 }
-                .font(.callout)
-                .foregroundStyle(.secondary)
                 primaryButton("Continue") { advance() }
             }
         }
@@ -159,6 +193,77 @@ struct OnboardingView: View {
         }
     }
 
+    private var liveTyping: some View {
+        screen(symbol: "text.cursor",
+               title: "How Should Words Appear?",
+               message: "You can change this any time in Settings.") {
+            HStack(spacing: 12) {
+                choiceCard(symbol: "text.cursor",
+                           title: "Live",
+                           badge: "Experimental",
+                           caption: "Words appear as you say them and settle as Aloud hears more.",
+                           selected: settings.liveTyping) {
+                    settings.liveTyping = true
+                }
+                choiceCard(symbol: "text.insert",
+                           title: "All at once",
+                           caption: "Everything is typed the moment you let go of the key.",
+                           selected: !settings.liveTyping) {
+                    settings.liveTyping = false
+                }
+            }
+            .animation(.spring(duration: 0.25), value: settings.liveTyping)
+        }
+    }
+
+    // A radio-style option card: exactly one is selected, shown by the accent
+    // border, tinted fill, and corner checkmark.
+    private func choiceCard(symbol: String, title: String, badge: String? = nil, caption: String,
+                            selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: symbol)
+                    .font(.system(size: 24, weight: .light))
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .frame(height: 30)
+                HStack(spacing: 5) {
+                    Text(title)
+                        .font(.callout.weight(.semibold))
+                    if let badge {
+                        Text(badge)
+                            .font(.system(size: 9, weight: .medium))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .foregroundStyle(.orange)
+                            .overlay(Capsule().strokeBorder(Color.orange.opacity(0.5), lineWidth: 0.5))
+                    }
+                }
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .frame(width: 172, height: 138, alignment: .top)
+            .background(selected ? Color.accentColor.opacity(0.1) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor),
+                                  lineWidth: selected ? 2 : 1)
+            )
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color.accentColor)
+                    .padding(6)
+                    .opacity(selected ? 1 : 0)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+
     private var tryIt: some View {
         screen(symbol: "quote.bubble",
                title: "Try It",
@@ -180,9 +285,7 @@ struct OnboardingView: View {
                 if tryItDone {
                     primaryButton("Done") { onFinished() }
                 } else {
-                    Button("Skip for now") { onFinished() }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+                    secondaryButton("Skip for now") { onFinished() }
                 }
             }
         }
@@ -219,6 +322,17 @@ struct OnboardingView: View {
         .keyboardShortcut(.defaultAction)
     }
 
+    // Same size and shape as the primary button, quieter fill — unmistakably
+    // clickable, unmistakably not the main path.
+    private func secondaryButton(_ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .frame(minWidth: 160)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+    }
+
     private var dots: some View {
         HStack(spacing: 8) {
             ForEach(Step.allCases, id: \.rawValue) { s in
@@ -239,28 +353,21 @@ struct OnboardingView: View {
         withAnimation(.spring(duration: 0.3)) { step = next }
     }
 
+    // Mirror of advance(): step backwards, skipping steps that are already
+    // satisfied (the poll would instantly bounce the user forward off them).
+    private func retreat() {
+        var raw = step.rawValue - 1
+        while let candidate = Step(rawValue: raw), isSatisfied(candidate) { raw -= 1 }
+        guard let prev = Step(rawValue: raw) else { return }
+        withAnimation(.spring(duration: 0.3)) { step = prev }
+    }
+
     private func isSatisfied(_ s: Step) -> Bool {
         switch s {
         case .microphone: return Permissions.microphone == .granted
         case .accessibility: return Permissions.accessibility == .granted
         case .model: return controller.transcriberState == .ready
-        case .welcome, .tryIt: return false
+        case .welcome, .liveTyping, .tryIt: return false
         }
-    }
-}
-
-// A keyboard-key look for naming the talk key, so "hold Right ⌘" reads as a
-// physical key rather than jargon.
-struct KeyCap: View {
-    let label: String
-    init(_ label: String) { self.label = label }
-
-    var body: some View {
-        Text(label)
-            .font(.system(size: 12, weight: .semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator, lineWidth: 0.5))
     }
 }

@@ -46,7 +46,19 @@ final class HotkeyEngineTests: XCTestCase {
 
     func testOtherModifierIgnored() {
         var engine = HotkeyEngine(hotkey: .default)
-        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: 58, flags: .maskAlternate, time: 0), .none)
+        // Right ⌥ (61) toggles the same flag as the default left ⌥ but is a different key.
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: 61, flags: .maskAlternate, time: 0), .none)
+    }
+
+    func testResetClearsLockAndAllowsFreshHold() {
+        var engine = HotkeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .lock)
+        engine.reset()
+        XCTAssertFalse(engine.isLocked)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 1.0), .begin)
     }
 
     func testDoublePressLocksUntilEsc() {
@@ -143,7 +155,7 @@ final class SettingsStoreTests: XCTestCase {
 
 final class HotkeyDisplayTests: XCTestCase {
     func testDisplayNames() {
-        XCTAssertEqual(Hotkey.default.displayName, "Right ⌥")
+        XCTAssertEqual(Hotkey.default.displayName, "Left ⌥")
         let withMods = Hotkey(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue, isModifierKey: false)
         XCTAssertEqual(withMods.displayName, "⌘Space")
     }
