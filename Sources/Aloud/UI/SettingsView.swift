@@ -69,9 +69,11 @@ struct GeneralSettings: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } footer: {
-                Text("Double-tap the key to keep listening hands-free; tap once more to finish.")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
+                if settings.handsFree {
+                    Text("Double-press the key to keep listening hands-free; press Esc to finish.")
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                }
             }
 
             SwiftUI.Section {
@@ -107,7 +109,7 @@ struct GeneralSettings: View {
 
 // MARK: - Hotkey recorder
 
-// Click, then press the desired key (a lone modifier like right ⌘ counts).
+// Click, then press the desired key (a lone modifier like right ⌥ counts).
 struct HotkeyRecorderView: View {
     var hotkey: Hotkey
     var onChange: (Hotkey) -> Void
@@ -199,6 +201,15 @@ struct DictationSettings: View {
             }
 
             SwiftUI.Section {
+                Toggle("Hands-free mode", isOn: $settings.handsFree)
+                Text(settings.handsFree
+                     ? "Double-press the dictation key to keep listening without holding it — edit, click around, keep talking. Press Esc when you're done and everything is typed."
+                     : "The dictation key only listens while held.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            SwiftUI.Section {
                 Toggle("Sound when recording starts", isOn: $settings.soundCues)
             }
 
@@ -210,9 +221,9 @@ struct DictationSettings: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } header: {
-                Text("Beta")
+                Text("Experimental")
             } footer: {
-                Text("Beta features are still being polished. Turn them off any time to return to the standard experience.")
+                Text("Experimental features are still being polished. Turn them off any time to return to the standard experience.")
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
             }
