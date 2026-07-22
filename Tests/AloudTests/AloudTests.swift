@@ -1,5 +1,24 @@
 import XCTest
+import Carbon.HIToolbox
 @testable import Aloud
+
+final class HotkeyNameTests: XCTestCase {
+    // Regression: a saved hotkey on a plain letter key (e.g. X, keyCode 7) crashed
+    // keyName(for:) via an invalid F-key range pattern, killing the menu on open.
+    func testKeyNameNeverTrapsForAnyKeyCode() {
+        for code in UInt16(0)...UInt16(255) {
+            XCTAssertFalse(Hotkey.keyName(for: code).isEmpty)
+        }
+    }
+
+    func testKnownKeyNames() {
+        XCTAssertEqual(Hotkey.keyName(for: UInt16(kVK_F1)), "F1")
+        XCTAssertEqual(Hotkey.keyName(for: UInt16(kVK_F20)), "F20")
+        XCTAssertEqual(Hotkey.keyName(for: UInt16(kVK_RightOption)), "Right ⌥")
+        XCTAssertEqual(Hotkey.keyName(for: UInt16(kVK_ANSI_X)), "X")
+        XCTAssertFalse(Hotkey(keyCode: UInt16(kVK_ANSI_X), modifiers: 0, isModifierKey: false).displayName.isEmpty)
+    }
+}
 
 final class HotkeyEngineTests: XCTestCase {
     private let key = Hotkey.default.keyCode
