@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 
 // Orchestrates the push-to-talk loop: hotkey → record → transcribe → inject.
@@ -137,10 +138,18 @@ final class DictationController: ObservableObject {
         liveSession = session
         liveTyper.reset()
         recorder.onChunk = { [weak session] chunk in session?.append(samples: chunk) }
-        // If the user clicks somewhere mid-dictation the cursor moves and our
-        // edits would land in the wrong place — freeze and leave the text be.
+        // If the user clicks somewhere or types themselves mid-dictation, the
+        // cursor moved (or text was submitted — e.g. Enter in a chat box) and
+        // our edits would land in the wrong place — freeze and leave the text
+        // be. Aloud's own synthetic keystrokes are stamped and ignored; Esc and
+        // a non-modifier hotkey are session control, not editing.
+        let hotkeyCode = settings.hotkey.keyCode
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
+            if event.type == .keyDown {
+                if event.cgEvent?.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.marker { return }
+                if event.keyCode == UInt16(kVK_Escape) || event.keyCode == hotkeyCode { return }
+            }
             Task { @MainActor in self?.liveTyper.freeze() }
         }
         liveUpdatesTask = Task { [weak self] in
@@ -169,7 +178,9 @@ final class DictationController: ObservableObject {
     // window boundaries can drop the odd word), and one last diff pass settles
     // whatever is on screen into that canonical result.
     private func commitLive(session: StreamingTranscription, samples: [Float]) {
-        indicator.showTranscribing()
+        // The words are already on screen — flashing "Typing…" while the final
+        // pass settles them reads as noise. Just dismiss the pill.
+        indicator.hide()
         phase = .transcribing
         // Stop preview updates first so a late one can't race the final pass.
         liveUpdatesTask?.cancel()
@@ -220,14 +231,15 @@ final class DictationController: ObservableObject {
             commitLive(session: session, samples: samples)
             return
         }
-        indicator.showTranscribing()
-        phase = .transcribing
-        // Sub-0.3 s audio is below the model's minimum — treat as accidental tap.
+        // Sub-0.3 s audio is below the model's minimum — treat as accidental
+        // tap and dismiss without ever flashing the "Typing…" state.
         guard Double(samples.count) / AudioRecorder.targetSampleRate >= 0.35 else {
             indicator.hide()
             phase = .idle
             return
         }
+        indicator.showTranscribing()
+        phase = .transcribing
         Task {
             do {
                 let result = try await transcriber.transcribe(samples: samples)

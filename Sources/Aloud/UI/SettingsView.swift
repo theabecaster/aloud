@@ -181,6 +181,7 @@ enum KeyCaptureWindow {
 
 struct DictationSettings: View {
     @ObservedObject var settings: SettingsStore
+    @State private var showExperimentalInfo = false
 
     var body: some View {
         Form {
@@ -210,16 +211,33 @@ struct DictationSettings: View {
             }
 
             SwiftUI.Section {
+                Toggle("Sound when recording starts", isOn: $settings.soundCues)
+            }
+
+            SwiftUI.Section {
                 Toggle("Live typing", isOn: $settings.liveTyping)
                 Text(settings.liveTyping
                      ? "Words appear as you say them and settle as Aloud hears more."
                      : "Everything is typed at once when you release the key.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-            }
-
-            SwiftUI.Section {
-                Toggle("Sound when recording starts", isOn: $settings.soundCues)
+            } header: {
+                HStack(spacing: 5) {
+                    Text("Experimental")
+                    Button {
+                        showExperimentalInfo.toggle()
+                    } label: {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showExperimentalInfo, arrowEdge: .bottom) {
+                        Text("Experimental features are ones we’re still polishing. They’re good enough to be worth trying — just expect the occasional hiccup. You can turn them off any time.")
+                            .font(.callout)
+                            .frame(width: 250)
+                            .padding(14)
+                    }
+                }
             }
         }
         .formStyle(.grouped)
