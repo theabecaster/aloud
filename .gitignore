@@ -9,3 +9,5 @@ DerivedData/
 /eval/results/
 /eval/fixtures/audio/*
 !/eval/fixtures/audio/.gitkeep
+CLAUDE.md
+AGENTS.md

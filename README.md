@@ -40,7 +40,7 @@ swift build && swift test
 bash scripts/make-app.sh          # stage dist/Aloud.app
 ```
 
-Docs: [architecture](docs/architecture.md) · [testing & evals](docs/testing.md) · [release pipeline](docs/release.md) · [permissions](docs/permissions.md). Agent guide: [AGENTS.md](AGENTS.md).
+Docs: [architecture](docs/architecture.md) · [testing & evals](docs/testing.md) · [release pipeline](docs/release.md) · [permissions](docs/permissions.md).
 
 Branches: work lands on `dev`; merges to `main` cut a signed, notarized release automatically (version derived from Conventional Commits).
 
