@@ -200,6 +200,7 @@ struct OnboardingView: View {
             HStack(spacing: 12) {
                 choiceCard(symbol: "text.cursor",
                            title: "Live",
+                           badge: "Experimental",
                            caption: "Words appear as you say them and settle as Aloud hears more.",
                            selected: settings.liveTyping) {
                     settings.liveTyping = true
@@ -217,7 +218,7 @@ struct OnboardingView: View {
 
     // A radio-style option card: exactly one is selected, shown by the accent
     // border, tinted fill, and corner checkmark.
-    private func choiceCard(symbol: String, title: String, caption: String,
+    private func choiceCard(symbol: String, title: String, badge: String? = nil, caption: String,
                             selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 8) {
@@ -225,8 +226,18 @@ struct OnboardingView: View {
                     .font(.system(size: 24, weight: .light))
                     .foregroundStyle(selected ? Color.accentColor : Color.secondary)
                     .frame(height: 30)
-                Text(title)
-                    .font(.callout.weight(.semibold))
+                HStack(spacing: 5) {
+                    Text(title)
+                        .font(.callout.weight(.semibold))
+                    if let badge {
+                        Text(badge)
+                            .font(.system(size: 9, weight: .medium))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .foregroundStyle(.orange)
+                            .overlay(Capsule().strokeBorder(Color.orange.opacity(0.5), lineWidth: 0.5))
+                    }
+                }
                 Text(caption)
                     .font(.caption)
                     .foregroundStyle(.secondary)

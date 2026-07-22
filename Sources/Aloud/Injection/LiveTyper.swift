@@ -31,6 +31,12 @@ struct TypedTextDiff: Equatable {
     }
 }
 
+// Stamped on every synthetic keyboard event Aloud posts, so our own event
+// monitors can tell them apart from real user input.
+enum SyntheticEvent {
+    static let marker: Int64 = 0x414C4F5544 // "ALOUD"
+}
+
 // Not thread-safe by design: the controller drives it from the main actor.
 final class LiveTyper {
     // What we believe is currently in the target field. Only trustworthy while
@@ -112,6 +118,8 @@ final class LiveTyper {
         up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
         down.flags = []
         up.flags = []
+        down.setIntegerValueField(.eventSourceUserData, value: SyntheticEvent.marker)
+        up.setIntegerValueField(.eventSourceUserData, value: SyntheticEvent.marker)
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
     }
@@ -121,6 +129,8 @@ final class LiveTyper {
               let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { return }
         down.flags = []
         up.flags = []
+        down.setIntegerValueField(.eventSourceUserData, value: SyntheticEvent.marker)
+        up.setIntegerValueField(.eventSourceUserData, value: SyntheticEvent.marker)
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
     }
