@@ -181,6 +181,7 @@ enum KeyCaptureWindow {
 
 struct DictationSettings: View {
     @ObservedObject var settings: SettingsStore
+    @State private var showExperimentalInfo = false
 
     var body: some View {
         Form {
@@ -221,11 +222,22 @@ struct DictationSettings: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } header: {
-                Text("Experimental")
-            } footer: {
-                Text("Experimental features are still being polished. Turn them off any time to return to the standard experience.")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
+                HStack(spacing: 5) {
+                    Text("Experimental")
+                    Button {
+                        showExperimentalInfo.toggle()
+                    } label: {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showExperimentalInfo, arrowEdge: .bottom) {
+                        Text("Experimental features are ones we’re still polishing. They’re good enough to be worth trying — just expect the occasional hiccup. You can turn them off any time.")
+                            .font(.callout)
+                            .frame(width: 250)
+                            .padding(14)
+                    }
+                }
             }
         }
         .formStyle(.grouped)

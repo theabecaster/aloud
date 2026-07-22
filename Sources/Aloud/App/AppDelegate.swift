@@ -33,8 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        // The user may have flipped permissions in System Settings — recover.
-        if controller.settings.onboardingComplete, Permissions.allGranted {
+        // The user may have flipped permissions in System Settings — recover,
+        // but only when the tap is actually missing. Opening our own menu or
+        // Settings also activates the app, and restarting mid-session would
+        // rebuild the hotkey engine and orphan a live recording (dead Esc).
+        if controller.settings.onboardingComplete, Permissions.allGranted, !controller.isListening {
             _ = controller.startListening()
         }
     }
@@ -65,6 +68,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Rebuild the menu each open so status lines are current.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        // The tap can be missing even though permissions read as granted —
+        // e.g. Accessibility was granted after launch, or the grant is stale
+        // after the app was replaced on disk. Retry cheaply on every open.
+        if controller.settings.onboardingComplete, Permissions.allGranted, !controller.isListening {
+            _ = controller.startListening()
+        }
+
         menu.removeAllItems()
 
         let status = NSMenuItem(title: statusLine(), action: nil, keyEquivalent: "")
@@ -114,7 +124,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .downloading(let p): return "Downloading voice recognition… \(Int(p * 100))%"
         case .loading: return "Warming up…"
         case .failed: return "Voice download didn’t finish"
-        case .ready: return "Hold \(controller.settings.hotkey.displayName) to dictate"
+        case .ready:
+            if controller.settings.onboardingComplete, !controller.isListening {
+                return "Dictation key isn’t working — try reopening Aloud"
+            }
+            return "Hold \(controller.settings.hotkey.displayName) to dictate"
         }
     }
 
