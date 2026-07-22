@@ -390,8 +390,15 @@ struct AboutSettings: View {
                 .multilineTextAlignment(.center)
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            Link("Website & source", destination: URL(string: "https://github.com/\(AppPaths.githubRepo)")!)
+            Link("getaloud.work", destination: URL(string: "https://getaloud.work")!)
                 .font(.callout)
+            Button("Uninstall Aloud…", role: .destructive) {
+                Uninstaller.confirmAndRun()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.red)
+            .font(.callout)
+            .padding(.top, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
