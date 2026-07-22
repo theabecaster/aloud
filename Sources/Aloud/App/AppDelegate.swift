@@ -157,8 +157,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: windows
 
+    // Menu bar apps have no Dock icon to click, so a window left on another
+    // Space or screen looks like "nothing happened". Every show pulls the
+    // window to the Space and screen the user is actually on.
+    private func present(_ window: NSWindow) {
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+            ?? NSScreen.main
+        if let screen {
+            let f = screen.visibleFrame
+            let size = window.frame.size
+            window.setFrameOrigin(NSPoint(x: f.midX - size.width / 2,
+                                          y: f.midY - size.height / 2 + f.height * 0.04))
+        } else {
+            window.center()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
     private func showOnboarding() {
-        if let onboardingWindow { onboardingWindow.makeKeyAndOrderFront(nil); return }
+        if let onboardingWindow { present(onboardingWindow); return }
         let view = OnboardingView(controller: controller) { [weak self] in
             guard let self else { return }
             controller.settings.onboardingComplete = true
@@ -172,10 +190,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
-        window.center()
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        // Stay visible above System Settings while the user flips permissions;
+        // our instructions are the map for what to do over there.
+        window.level = .floating
         onboardingWindow = window
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        present(window)
     }
 
     @objc private func openOnboarding() { showOnboarding() }
@@ -200,16 +220,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSettings() {
-        if let settingsWindow { settingsWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
+        if let settingsWindow { present(settingsWindow); return }
         let window = NSWindow(contentViewController:
             NSHostingController(rootView: SettingsView(controller: controller)))
         window.title = "Aloud Settings"
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
-        window.center()
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         settingsWindow = window
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        present(window)
     }
 
     // MARK: updates
