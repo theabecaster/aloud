@@ -74,6 +74,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !Permissions.allGranted || !controller.settings.onboardingComplete {
             menu.addItem(withTitle: "Finish Setup…",
                          action: #selector(openOnboarding), keyEquivalent: "").target = self
+        } else if case .modelMissing = controller.transcriberState {
+            menu.addItem(withTitle: "Download Voice Recognition…",
+                         action: #selector(downloadModel), keyEquivalent: "").target = self
+        } else if case .failed = controller.transcriberState {
+            menu.addItem(withTitle: "Retry Voice Download…",
+                         action: #selector(downloadModel), keyEquivalent: "").target = self
         }
 
         menu.addItem(.separator())
@@ -105,9 +111,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if Permissions.accessibility != .granted { return "Accessibility access needed" }
         switch controller.transcriberState {
         case .modelMissing: return "Voice setup needed"
-        case .downloading(let p): return "Downloading voice model… \(Int(p * 100))%"
+        case .downloading(let p): return "Downloading voice recognition… \(Int(p * 100))%"
         case .loading: return "Warming up…"
-        case .failed: return "Voice model problem — open Settings"
+        case .failed: return "Voice download didn’t finish"
         case .ready: return "Hold \(controller.settings.hotkey.displayName) to dictate"
         }
     }
@@ -136,6 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openOnboarding() { showOnboarding() }
+
+    @objc private func downloadModel() {
+        Task { await controller.prepareModel() }
+    }
 
     @objc private func copyLastDictation() {
         NSPasteboard.general.clearContents()
