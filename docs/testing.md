@@ -39,7 +39,11 @@ When to run: PRs that touch `Sources/Aloud/Transcription/**` or bump the FluidAu
 
 `say`-synthesized speech is clean-room audio — good for regression detection (did the pipeline break / model swap change accuracy), not an absolute benchmark. Treat threshold numbers as ratchets, not truth.
 
-## 5. End-to-end — `scripts/e2e.sh` (local machine only)
+## 5. Update pipeline — `Aloud --update-check`
+
+Headless probe of the release feed (current vs latest, whether an update would apply). The actual install path (download → signature+team verify → atomic swap → relaunch) is exercised from the GUI's "Check for Updates…"; test it by installing an older release and updating.
+
+## 6. End-to-end — `scripts/e2e.sh` (local machine only)
 
 Full loop on a real machine with permissions granted: synthesizes a phrase with `say -o`, feeds it through `--transcribe`, asserts WER; then verifies `--inject` lands text in a scratch TextEdit document via AppleScript readback. Not run on CI (needs TCC).
 
