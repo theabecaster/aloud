@@ -23,7 +23,7 @@ final class DictationController: ObservableObject {
     private let hotkeyManager: HotkeyManager
     private let indicator = RecordingIndicatorPanel()
 
-    // Live typing (beta): active only while a dictation runs with the setting on.
+    // Live typing: active only while a dictation runs with the setting on.
     private var liveSession: StreamingTranscription?
     private var liveUpdatesTask: Task<Void, Never>?
     private let liveTyper = LiveTyper()
@@ -127,7 +127,7 @@ final class DictationController: ObservableObject {
         }
     }
 
-    // MARK: live typing (beta)
+    // MARK: live typing
 
     private func startLiveTyping() {
         guard let session = transcriber.makeStreamingTranscription() else { return }

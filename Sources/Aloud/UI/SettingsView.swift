@@ -210,22 +210,16 @@ struct DictationSettings: View {
             }
 
             SwiftUI.Section {
-                Toggle("Sound when recording starts", isOn: $settings.soundCues)
-            }
-
-            SwiftUI.Section {
                 Toggle("Live typing", isOn: $settings.liveTyping)
                 Text(settings.liveTyping
                      ? "Words appear as you say them and settle as Aloud hears more."
                      : "Everything is typed at once when you release the key.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-            } header: {
-                Text("Experimental")
-            } footer: {
-                Text("Experimental features are still being polished. Turn them off any time to return to the standard experience.")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
+            }
+
+            SwiftUI.Section {
+                Toggle("Sound when recording starts", isOn: $settings.soundCues)
             }
         }
         .formStyle(.grouped)
