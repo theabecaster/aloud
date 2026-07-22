@@ -1,11 +1,11 @@
 {
-  "comment": "Eval fixtures. Synthesized entries are generated on demand by run-eval.sh with `say` (deterministic voice+rate). Add real recordings by dropping a wav in audio/ and an entry here with \"synth\": null.",
+  "comment": "Eval fixtures. Synthesized entries are generated on demand by run-eval.sh with `say` (deterministic voice+rate). Add real recordings by dropping a wav in audio/ and an entry here with \"synth\": null. `text` is what gets spoken; optional `ref` overrides the scoring reference when the model's inverse text normalization writes it differently (numbers, currency, dates).",
   "fixtures": [
     { "id": "fox-samantha", "synth": { "voice": "Samantha", "rate": 180 }, "text": "the quick brown fox jumps over the lazy dog" },
     { "id": "fox-fred", "synth": { "voice": "Fred", "rate": 200 }, "text": "the quick brown fox jumps over the lazy dog" },
     { "id": "meeting-samantha", "synth": { "voice": "Samantha", "rate": 200 }, "text": "please schedule a meeting for tomorrow at three in the afternoon and invite the whole design team" },
     { "id": "email-eddy", "synth": { "voice": "Eddy (English (US))", "rate": 190 }, "text": "hey just following up on the invoice from last week let me know if you need anything else from me" },
-    { "id": "numbers-samantha", "synth": { "voice": "Samantha", "rate": 190 }, "text": "the total comes to four hundred and twenty seven dollars and sixty two cents due on march third" },
+    { "id": "numbers-samantha", "synth": { "voice": "Samantha", "rate": 190 }, "text": "the total comes to four hundred and twenty seven dollars and sixty two cents due on march third", "ref": "the total comes to $427.62 due on march 3" },
     { "id": "tech-flo", "synth": { "voice": "Flo (English (US))", "rate": 195 }, "text": "restart the server then check the logs for any authentication errors before deploying again" },
     { "id": "fast-samantha", "synth": { "voice": "Samantha", "rate": 260 }, "text": "sometimes people talk quite quickly when they are excited about an idea and the app should keep up" },
     { "id": "slow-fred", "synth": { "voice": "Fred", "rate": 130 }, "text": "and other times people speak rather slowly with long pauses between their thoughts" },

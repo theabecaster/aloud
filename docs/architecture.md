@@ -47,3 +47,13 @@ hold hotkey ──▶ HotkeyManager (CGEventTap)
 - All transcription/model work off the main thread; UI state via `@MainActor` observable objects.
 - No network at runtime except: one-time model download, daily release update check (both plain HTTPS GET to fixed hosts, no identifiers sent).
 - State on disk: `~/Library/Application Support/Aloud/` (settings via UserDefaults, history JSON, models dir).
+
+## Reliability principles (local-first)
+
+Faults must not become failures — every local fault path degrades, never corrupts:
+
+- **Atomic writes everywhere.** History persists with `.atomic`; settings go through UserDefaults (cfprefsd is transactional); the updater swap is staged → verified → atomically moved with rollback, so a failed update never leaves the user without a working app.
+- **Data outlives code.** On-disk formats (history, hotkey JSON, doctor output) decode leniently; an unreadable history file is set aside as `.bak`, never overwritten. Schema changes must stay backward-readable.
+- **Idempotent retries.** Model prepare() is safe to call repeatedly and concurrent callers share one download; a partial download resumes rather than restarts.
+- **Trust, but verify inputs.** The updater refuses any bundle whose signature seal or Developer ID team doesn't verify; transcription errors surface as a visible hint, never a silent drop.
+- **End-to-end clipboard safety.** The pasteboard snapshot is restored on a timer armed at inject time, regardless of what the transcription path does afterwards.

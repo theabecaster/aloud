@@ -24,7 +24,18 @@ final class HistoryStore: ObservableObject {
 
     init(fileURL: URL = AppPaths.historyFile) {
         self.fileURL = fileURL
-        entries = (try? JSONDecoder().decode([HistoryEntry].self, from: Data(contentsOf: fileURL))) ?? []
+        if let data = try? Data(contentsOf: fileURL) {
+            if let decoded = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
+                entries = decoded
+            } else {
+                // Unreadable (corrupt or future-schema) history must not be
+                // silently zeroed by the next persist — set it aside instead.
+                try? data.write(to: fileURL.appendingPathExtension("bak"), options: .atomic)
+                entries = []
+            }
+        } else {
+            entries = []
+        }
     }
 
     func append(_ entry: HistoryEntry, limit: Int) {
