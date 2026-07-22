@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 
 // First-run flow, Setup Assistant style: one instruction per screen, a single
@@ -23,6 +24,8 @@ struct OnboardingView: View {
     @State private var axStatus = Permissions.accessibility
     @State private var micDeniedOnce = false
     @State private var tryItDone = false
+    @State private var isOnline = true
+    @State private var networkMonitor = NWPathMonitor()
 
     private let poll = Timer.publish(every: 0.8, on: .main, in: .common).autoconnect()
 
@@ -63,6 +66,22 @@ struct OnboardingView: View {
             // Start the model download quietly right away so it's finished (or
             // well underway) by the time the user reaches the model screen.
             Task { await controller.prepareModel() }
+            // Watch connectivity for the model step: no network is a normal
+            // first-run situation, and the download should resume by itself.
+            networkMonitor.pathUpdateHandler = { path in
+                let nowOnline = path.status == .satisfied
+                Task { @MainActor in
+                    let cameBack = nowOnline && !isOnline
+                    isOnline = nowOnline
+                    if cameBack {
+                        switch controller.transcriberState {
+                        case .modelMissing, .failed: await controller.prepareModel()
+                        default: break
+                        }
+                    }
+                }
+            }
+            networkMonitor.start(queue: .global(qos: .utility))
         }
         .onReceive(poll) { _ in
             micStatus = Permissions.microphone
@@ -139,14 +158,11 @@ struct OnboardingView: View {
                title: "Let Aloud Type for You",
                message: "This lets your talk key work in every app, and lets Aloud type the words where your cursor is. macOS calls this “Accessibility” access.") {
             VStack(spacing: 12) {
-                if axStatus == .denied {
-                    Text("In System Settings, turn on Aloud under Privacy & Security → Accessibility. This screen will move on automatically.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                primaryButton(axStatus == .denied ? "Open System Settings" : "Allow Accessibility") {
-                    Permissions.promptAccessibility()
+                Text("In System Settings, turn on the switch next to Aloud under Privacy & Security → Accessibility. This screen will move on automatically once it's on.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                primaryButton("Open System Settings") {
                     Permissions.openAccessibilitySettings()
                 }
             }
@@ -161,6 +177,13 @@ struct OnboardingView: View {
                message: "Aloud is downloading its voice recognition — this happens once (about 500 MB). After this, dictation works completely offline, forever.") {
             VStack(spacing: 14) {
                 switch controller.transcriberState {
+                case .modelMissing where !isOnline, .failed where !isOnline:
+                    Label("No internet connection", systemImage: "wifi.slash")
+                        .foregroundStyle(.secondary)
+                    Text("Aloud needs the internet once, for this download. This screen will continue automatically when you're back online.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 case .modelMissing:
                     primaryButton("Download") {
                         Task { await controller.prepareModel() }

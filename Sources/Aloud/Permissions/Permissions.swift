@@ -29,12 +29,6 @@ enum Permissions {
         AXIsProcessTrusted() ? .granted : .denied
     }
 
-    // Shows the system's own "grant accessibility" prompt (once per app path).
-    static func promptAccessibility() {
-        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(opts)
-    }
-
     // MARK: Deep links
 
     static func openMicrophoneSettings() {
