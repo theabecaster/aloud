@@ -15,7 +15,7 @@ struct OnboardingView: View {
     }
 
     enum Step: Int, CaseIterable {
-        case welcome, microphone, accessibility, model, tryIt
+        case welcome, microphone, accessibility, model, liveTyping, tryIt
     }
 
     @State private var step: Step = .welcome
@@ -73,6 +73,7 @@ struct OnboardingView: View {
         case .microphone: microphone
         case .accessibility: accessibility
         case .model: model
+        case .liveTyping: liveTyping
         case .tryIt: tryIt
         }
     }
@@ -183,6 +184,23 @@ struct OnboardingView: View {
         }
     }
 
+    private var liveTyping: some View {
+        screen(symbol: "text.cursor",
+               title: "Live Typing",
+               message: "Words appear as you say them and settle as Aloud hears more — no waiting until you finish speaking. You can change this any time in Settings.") {
+            VStack(spacing: 16) {
+                primaryButton("Keep It On") {
+                    settings.liveTyping = true
+                    advance()
+                }
+                secondaryButton("Type everything at once instead") {
+                    settings.liveTyping = false
+                    advance()
+                }
+            }
+        }
+    }
+
     private var tryIt: some View {
         screen(symbol: "quote.bubble",
                title: "Try It",
@@ -191,12 +209,6 @@ struct OnboardingView: View {
                 TextField("Your words will appear here", text: .constant(controller.lastTranscription))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 300)
-                Toggle("Type words live as I speak", isOn: $settings.liveTyping)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
                 if tryItDone {
                     Label("That’s it — you’re set", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
@@ -292,7 +304,7 @@ struct OnboardingView: View {
         case .microphone: return Permissions.microphone == .granted
         case .accessibility: return Permissions.accessibility == .granted
         case .model: return controller.transcriberState == .ready
-        case .welcome, .tryIt: return false
+        case .welcome, .liveTyping, .tryIt: return false
         }
     }
 }
