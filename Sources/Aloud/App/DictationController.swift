@@ -76,6 +76,26 @@ final class DictationController: ObservableObject {
         hotkeyManager.hotkey = hotkey
     }
 
+    // Shown briefly by SettingsView when opening Settings ended a session.
+    @Published private(set) var showSettingsStopBanner = false
+    private var bannerDismissTask: Task<Void, Never>?
+
+    // Settings opened mid-dictation: recording into a window the user is now
+    // configuring helps no one — end the session without committing. Text
+    // already live-typed stays where it landed.
+    func stopSessionForSettings() {
+        guard phase == .recording else { return }
+        hotkeyManager.abortSession()
+        if phase == .recording { cancelRecording() }   // orphaned recording safety net
+        showSettingsStopBanner = true
+        bannerDismissTask?.cancel()
+        bannerDismissTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.showSettingsStopBanner = false
+        }
+    }
+
     // Download + warm the model, reporting progress into transcriberState.
     func prepareModel() async {
         do {

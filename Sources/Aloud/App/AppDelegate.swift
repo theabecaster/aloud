@@ -220,6 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSettings() {
+        controller.stopSessionForSettings()
         if let settingsWindow { present(settingsWindow); return }
         let window = NSWindow(contentViewController:
             NSHostingController(rootView: SettingsView(controller: controller)))
