@@ -51,7 +51,9 @@ struct Hotkey: Codable, Equatable {
         case kVK_RightShift: return "Right ⇧"
         case kVK_Function: return "fn"
         case kVK_Space: return "Space"
-        case kVK_F1...kVK_F20 where fKeyNames[Int(keyCode)] != nil: return fKeyNames[Int(keyCode)]!
+        // F-key virtual keycodes are not contiguous (kVK_F1 = 0x7A > kVK_F20 = 0x5A),
+        // so a range pattern over them would trap at runtime.
+        case let code where fKeyNames[code] != nil: return fKeyNames[code]!
         default:
             // Translate via the current keyboard layout.
             if let s = Hotkey.characters(for: keyCode), !s.isEmpty { return s.uppercased() }
