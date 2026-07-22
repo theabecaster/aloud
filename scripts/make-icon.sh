@@ -22,9 +22,9 @@ let tile = NSRect(x: inset, y: inset, width: size - inset * 2, height: size - in
 let radius = tile.width * 0.225
 let path = NSBezierPath(roundedRect: tile, xRadius: radius, yRadius: radius)
 
-// Calm blue-violet gradient (system-accent-adjacent, not branded to any model).
-let top = NSColor(calibratedRed: 0.35, green: 0.42, blue: 0.98, alpha: 1)
-let bottom = NSColor(calibratedRed: 0.16, green: 0.20, blue: 0.62, alpha: 1)
+// Modern macOS system-blue gradient (azure → deep blue, #0A84FF family).
+let top = NSColor(calibratedRed: 0.22, green: 0.60, blue: 1.00, alpha: 1)
+let bottom = NSColor(calibratedRed: 0.00, green: 0.32, blue: 0.85, alpha: 1)
 NSGradient(starting: top, ending: bottom)!.draw(in: path, angle: -90)
 
 // Waveform glyph, white, centered.
