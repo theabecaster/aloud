@@ -19,7 +19,7 @@ Requires macOS 14 (Sonoma) or later on Apple Silicon.
 
 ## Use
 
-Hold **right ⌘**, speak, release. Text appears where your cursor is. Press **Esc** while holding to cancel. **Double-tap** the key to keep listening hands-free; tap again to finish.
+Hold **right ⌥**, speak, release. Text appears where your cursor is. Press **Esc** while holding to cancel. **Double-press** the key to keep listening hands-free — edit, click around, keep talking — then press **Esc** to finish.
 
 Aloud tidies as it types — removes "um"s, honors "scratch that", applies your personal word fixes — at a clean-up level you choose in Settings (or turn it off for word-for-word). The exact words you said are always kept in History, so nothing is ever silently rewritten. Settings also has the hotkey, microphone, launch-at-login, and a **Vocabulary** list for names and terms it should always get right. Everything stays on this Mac.
 
@@ -48,6 +48,6 @@ Branches: work lands on `dev`; merges to `main` cut a signed, notarized release 
 
 Copyright © 2026 Abraham Gonzalez.
 
-The app source is licensed under the [GNU AGPL-3.0](LICENSE): you're free to use, study, modify, and redistribute it, but any derivative — including one offered as a network service — must be released under the AGPL with its full source available. Versions up to v0.5.0 were published under MIT and remain so.
+The app source — including all previously published releases — is offered under the [GNU AGPL-3.0](LICENSE): you're free to use, study, modify, and redistribute it, but any derivative — including one offered as a network service — must be released under the AGPL with its full source available.
 
 The speech model weights are licensed separately by their authors (currently CC-BY-4.0 — attribution above).

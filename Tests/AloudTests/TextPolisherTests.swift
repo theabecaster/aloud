@@ -71,49 +71,49 @@ final class TextPolisherTests: XCTestCase {
 }
 
 final class HandsFreeLockTests: XCTestCase {
-    func testDoubleTapLocksThenTapCommits() {
+    private let key = Hotkey.default.keyCode
+    private let flag = Hotkey.default.modifierFlag!
+
+    func testDoubleTapLocksUntilEscCommits() {
         var e = HotkeyEngine(hotkey: .default)
-        let flag = Hotkey.default.modifierFlag!
         // tap 1 (short)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 0), .begin)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 0.05), .cancel)
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .begin)
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05), .cancel)
         // tap 2 (short, inside window) → lock
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 0.2), .begin)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 0.25), .lock)
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2), .begin)
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .lock)
         XCTAssertTrue(e.isLocked)
-        // next tap of any length → commit
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 3.0), .none)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 3.05), .commit)
+        // hotkey presses of any length are ignored while locked
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 3.0), .none)
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 3.8), .none)
+        XCTAssertTrue(e.isLocked)
+        // Esc finishes and commits
+        XCTAssertEqual(e.handle(type: .keyDown, keyCode: 53, flags: [], time: 4.0), .commit)
         XCTAssertFalse(e.isLocked)
     }
 
     func testSlowTapsDoNotLock() {
         var e = HotkeyEngine(hotkey: .default)
-        let flag = Hotkey.default.modifierFlag!
-        _ = e.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 0)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 0.05), .cancel)
-        _ = e.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 1.0)   // outside window
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 1.05), .cancel)
+        _ = e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05), .cancel)
+        _ = e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 1.0)   // outside window
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.05), .cancel)
         XCTAssertFalse(e.isLocked)
     }
 
-    func testEscCancelsLock() {
-        var e = HotkeyEngine(hotkey: .default)
-        let flag = Hotkey.default.modifierFlag!
-        _ = e.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 0)
-        _ = e.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 0.05)
-        _ = e.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 0.2)
-        _ = e.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 0.25)
-        XCTAssertTrue(e.isLocked)
-        XCTAssertEqual(e.handle(type: .keyDown, keyCode: 53, flags: [], time: 1.0), .cancel)
+    func testHandsFreeToggleOffNeverLocks() {
+        var e = HotkeyEngine(hotkey: .default, handsFreeEnabled: false)
+        _ = e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        _ = e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
+        _ = e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .cancel)
         XCTAssertFalse(e.isLocked)
     }
 
     func testNormalHoldStillWorks() {
         var e = HotkeyEngine(hotkey: .default)
-        let flag = Hotkey.default.modifierFlag!
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 0), .begin)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 2.0), .commit)
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .begin)
+        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 2.0), .commit)
         XCTAssertFalse(e.isLocked)
     }
 }

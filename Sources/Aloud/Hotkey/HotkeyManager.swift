@@ -4,8 +4,9 @@ import Carbon.HIToolbox
 // Global push-to-talk via a CGEventTap.
 //
 // Listen-only tap on keyDown/keyUp/flagsChanged. A lone-modifier hotkey (the
-// default, right ⌘) is tracked through flagsChanged transitions; a regular key
-// through keyDown/keyUp with matching modifier flags. Esc while holding cancels.
+// default, right ⌃) is tracked through flagsChanged transitions; a regular key
+// through keyDown/keyUp with matching modifier flags. Esc while holding cancels;
+// Esc during a hands-free session finishes it.
 //
 // The decision logic lives in `HotkeyEngine` (pure, event-in/action-out) so the
 // selftest can drive it with synthetic events without installing a real tap —
@@ -15,7 +16,7 @@ enum HotkeyAction: Equatable {
     case begin      // key went down → start recording
     case commit     // key released → stop + transcribe
     case cancel     // Esc while held, or accidental tap → discard
-    case lock       // double-tap → keep recording hands-free until next tap
+    case lock       // double-press → keep recording hands-free until Esc
     case none
 }
 
@@ -23,11 +24,14 @@ enum HotkeyAction: Equatable {
 //
 // Modes:
 //   hold: press → .begin … release ≥ minimumHold → .commit (shorter → .cancel)
-//   hands-free: two quick taps → second release yields .lock (recording, begun
-//     on the second press, continues); the next tap of any length → .commit.
-//   Esc always cancels.
+//   hands-free (optional): two quick taps → second release yields .lock
+//     (recording, begun on the second press, continues); further hotkey
+//     presses are ignored, and Esc finishes → .commit.
+//   Esc while *holding* cancels.
 struct HotkeyEngine {
     var hotkey: Hotkey
+    // When false, double-pressing never locks — the key only works while held.
+    var handsFreeEnabled: Bool
     private(set) var isHeld = false
     private(set) var isLocked = false
     private var pressTime: TimeInterval = 0
@@ -39,7 +43,10 @@ struct HotkeyEngine {
     // Two taps within this window arm hands-free mode.
     static let doubleTapWindow: TimeInterval = 0.4
 
-    init(hotkey: Hotkey) { self.hotkey = hotkey }
+    init(hotkey: Hotkey, handsFreeEnabled: Bool = true) {
+        self.hotkey = hotkey
+        self.handsFreeEnabled = handsFreeEnabled
+    }
 
     mutating func handle(type: CGEventType, keyCode: UInt16, flags: CGEventFlags,
                          time: TimeInterval) -> HotkeyAction {
@@ -55,9 +62,12 @@ struct HotkeyEngine {
             return .none
 
         case .keyDown:
-            if (isHeld || isLocked) && keyCode == UInt16(kVK_Escape) {
+            if keyCode == UInt16(kVK_Escape), isHeld || isLocked {
+                // Esc finishes a hands-free session (all that dictation should
+                // type, not vanish) but discards a held one.
+                let wasLocked = isLocked
                 isHeld = false; isLocked = false; lastTapTime = -1
-                return .cancel
+                return wasLocked ? .commit : .cancel
             }
             guard !hotkey.isModifierKey, keyCode == hotkey.keyCode, !isHeld,
                   flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).rawValue
@@ -83,10 +93,8 @@ struct HotkeyEngine {
 
     private mutating func release(time: TimeInterval) -> HotkeyAction {
         isHeld = false
-        if isLocked {                       // any tap while locked stops + commits
-            isLocked = false
-            lastTapTime = -1
-            return .commit
+        if isLocked {                       // hands-free runs until Esc
+            return .none
         }
         if (time - pressTime) >= Self.minimumHold {
             lastTapTime = -1
@@ -94,7 +102,7 @@ struct HotkeyEngine {
         }
         // Short tap: second one inside the window locks hands-free (recording
         // already started on this press); a lone one is an accidental cancel.
-        if lastTapTime >= 0, (time - lastTapTime) <= Self.doubleTapWindow {
+        if handsFreeEnabled, lastTapTime >= 0, (time - lastTapTime) <= Self.doubleTapWindow {
             isLocked = true
             lastTapTime = -1
             return .lock
@@ -111,13 +119,18 @@ final class HotkeyManager {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
-    init(hotkey: Hotkey) {
-        engine = HotkeyEngine(hotkey: hotkey)
+    init(hotkey: Hotkey, handsFree: Bool = true) {
+        engine = HotkeyEngine(hotkey: hotkey, handsFreeEnabled: handsFree)
     }
 
     var hotkey: Hotkey {
         get { engine.hotkey }
-        set { engine = HotkeyEngine(hotkey: newValue) }
+        set { engine = HotkeyEngine(hotkey: newValue, handsFreeEnabled: engine.handsFreeEnabled) }
+    }
+
+    var handsFree: Bool {
+        get { engine.handsFreeEnabled }
+        set { engine.handsFreeEnabled = newValue }
     }
 
     // Returns false when the tap can't be created (Accessibility not granted).

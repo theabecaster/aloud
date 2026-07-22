@@ -34,17 +34,22 @@ final class DictationController: ObservableObject {
 
     var micLevel: Float { recorder.currentLevel }
 
+    private var cancellables: Set<AnyCancellable> = []
+
     init(settings: SettingsStore = .shared,
          history: HistoryStore = .shared,
          transcriber: Transcriber = ParakeetTranscriber()) {
         self.settings = settings
         self.history = history
         self.transcriber = transcriber
-        self.hotkeyManager = HotkeyManager(hotkey: settings.hotkey)
+        self.hotkeyManager = HotkeyManager(hotkey: settings.hotkey, handsFree: settings.handsFree)
         self.transcriberState = transcriber.state
         hotkeyManager.onAction = { [weak self] action in
             self?.handle(action)
         }
+        settings.$handsFree
+            .sink { [weak self] enabled in self?.hotkeyManager.handsFree = enabled }
+            .store(in: &cancellables)
     }
 
     // MARK: lifecycle
