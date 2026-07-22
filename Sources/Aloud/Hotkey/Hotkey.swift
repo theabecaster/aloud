@@ -39,14 +39,14 @@ struct Hotkey: Codable, Equatable {
 
     static func keyName(for keyCode: UInt16) -> String {
         switch Int(keyCode) {
-        case kVK_Command: return "⌘ (left)"
-        case kVK_RightCommand: return "⌘ (right)"
-        case kVK_Option: return "⌥ (left)"
-        case kVK_RightOption: return "⌥ (right)"
-        case kVK_Control: return "⌃ (left)"
-        case kVK_RightControl: return "⌃ (right)"
-        case kVK_Shift: return "⇧ (left)"
-        case kVK_RightShift: return "⇧ (right)"
+        case kVK_Command: return "Left ⌘"
+        case kVK_RightCommand: return "Right ⌘"
+        case kVK_Option: return "Left ⌥"
+        case kVK_RightOption: return "Right ⌥"
+        case kVK_Control: return "Left ⌃"
+        case kVK_RightControl: return "Right ⌃"
+        case kVK_Shift: return "Left ⇧"
+        case kVK_RightShift: return "Right ⇧"
         case kVK_Function: return "fn"
         case kVK_Space: return "Space"
         case kVK_F1...kVK_F20 where fKeyNames[Int(keyCode)] != nil: return fKeyNames[Int(keyCode)]!
