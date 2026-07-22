@@ -16,6 +16,11 @@ final class AudioRecorder {
     // Live input level (0…1) for the recording indicator, updated on the tap queue.
     private(set) var currentLevel: Float = 0
 
+    // Optional live consumer of converted 16 kHz chunks, invoked on the tap
+    // thread as audio arrives (live typing feeds its streaming session here).
+    // Samples still accumulate for `stop()` regardless. Cleared on stop.
+    var onChunk: (([Float]) -> Void)?
+
     // Select a specific input device by pointing the engine's input AU at it.
     // No-op (default device) when uid is nil or stale.
     private func applyInputDevice(uid: String?) {
@@ -66,6 +71,7 @@ final class AudioRecorder {
         engine.stop()
         isRecording = false
         converter = nil
+        onChunk = nil
         lock.lock(); defer { lock.unlock() }
         let out = samples
         samples = []
@@ -101,6 +107,7 @@ final class AudioRecorder {
         lock.lock()
         samples.append(contentsOf: chunk)
         lock.unlock()
+        onChunk?(chunk)
     }
 
     var recordedDuration: TimeInterval {
