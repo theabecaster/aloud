@@ -9,8 +9,8 @@ import Carbon.HIToolbox
 // CGEvent unicode-string keystrokes, so per-second updates don't fight the
 // clipboard-restore window. Every event posts with empty modifier flags —
 // during live typing the user is still physically holding the dictation
-// hotkey (often a bare modifier like right ⌘), and letting that leak into
-// synthetic keystrokes would turn "a" into ⌘A.
+// hotkey (often a bare modifier like right ⌥), and letting that leak into
+// synthetic keystrokes would garble the typed text.
 
 // Pure diff: what it takes to turn `old` into `new` for a text field whose
 // cursor sits at the end of `old`. Counts backspaces in grapheme clusters —

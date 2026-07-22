@@ -8,10 +8,12 @@ struct Hotkey: Codable, Equatable {
     var modifiers: UInt64        // CGEventFlags rawValue for non-modifier keys; 0 for lone modifiers
     var isModifierKey: Bool      // true → track via flagsChanged (e.g. right ⌘)
 
-    // Default: hold right Command. Fn is system-reserved (dictation/emoji) and
-    // F-keys collide with media keys, so a lone right-side modifier is the
-    // least-surprising default that works on every keyboard.
-    static let `default` = Hotkey(keyCode: 54, modifiers: 0, isModifierKey: true)
+    // Default: hold right Option. Fn is system-reserved (dictation/emoji),
+    // F-keys collide with media keys, and ⌘/⌃ are navigation modifiers — held
+    // during dictation they'd poison any click or keystroke the user makes.
+    // A lone right ⌥ exists on every keyboard, is never a standalone shortcut,
+    // and has the mildest side effects of any modifier.
+    static let `default` = Hotkey(keyCode: UInt16(kVK_RightOption), modifiers: 0, isModifierKey: true)
 
     // The CGEventFlags bit a lone-modifier hotkey toggles, used to detect hold/release.
     var modifierFlag: CGEventFlags? {

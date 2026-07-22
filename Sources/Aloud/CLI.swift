@@ -84,6 +84,7 @@ enum CLI {
                 "microphoneUID": settings.microphoneUID ?? "default",
                 "onboardingComplete": settings.onboardingComplete,
                 "liveTyping": settings.liveTyping,
+                "handsFree": settings.handsFree,
             ],
             "paths": [
                 "stateDir": AppPaths.stateDir.path,
@@ -271,19 +272,37 @@ enum CLI {
         defer { try? FileManager.default.removeItem(at: tmp) }
         setenv("ALOUD_STATE_DIR", tmp.path, 1)
 
-        // 1. Hotkey engine: hold/commit, short-tap cancel, Esc cancel — pure logic.
+        // 1. Hotkey engine: hold/commit, short-tap cancel, Esc, hands-free — pure logic.
         var engine = HotkeyEngine(hotkey: .default)
+        let key = Hotkey.default.keyCode
         let flag = Hotkey.default.modifierFlag!
-        expect(engine.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 0) == .begin,
+        expect(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0) == .begin,
                "hotkey: modifier down begins")
-        expect(engine.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 0.5) == .commit,
+        expect(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.5) == .commit,
                "hotkey: release after hold commits")
-        _ = engine.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 1.0)
-        expect(engine.handle(type: .flagsChanged, keyCode: 54, flags: [], time: 1.05) == .cancel,
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 1.0)
+        expect(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.05) == .cancel,
                "hotkey: short tap cancels")
-        _ = engine.handle(type: .flagsChanged, keyCode: 54, flags: flag, time: 2.0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 2.0)
         expect(engine.handle(type: .keyDown, keyCode: 53, flags: flag, time: 2.2) == .cancel,
                "hotkey: esc while held cancels")
+        // Hands-free: double-press locks, hotkey taps are then ignored, Esc finishes.
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 3.0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 3.05)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 3.2)
+        expect(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 3.25) == .lock,
+               "hotkey: double-press locks hands-free")
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 4.0)
+        expect(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 4.6) == .none,
+               "hotkey: taps ignored while locked")
+        expect(engine.handle(type: .keyDown, keyCode: 53, flags: [], time: 5.0) == .commit,
+               "hotkey: esc finishes hands-free")
+        var noHandsFree = HotkeyEngine(hotkey: .default, handsFreeEnabled: false)
+        _ = noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        _ = noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
+        _ = noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
+        expect(noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25) == .cancel,
+               "hotkey: hands-free off means double-press never locks")
         var keyEngine = HotkeyEngine(hotkey: Hotkey(keyCode: 96, modifiers: 0, isModifierKey: false))
         expect(keyEngine.handle(type: .keyDown, keyCode: 96, flags: [], time: 0) == .begin,
                "hotkey: regular key begins")
