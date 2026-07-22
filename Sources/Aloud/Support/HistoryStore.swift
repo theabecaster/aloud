@@ -4,13 +4,15 @@ import Foundation
 struct HistoryEntry: Codable, Identifiable, Equatable {
     let id: UUID
     let date: Date
-    let text: String
+    let text: String             // what was typed (after clean-up)
+    let rawText: String?         // exact model output, when it differs
     let duration: TimeInterval   // spoken audio seconds
 
-    init(text: String, duration: TimeInterval, date: Date = Date()) {
+    init(text: String, rawText: String? = nil, duration: TimeInterval, date: Date = Date()) {
         self.id = UUID()
         self.date = date
         self.text = text
+        self.rawText = (rawText == text) ? nil : rawText
         self.duration = duration
     }
 }

@@ -6,12 +6,16 @@ struct SettingsView: View {
 
     enum Section: String, CaseIterable, Identifiable {
         case general = "General"
+        case dictation = "Dictation"
+        case vocabulary = "Vocabulary"
         case history = "History"
         case about = "About"
         var id: String { rawValue }
         var symbol: String {
             switch self {
             case .general: return "gearshape"
+            case .dictation: return "waveform"
+            case .vocabulary: return "character.book.closed"
             case .history: return "clock"
             case .about: return "info.circle"
             }
@@ -29,6 +33,8 @@ struct SettingsView: View {
         } detail: {
             switch section {
             case .general: GeneralSettings(controller: controller)
+            case .dictation: DictationSettings(settings: controller.settings)
+            case .vocabulary: VocabularySettings(settings: controller.settings)
             case .history: HistorySettings(history: controller.history)
             case .about: AboutSettings()
             }
@@ -165,6 +171,103 @@ enum KeyCaptureWindow {
     }
 }
 
+// MARK: - Dictation
+
+struct DictationSettings: View {
+    @ObservedObject var settings: SettingsStore
+
+    var body: some View {
+        Form {
+            SwiftUI.Section {
+                Picker("Clean-up", selection: $settings.polishLevel) {
+                    ForEach(PolishLevel.allCases) { level in
+                        Text(level.displayName).tag(level)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text(settings.polishLevel.explanation)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } footer: {
+                Text("The exact words you said are always kept in History, whatever the clean-up level.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            }
+
+            SwiftUI.Section {
+                Toggle("Sound when recording starts", isOn: $settings.soundCues)
+            }
+
+            SwiftUI.Section {
+                LabeledContent("Hands-free") {
+                    Text("Double-tap the dictation key to keep listening; tap again to finish.")
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Vocabulary
+
+struct VocabularySettings: View {
+    @ObservedObject var settings: SettingsStore
+    @State private var newPattern = ""
+    @State private var newReplacement = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if settings.replacements.isEmpty {
+                ContentUnavailableView(
+                    "No Replacements",
+                    systemImage: "character.book.closed",
+                    description: Text("Fix words Aloud keeps getting wrong — a name, a product, a term of art. “Heard” becomes “Typed”, every time."))
+                    .frame(maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(settings.replacements) { r in
+                        HStack {
+                            Text(r.pattern)
+                            Image(systemName: "arrow.right")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                            Text(r.replacement).fontWeight(.medium)
+                            Spacer()
+                            Button {
+                                settings.replacements.removeAll { $0.id == r.id }
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+            }
+            Divider()
+            HStack(spacing: 8) {
+                TextField("Aloud types…", text: $newPattern)
+                    .textFieldStyle(.roundedBorder)
+                TextField("It should be…", text: $newReplacement)
+                    .textFieldStyle(.roundedBorder)
+                Button("Add") {
+                    let p = newPattern.trimmingCharacters(in: .whitespaces)
+                    let r = newReplacement.trimmingCharacters(in: .whitespaces)
+                    guard !p.isEmpty, !r.isEmpty else { return }
+                    settings.replacements.append(Replacement(pattern: p, replacement: r))
+                    newPattern = ""; newReplacement = ""
+                }
+                .disabled(newPattern.trimmingCharacters(in: .whitespaces).isEmpty
+                          || newReplacement.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(12)
+        }
+    }
+}
+
 // MARK: - History
 
 struct HistorySettings: View {
@@ -178,20 +281,7 @@ struct HistorySettings: View {
                                        description: Text("Recent dictations appear here. They stay on this Mac."))
             } else {
                 List(history.entries) { entry in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(entry.text)
-                            .lineLimit(3)
-                        Text(entry.date, style: .relative)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 2)
-                    .contextMenu {
-                        Button("Copy") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(entry.text, forType: .string)
-                        }
-                    }
+                    HistoryRow(entry: entry)
                 }
                 .scrollContentBackground(.hidden)
                 Divider()
@@ -200,6 +290,51 @@ struct HistorySettings: View {
                     Button("Clear History") { history.clear() }
                 }
                 .padding(12)
+            }
+        }
+    }
+}
+
+struct HistoryRow: View {
+    let entry: HistoryEntry
+    @State private var showRaw = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(entry.text)
+                .lineLimit(3)
+            HStack(spacing: 8) {
+                Text(entry.date, style: .relative)
+                if entry.rawText != nil {
+                    Button(showRaw ? "Hide original" : "Show original") {
+                        withAnimation(.spring(duration: 0.25)) { showRaw.toggle() }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            if showRaw, let raw = entry.rawText {
+                Text(raw)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+            }
+        }
+        .padding(.vertical, 2)
+        .contextMenu {
+            Button("Copy") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(entry.text, forType: .string)
+            }
+            if let raw = entry.rawText {
+                Button("Copy Original") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(raw, forType: .string)
+                }
             }
         }
     }

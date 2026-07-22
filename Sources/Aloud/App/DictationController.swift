@@ -80,7 +80,16 @@ final class DictationController: ObservableObject {
         case .begin: beginRecording()
         case .commit: commitRecording()
         case .cancel: cancelRecording()
+        case .lock: indicator.showLocked()   // recording continues hands-free
         case .none: break
+        }
+    }
+
+    private func playCue(_ name: String) {
+        guard settings.soundCues else { return }
+        if let sound = NSSound(named: NSSound.Name(name)) {
+            sound.volume = 0.3
+            sound.play()
         }
     }
 
@@ -96,6 +105,7 @@ final class DictationController: ObservableObject {
         do {
             try recorder.start(deviceUID: settings.microphoneUID)
             phase = .recording
+            playCue("Tink")
             indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 })
         } catch {
             phase = .error(error.localizedDescription)
@@ -117,16 +127,20 @@ final class DictationController: ObservableObject {
         Task {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
-                let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let polisher = TextPolisher(level: settings.polishLevel,
+                                            replacements: settings.replacements)
+                let text = polisher.polish(raw)
                 if !text.isEmpty {
                     injector.inject(text)
-                    history.append(HistoryEntry(text: text, duration: result.audioDuration),
+                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration),
                                    limit: settings.historyLimit)
                     lastTranscription = text
                 }
                 indicator.hide()
                 phase = .idle
             } catch {
+                playCue("Basso")
                 indicator.showHint("Couldn’t transcribe that — try again")
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
