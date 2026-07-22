@@ -20,6 +20,17 @@ enum CLI {
                 return 2
             }
             return await transcribe(path: args[1])
+        case "--update-check":
+            // Headless updater probe: prints current vs latest and whether an
+            // update would apply. Never installs (the GUI owns that).
+            let current = Updater.currentVersion()
+            guard let latest = Updater.fetchLatestRelease() else {
+                FileHandle.standardError.write(Data("couldn't reach the release feed\n".utf8))
+                return 1
+            }
+            let newer = Updater.semverLess(current, latest.tag)
+            print("current=\(current) latest=\(latest.tag) update_available=\(newer)")
+            return 0
         case "--simulate-hold":
             // Posts a synthetic press-hold-release of the configured hotkey so
             // scripts/loop-test.sh can exercise the running GUI's real event

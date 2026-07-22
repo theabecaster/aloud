@@ -15,6 +15,10 @@ final class SettingsStore: ObservableObject {
         microphoneUID = defaults.string(forKey: Keys.microphoneUID)
         onboardingComplete = defaults.bool(forKey: Keys.onboardingComplete)
         historyLimit = defaults.object(forKey: Keys.historyLimit) as? Int ?? 50
+        polishLevel = (defaults.string(forKey: Keys.polishLevel)).flatMap(PolishLevel.init) ?? .standard
+        replacements = (defaults.data(forKey: Keys.replacements))
+            .flatMap { try? JSONDecoder().decode([Replacement].self, from: $0) } ?? []
+        soundCues = defaults.object(forKey: Keys.soundCues) as? Bool ?? true
     }
 
     private static func resolveDefaults() -> UserDefaults {
@@ -29,6 +33,9 @@ final class SettingsStore: ObservableObject {
         static let microphoneUID = "microphoneUID"
         static let onboardingComplete = "onboardingComplete"
         static let historyLimit = "historyLimit"
+        static let polishLevel = "polishLevel"
+        static let replacements = "replacements"
+        static let soundCues = "soundCues"
     }
 
     @Published var hotkey: Hotkey {
@@ -45,6 +52,15 @@ final class SettingsStore: ObservableObject {
     }
     @Published var historyLimit: Int {
         didSet { defaults.set(historyLimit, forKey: Keys.historyLimit) }
+    }
+    @Published var polishLevel: PolishLevel {
+        didSet { defaults.set(polishLevel.rawValue, forKey: Keys.polishLevel) }
+    }
+    @Published var replacements: [Replacement] {
+        didSet { if let data = try? JSONEncoder().encode(replacements) { defaults.set(data, forKey: Keys.replacements) } }
+    }
+    @Published var soundCues: Bool {
+        didSet { defaults.set(soundCues, forKey: Keys.soundCues) }
     }
 
     private static func loadHotkey(from defaults: UserDefaults) -> Hotkey? {

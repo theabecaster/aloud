@@ -75,7 +75,9 @@ for fx in fixtures:
     hyp = proc.stdout.strip()
     ref = fx.get("ref", fx["text"])   # ref overrides for ITN (numbers/currency/dates)
     score = wer(normalize(ref), normalize(hyp))
-    over = score > thresholds["per_fixture_wer_max"]
+    # Per-fixture override for deliberately-hard audio (e.g. the robotic Fred
+    # voice, whose rendering varies by machine); global cap otherwise.
+    over = score > fx.get("wer_max", thresholds["per_fixture_wer_max"])
     failed |= over
     results.append({"id": fx["id"], "wer": round(score, 4),
                     "ref": ref, "hyp": hyp})
