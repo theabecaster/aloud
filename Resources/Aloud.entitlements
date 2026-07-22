@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened runtime exceptions for notarization. Not sandboxed: a global
+	     event tap + synthetic paste into other apps is incompatible with the
+	     App Sandbox; distribution is Developer ID, not App Store. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!-- One-time model download + release update check. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

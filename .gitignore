@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+dist/
+*.dmg
+*.zip
+.DS_Store
+xcuserdata/
+DerivedData/
+/eval/results/
+/eval/fixtures/audio/*.wav
+!/eval/fixtures/audio/.gitkeep

@@ -1,0 +1,115 @@
+name: build
+
+# Two roles:
+#   - CI: build + unit tests + selftest + packaging smoke on every PR (to
+#     main/dev) and push to dev. `build` is the required status check.
+#   - Release engine: called by release.yml (workflow_call, release=true) to
+#     package, sign, notarize, staple, tag and publish a GitHub Release.
+# Pushes to `main` are handled by release.yml (which calls this) — main is not
+# a push trigger here, avoiding a duplicate build per merge.
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_call:
+    inputs:
+      release:
+        description: "Package, sign, notarize, tag and publish a release"
+        type: boolean
+        default: false
+      version:
+        description: "Release version X.Y.Z (no leading v); required when release=true"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (release, warnings are errors)
+        run: |
+          swift build -c release -Xswiftc -warnings-as-errors 2>&1 | tee build.log
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: Unit tests
+        run: swift test
+
+      - name: Self-test (headless subsystem checks)
+        run: .build/release/Aloud --selftest
+
+      - name: CLI smoke
+        run: |
+          .build/release/Aloud --version
+          .build/release/Aloud --doctor | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'permissions' in d and 'model' in d"
+
+      - name: Packaging smoke (ad-hoc signed bundle verifies)
+        if: ${{ !inputs.release }}
+        run: |
+          bash scripts/make-app.sh 0.0.0
+          codesign --verify --strict dist/Aloud.app
+          plutil -lint dist/Aloud.app/Contents/Info.plist
+
+      - name: Import Developer ID certificate
+        if: ${{ inputs.release && env.MACOS_CERTIFICATE != '' }}
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/app.keychain-db"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PWD" "$KEYCHAIN" >/dev/null
+          IDENT=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -o '"Developer ID Application[^"]*"' | head -1 | tr -d '"')
+          echo "Using identity: $IDENT"
+          echo "CODESIGN_IDENTITY=$IDENT" >> "$GITHUB_ENV"
+
+      - name: Package app + dmg
+        if: ${{ inputs.release }}
+        run: |
+          bash scripts/make-app.sh "${{ inputs.version }}"
+          bash scripts/make-dmg.sh
+
+      - name: Notarize and staple
+        if: ${{ inputs.release && env.MACOS_CERTIFICATE != '' }}
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: bash scripts/notarize.sh
+
+      - name: Zip update asset
+        if: ${{ inputs.release }}
+        run: |
+          cd dist
+          zip -r ../Aloud-macos.zip "Aloud.app"   # consumed by the in-app updater
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.release }}
+        with:
+          name: Aloud-release
+          path: |
+            Aloud-macos.zip
+            dist/Aloud.dmg
+
+      - name: Publish release
+        if: ${{ inputs.release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          files: |
+            Aloud-macos.zip
+            dist/Aloud.dmg
+          generate_release_notes: true
