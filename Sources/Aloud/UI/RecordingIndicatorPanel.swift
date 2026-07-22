@@ -14,6 +14,14 @@ final class RecordingIndicatorPanel {
     // whether a show snuck in behind it (hands-free is a cancel immediately
     // followed by a re-show) and must not order the panel out.
     private var hideGeneration = 0
+    // Hands-free silence reminder: after this long without speech — and only
+    // when the keyboard and mouse are idle too, so it never interrupts someone
+    // editing — the pill switches to "Still listening…". Long on purpose:
+    // most sessions should end before it ever appears.
+    private static let silenceReminderAfter: TimeInterval = 30
+    private static let inputIdleGrace: TimeInterval = 6
+    private static let voiceLevel: Float = 0.1
+    private var lastVoiceTime: TimeInterval = 0
 
     // Fires when the close button on the locked pill is clicked.
     var onStopHandsFree: (() -> Void)? {
@@ -25,12 +33,17 @@ final class RecordingIndicatorPanel {
         model.mode = .recording
         model.hint = nil
         model.isLocked = false
+        model.stillListening = false
         present()
         panel?.ignoresMouseEvents = true
         levelTimer?.invalidate()
-        levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak model] _ in
+        levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             let level = levelProvider()
-            Task { @MainActor in model?.level = level }
+            Task { @MainActor in
+                guard let self else { return }
+                self.model.level = level
+                self.updateStillListening(level: level)
+            }
         }
     }
 
@@ -40,6 +53,23 @@ final class RecordingIndicatorPanel {
     func showLocked() {
         model.isLocked = true
         panel?.ignoresMouseEvents = false
+        lastVoiceTime = ProcessInfo.processInfo.systemUptime
+    }
+
+    private func updateStillListening(level: Float) {
+        let now = ProcessInfo.processInfo.systemUptime
+        if level > Self.voiceLevel { lastVoiceTime = now }
+        guard model.isLocked, now - lastVoiceTime > Self.silenceReminderAfter else {
+            model.stillListening = false
+            return
+        }
+        // System-wide input idle: typing or mousing means the user is engaged,
+        // not absent — hold the reminder back.
+        let inputIdle = min(
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown),
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown),
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved))
+        model.stillListening = inputIdle > Self.inputIdleGrace
     }
 
     func showTranscribing() {
@@ -124,6 +154,7 @@ final class IndicatorModel: ObservableObject {
     @Published var level: Float = 0
     @Published var hint: String?
     @Published var isLocked = false
+    @Published var stillListening = false
     var onStop: (() -> Void)?
 }
 
@@ -138,8 +169,15 @@ struct IndicatorView: View {
                 // a quiet "still listening" that users can discover on their own.
                 Image(systemName: "mic.fill")
                     .foregroundStyle(model.isLocked ? Color.orange : Color.red)
-                LevelMeter(level: model.level)
-                    .frame(width: 90, height: 18)
+                    .symbolEffect(.pulse, isActive: model.stillListening)
+                if model.stillListening {
+                    Text("Still listening…")
+                        .foregroundStyle(.orange)
+                        .frame(width: 90)
+                } else {
+                    LevelMeter(level: model.level)
+                        .frame(width: 90, height: 18)
+                }
                 if model.isLocked {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 11))
@@ -175,6 +213,7 @@ struct IndicatorView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.spring(duration: 0.25), value: model.mode == .recording)
         .animation(.spring(duration: 0.25), value: model.isLocked)
+        .animation(.spring(duration: 0.25), value: model.stillListening)
     }
 }
 
