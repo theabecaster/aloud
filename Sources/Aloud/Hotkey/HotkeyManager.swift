@@ -4,7 +4,7 @@ import Carbon.HIToolbox
 // Global push-to-talk via a CGEventTap.
 //
 // Listen-only tap on keyDown/keyUp/flagsChanged. A lone-modifier hotkey (the
-// default, right ⌃) is tracked through flagsChanged transitions; a regular key
+// default, left ⌥) is tracked through flagsChanged transitions; a regular key
 // through keyDown/keyUp with matching modifier flags. Esc while holding cancels;
 // Esc during a hands-free session finishes it.
 //

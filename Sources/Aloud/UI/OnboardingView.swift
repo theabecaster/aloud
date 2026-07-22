@@ -15,7 +15,7 @@ struct OnboardingView: View {
     }
 
     enum Step: Int, CaseIterable {
-        case welcome, microphone, accessibility, model, tryIt
+        case welcome, microphone, accessibility, model, liveTyping, tryIt
     }
 
     @State private var step: Step = .welcome
@@ -42,6 +42,10 @@ struct OnboardingView: View {
             // Start the model download quietly right away so it's finished (or
             // well underway) by the time the user reaches the model screen.
             Task { await controller.prepareModel() }
+            // Fresh installs onboard with live typing on — the richest first
+            // impression — and the live-typing step lets them opt out. Never
+            // touch the choice of someone re-running setup.
+            if !settings.onboardingComplete { settings.liveTyping = true }
         }
         .onReceive(poll) { _ in
             micStatus = Permissions.microphone
@@ -61,6 +65,7 @@ struct OnboardingView: View {
         case .microphone: microphone
         case .accessibility: accessibility
         case .model: model
+        case .liveTyping: liveTyping
         case .tryIt: tryIt
         }
     }
@@ -171,6 +176,25 @@ struct OnboardingView: View {
         }
     }
 
+    private var liveTyping: some View {
+        screen(symbol: "text.cursor",
+               title: "Live Typing",
+               message: "Words appear as you say them and settle as Aloud hears more — no waiting until you finish. It’s new and still being polished; you can change your mind any time in Settings.") {
+            VStack(spacing: 16) {
+                primaryButton("Keep It On") {
+                    settings.liveTyping = true
+                    advance()
+                }
+                Button("Type everything at once instead") {
+                    settings.liveTyping = false
+                    advance()
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var tryIt: some View {
         screen(symbol: "quote.bubble",
                title: "Try It",
@@ -256,7 +280,7 @@ struct OnboardingView: View {
         case .microphone: return Permissions.microphone == .granted
         case .accessibility: return Permissions.accessibility == .granted
         case .model: return controller.transcriberState == .ready
-        case .welcome, .tryIt: return false
+        case .welcome, .liveTyping, .tryIt: return false
         }
     }
 }
