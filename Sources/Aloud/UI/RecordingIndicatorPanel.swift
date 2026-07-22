@@ -15,11 +15,18 @@ final class RecordingIndicatorPanel {
     // followed by a re-show) and must not order the panel out.
     private var hideGeneration = 0
 
+    // Fires when the close button on the locked pill is clicked.
+    var onStopHandsFree: (() -> Void)? {
+        get { model.onStop }
+        set { model.onStop = newValue }
+    }
+
     func show(levelProvider: @escaping () -> Float) {
         model.mode = .recording
         model.hint = nil
         model.isLocked = false
         present()
+        panel?.ignoresMouseEvents = true
         levelTimer?.invalidate()
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak model] _ in
             let level = levelProvider()
@@ -28,14 +35,18 @@ final class RecordingIndicatorPanel {
     }
 
     // Hands-free lock engaged: keep the live meter, add the lock affordance.
+    // Only the locked pill takes mouse input (for its close button) — everywhere
+    // else the panel stays click-through so it can never swallow a stray click.
     func showLocked() {
         model.isLocked = true
+        panel?.ignoresMouseEvents = false
     }
 
     func showTranscribing() {
         levelTimer?.invalidate()
         model.mode = .transcribing
         present()
+        panel?.ignoresMouseEvents = true
     }
 
     func showHint(_ text: String) {
@@ -52,6 +63,7 @@ final class RecordingIndicatorPanel {
         levelTimer?.invalidate()
         levelTimer = nil
         guard let panel else { return }
+        panel.ignoresMouseEvents = true
         hideGeneration += 1
         let generation = hideGeneration
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -112,6 +124,7 @@ final class IndicatorModel: ObservableObject {
     @Published var level: Float = 0
     @Published var hint: String?
     @Published var isLocked = false
+    var onStop: (() -> Void)?
 }
 
 struct IndicatorView: View {
@@ -131,6 +144,15 @@ struct IndicatorView: View {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.orange)
+                    Button {
+                        model.onStop?()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop — or press Esc")
                 }
             case .transcribing:
                 ProgressView()
