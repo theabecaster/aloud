@@ -132,7 +132,13 @@ final class HotkeyManager {
 
     var hotkey: Hotkey {
         get { engine.hotkey }
-        set { engine = HotkeyEngine(hotkey: newValue, handsFreeEnabled: engine.handsFreeEnabled) }
+        set {
+            // Same key → keep the engine, and with it any held/locked session.
+            // Rebuilding here mid-dictation would orphan the recording: the
+            // fresh engine forgets isLocked, so Esc stops stopping it.
+            guard newValue != engine.hotkey else { return }
+            engine = HotkeyEngine(hotkey: newValue, handsFreeEnabled: engine.handsFreeEnabled)
+        }
     }
 
     var handsFree: Bool {
