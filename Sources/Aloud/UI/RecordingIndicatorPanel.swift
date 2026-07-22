@@ -14,12 +14,18 @@ final class RecordingIndicatorPanel {
     func show(levelProvider: @escaping () -> Float) {
         model.mode = .recording
         model.hint = nil
+        model.isLocked = false
         present()
         levelTimer?.invalidate()
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak model] _ in
             let level = levelProvider()
             Task { @MainActor in model?.level = level }
         }
+    }
+
+    // Hands-free lock engaged: keep the live meter, add the lock affordance.
+    func showLocked() {
+        model.isLocked = true
     }
 
     func showTranscribing() {
@@ -95,6 +101,7 @@ final class IndicatorModel: ObservableObject {
     @Published var mode: Mode = .recording
     @Published var level: Float = 0
     @Published var hint: String?
+    @Published var isLocked = false
 }
 
 struct IndicatorView: View {
@@ -108,6 +115,11 @@ struct IndicatorView: View {
                     .foregroundStyle(.red)
                 LevelMeter(level: model.level)
                     .frame(width: 90, height: 18)
+                if model.isLocked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
             case .transcribing:
                 ProgressView()
                     .controlSize(.small)

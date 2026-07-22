@@ -14,19 +14,30 @@ import Carbon.HIToolbox
 enum HotkeyAction: Equatable {
     case begin      // key went down → start recording
     case commit     // key released → stop + transcribe
-    case cancel     // Esc while held → discard
+    case cancel     // Esc while held, or accidental tap → discard
+    case lock       // double-tap → keep recording hands-free until next tap
     case none
 }
 
 // Pure state machine: feed it event type + keycode + flags, get an action.
+//
+// Modes:
+//   hold: press → .begin … release ≥ minimumHold → .commit (shorter → .cancel)
+//   hands-free: two quick taps → second release yields .lock (recording, begun
+//     on the second press, continues); the next tap of any length → .commit.
+//   Esc always cancels.
 struct HotkeyEngine {
     var hotkey: Hotkey
     private(set) var isHeld = false
+    private(set) var isLocked = false
     private var pressTime: TimeInterval = 0
+    private var lastTapTime: TimeInterval = -1
 
     // Holds shorter than this are accidental taps — recording still starts
     // instantly on press; the *commit* is suppressed for sub-threshold holds.
     static let minimumHold: TimeInterval = 0.15
+    // Two taps within this window arm hands-free mode.
+    static let doubleTapWindow: TimeInterval = 0.4
 
     init(hotkey: Hotkey) { self.hotkey = hotkey }
 
@@ -37,31 +48,59 @@ struct HotkeyEngine {
             guard hotkey.isModifierKey, keyCode == hotkey.keyCode, let flag = hotkey.modifierFlag else { return .none }
             let nowDown = flags.contains(flag)
             if nowDown && !isHeld {
-                isHeld = true; pressTime = time; return .begin
+                return press(time: time)
             } else if !nowDown && isHeld {
-                isHeld = false
-                return (time - pressTime) >= Self.minimumHold ? .commit : .cancel
+                return release(time: time)
             }
             return .none
 
         case .keyDown:
-            if isHeld && keyCode == UInt16(kVK_Escape) {
-                isHeld = false; return .cancel
+            if (isHeld || isLocked) && keyCode == UInt16(kVK_Escape) {
+                isHeld = false; isLocked = false; lastTapTime = -1
+                return .cancel
             }
             guard !hotkey.isModifierKey, keyCode == hotkey.keyCode, !isHeld,
                   flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).rawValue
                     == CGEventFlags(rawValue: hotkey.modifiers).intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).rawValue
             else { return .none }
-            isHeld = true; pressTime = time; return .begin
+            return press(time: time)
 
         case .keyUp:
             guard !hotkey.isModifierKey, keyCode == hotkey.keyCode, isHeld else { return .none }
-            isHeld = false
-            return (time - pressTime) >= Self.minimumHold ? .commit : .cancel
+            return release(time: time)
 
         default:
             return .none
         }
+    }
+
+    private mutating func press(time: TimeInterval) -> HotkeyAction {
+        isHeld = true
+        pressTime = time
+        // While locked, a press is the "stop" gesture — recording is already on.
+        return isLocked ? .none : .begin
+    }
+
+    private mutating func release(time: TimeInterval) -> HotkeyAction {
+        isHeld = false
+        if isLocked {                       // any tap while locked stops + commits
+            isLocked = false
+            lastTapTime = -1
+            return .commit
+        }
+        if (time - pressTime) >= Self.minimumHold {
+            lastTapTime = -1
+            return .commit
+        }
+        // Short tap: second one inside the window locks hands-free (recording
+        // already started on this press); a lone one is an accidental cancel.
+        if lastTapTime >= 0, (time - lastTapTime) <= Self.doubleTapWindow {
+            isLocked = true
+            lastTapTime = -1
+            return .lock
+        }
+        lastTapTime = time
+        return .cancel
     }
 }
 
