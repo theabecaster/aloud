@@ -40,6 +40,20 @@ struct SettingsView: View {
             }
         }
         .frame(width: 620, height: 420)
+        .overlay(alignment: .top) {
+            if controller.showSettingsStopBanner {
+                Label("Stopped listening so you can change settings", systemImage: "mic.slash")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(duration: 0.3), value: controller.showSettingsStopBanner)
     }
 }
 
