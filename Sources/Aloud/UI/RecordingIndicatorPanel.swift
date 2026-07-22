@@ -121,14 +121,16 @@ struct IndicatorView: View {
         HStack(spacing: 10) {
             switch model.mode {
             case .recording:
+                // Hands-free trades the red mic for an orange one plus a lock —
+                // a quiet "still listening" that users can discover on their own.
                 Image(systemName: "mic.fill")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(model.isLocked ? Color.orange : Color.red)
                 LevelMeter(level: model.level)
                     .frame(width: 90, height: 18)
                 if model.isLocked {
                     Image(systemName: "lock.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.orange)
                 }
             case .transcribing:
                 ProgressView()
@@ -150,6 +152,7 @@ struct IndicatorView: View {
         .overlay(Capsule().strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.spring(duration: 0.25), value: model.mode == .recording)
+        .animation(.spring(duration: 0.25), value: model.isLocked)
     }
 }
 
