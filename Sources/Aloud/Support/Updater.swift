@@ -37,7 +37,7 @@ enum Updater {
 
     struct LatestRelease {
         let tag: String
-        let notes: String
+        let pageURL: URL
         let zipURL: URL
     }
 
@@ -70,7 +70,8 @@ enum Updater {
               let asset = assets.first(where: { ($0["name"] as? String) == updateAsset }),
               let urlStr = asset["browser_download_url"] as? String,
               let url = URL(string: urlStr) else { return nil }
-        return LatestRelease(tag: tag, notes: (obj["body"] as? String) ?? "", zipURL: url)
+        let page = (obj["html_url"] as? String).flatMap(URL.init(string:)) ?? releasesPage
+        return LatestRelease(tag: tag, pageURL: page, zipURL: url)
     }
 
     // MARK: Apply
