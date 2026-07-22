@@ -50,6 +50,15 @@ struct OnboardingView: View {
                 .padding(.bottom, 20)
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            if step == .liveTyping {
+                Button("Next") { advance() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 20)
+            }
+        }
         .onAppear {
             // Start the model download quietly right away so it's finished (or
             // well underway) by the time the user reaches the model screen.
@@ -186,19 +195,62 @@ struct OnboardingView: View {
 
     private var liveTyping: some View {
         screen(symbol: "text.cursor",
-               title: "Live Typing",
-               message: "Words appear as you say them and settle as Aloud hears more — no waiting until you finish speaking. You can change this any time in Settings.") {
-            VStack(spacing: 16) {
-                primaryButton("Keep It On") {
+               title: "How Should Words Appear?",
+               message: "You can change this any time in Settings.") {
+            HStack(spacing: 12) {
+                choiceCard(symbol: "text.cursor",
+                           title: "Live",
+                           caption: "Words appear as you say them and settle as Aloud hears more.",
+                           selected: settings.liveTyping) {
                     settings.liveTyping = true
-                    advance()
                 }
-                secondaryButton("Type everything at once instead") {
+                choiceCard(symbol: "text.insert",
+                           title: "All at once",
+                           caption: "Everything is typed the moment you let go of the key.",
+                           selected: !settings.liveTyping) {
                     settings.liveTyping = false
-                    advance()
                 }
             }
+            .animation(.spring(duration: 0.25), value: settings.liveTyping)
         }
+    }
+
+    // A radio-style option card: exactly one is selected, shown by the accent
+    // border, tinted fill, and corner checkmark.
+    private func choiceCard(symbol: String, title: String, caption: String,
+                            selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: symbol)
+                    .font(.system(size: 24, weight: .light))
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .frame(height: 30)
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .frame(width: 172, height: 138, alignment: .top)
+            .background(selected ? Color.accentColor.opacity(0.1) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor),
+                                  lineWidth: selected ? 2 : 1)
+            )
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color.accentColor)
+                    .padding(6)
+                    .opacity(selected ? 1 : 0)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
     }
 
     private var tryIt: some View {
