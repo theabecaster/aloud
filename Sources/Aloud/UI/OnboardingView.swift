@@ -38,6 +38,18 @@ struct OnboardingView: View {
         }
         .frame(width: 560, height: 460)
         .background(.background)
+        .overlay(alignment: .bottomLeading) {
+            if step != .welcome {
+                Button {
+                    retreat()
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(.bordered)
+                .padding(.leading, 20)
+                .padding(.bottom, 20)
+            }
+        }
         .onAppear {
             // Start the model download quietly right away so it's finished (or
             // well underway) by the time the user reaches the model screen.
@@ -196,9 +208,7 @@ struct OnboardingView: View {
                 if tryItDone {
                     primaryButton("Done") { onFinished() }
                 } else {
-                    Button("Skip for now") { onFinished() }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+                    secondaryButton("Skip for now") { onFinished() }
                 }
             }
         }
@@ -235,6 +245,17 @@ struct OnboardingView: View {
         .keyboardShortcut(.defaultAction)
     }
 
+    // Same size and shape as the primary button, quieter fill — unmistakably
+    // clickable, unmistakably not the main path.
+    private func secondaryButton(_ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .frame(minWidth: 160)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+    }
+
     private var dots: some View {
         HStack(spacing: 8) {
             ForEach(Step.allCases, id: \.rawValue) { s in
@@ -253,6 +274,15 @@ struct OnboardingView: View {
         guard let next = Step(rawValue: raw) else { return }
         if next == .tryIt { _ = controller.startListening() }
         withAnimation(.spring(duration: 0.3)) { step = next }
+    }
+
+    // Mirror of advance(): step backwards, skipping steps that are already
+    // satisfied (the poll would instantly bounce the user forward off them).
+    private func retreat() {
+        var raw = step.rawValue - 1
+        while let candidate = Step(rawValue: raw), isSatisfied(candidate) { raw -= 1 }
+        guard let prev = Step(rawValue: raw) else { return }
+        withAnimation(.spring(duration: 0.3)) { step = prev }
     }
 
     private func isSatisfied(_ s: Step) -> Bool {
