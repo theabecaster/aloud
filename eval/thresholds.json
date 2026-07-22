@@ -1,5 +1,5 @@
 {
   "comment": "WER gates for run-eval.sh. Ratchets: tighten when the model improves, never loosen without a documented reason. say-audio is clean-room, so these are regression tripwires, not real-world accuracy claims.",
-  "average_wer_max": 0.12,
-  "per_fixture_wer_max": 0.35
+  "average_wer_max": 0.08,
+  "per_fixture_wer_max": 0.2
 }

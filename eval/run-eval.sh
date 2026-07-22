@@ -73,14 +73,15 @@ for fx in fixtures:
     proc = subprocess.run([bin_path, "--transcribe", audio],
                           capture_output=True, text=True, timeout=600)
     hyp = proc.stdout.strip()
-    score = wer(normalize(fx["text"]), normalize(hyp))
+    ref = fx.get("ref", fx["text"])   # ref overrides for ITN (numbers/currency/dates)
+    score = wer(normalize(ref), normalize(hyp))
     over = score > thresholds["per_fixture_wer_max"]
     failed |= over
     results.append({"id": fx["id"], "wer": round(score, 4),
-                    "ref": fx["text"], "hyp": hyp})
+                    "ref": ref, "hyp": hyp})
     print(f"{'FAIL' if over else 'ok  '} {fx['id']}: WER={score:.3f}")
     if over:
-        print(f"     ref: {normalize(fx['text'])}")
+        print(f"     ref: {normalize(ref)}")
         print(f"     hyp: {normalize(hyp)}")
 
 if not results:
