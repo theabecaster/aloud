@@ -10,6 +10,10 @@ final class RecordingIndicatorPanel {
     private var panel: NSPanel?
     private let model = IndicatorModel()
     private var levelTimer: Timer?
+    // Bumped by present() and hide() so a hide's fade-out completion can tell
+    // whether a show snuck in behind it (hands-free is a cancel immediately
+    // followed by a re-show) and must not order the panel out.
+    private var hideGeneration = 0
 
     func show(levelProvider: @escaping () -> Float) {
         model.mode = .recording
@@ -48,15 +52,21 @@ final class RecordingIndicatorPanel {
         levelTimer?.invalidate()
         levelTimer = nil
         guard let panel else { return }
+        hideGeneration += 1
+        let generation = hideGeneration
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.18
             panel.animator().alphaValue = 0
-        }, completionHandler: {
-            panel.orderOut(nil)
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.hideGeneration == generation else { return }
+                panel.orderOut(nil)
+            }
         })
     }
 
     private func present() {
+        hideGeneration += 1   // invalidate any in-flight hide completion
         let panel = ensurePanel()
         position(panel)
         panel.alphaValue = 0
