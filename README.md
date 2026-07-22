@@ -46,4 +46,8 @@ Branches: work lands on `dev`; merges to `main` cut a signed, notarized release 
 
 ## License
 
-MIT for the app source. The speech model weights are licensed separately by their authors (currently CC-BY-4.0 — attribution above).
+Copyright © 2026 Abraham Gonzalez.
+
+The app source is licensed under the [GNU AGPL-3.0](LICENSE): you're free to use, study, modify, and redistribute it, but any derivative — including one offered as a network service — must be released under the AGPL with its full source available. Versions up to v0.5.0 were published under MIT and remain so.
+
+The speech model weights are licensed separately by their authors (currently CC-BY-4.0 — attribution above).
