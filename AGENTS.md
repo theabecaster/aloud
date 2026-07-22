@@ -22,9 +22,10 @@ The binary has headless CLI modes so agents can verify subsystems without GUI in
 .build/debug/Aloud --transcribe <wav>      # transcribe a file, print text to stdout (downloads model if absent)
 .build/debug/Aloud --inject "text"         # clipboard-paste injection path (needs Accessibility)
 .build/debug/Aloud --doctor                # print permission/model/config status as JSON
+.build/debug/Aloud --simulate-hold 3       # synthetically hold the hotkey (drives the live GUI's tap)
 ```
 
-Full loop verification: `bash scripts/e2e.sh` (records synthesized speech via `say`, transcribes, asserts WER). Model evals: `bash eval/run-eval.sh` (see `docs/testing.md`).
+Full loop verification: `bash scripts/e2e.sh` (synthesized speech → transcribe → WER; plus --inject into TextEdit). Highest-fidelity: `bash scripts/loop-test.sh` — drives the installed GUI app's real tap with a synthetic hotkey hold while playing speech through the speakers, then asserts the text landed in TextEdit. Model evals: `bash eval/run-eval.sh` (see `docs/testing.md`).
 
 ## Source map
 
