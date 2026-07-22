@@ -79,6 +79,7 @@ jobs:
       - name: Package app + dmg
         if: ${{ inputs.release }}
         run: |
+          brew install create-dmg fileicon
           bash scripts/make-app.sh "${{ inputs.version }}"
           bash scripts/make-dmg.sh
 

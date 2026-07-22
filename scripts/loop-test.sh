@@ -35,10 +35,12 @@ say -v Samantha -o "$TMP/phrase.aiff" "$PHRASE"
 DUR="$(afinfo "$TMP/phrase.aiff" | awk '/estimated duration/ {print $3}')"
 HOLD="$(python3 -c "print(float('$DUR') + 1.2)")"
 
-# 3. Focus a fresh TextEdit document.
+# 3. Focus a fresh TextEdit document (discard any leftovers from prior runs —
+# a stale open document makes the readback accumulate across runs).
 osascript >/dev/null <<'OSA'
 tell application "TextEdit"
   activate
+  close every document saving no
   make new document
 end tell
 OSA
