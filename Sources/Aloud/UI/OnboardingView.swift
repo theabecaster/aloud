@@ -5,7 +5,14 @@ import SwiftUI
 // auto-advance the moment the user grants access in System Settings.
 struct OnboardingView: View {
     @ObservedObject var controller: DictationController
+    @ObservedObject private var settings: SettingsStore
     let onFinished: () -> Void
+
+    init(controller: DictationController, onFinished: @escaping () -> Void) {
+        self.controller = controller
+        _settings = ObservedObject(wrappedValue: controller.settings)
+        self.onFinished = onFinished
+    }
 
     enum Step: Int, CaseIterable {
         case welcome, microphone, accessibility, model, tryIt
@@ -65,13 +72,18 @@ struct OnboardingView: View {
                title: "Welcome to Aloud",
                message: "Speak instead of typing — your words appear wherever your cursor is. Everything happens on your Mac; nothing you say ever leaves it.") {
             VStack(spacing: 16) {
-                HStack(spacing: 6) {
-                    Text("Hold")
-                    KeyCap(controller.settings.hotkey.displayName)
-                    Text("· speak · let go")
+                VStack(spacing: 10) {
+                    HStack(spacing: 6) {
+                        Text("Hold")
+                        HotkeyRecorderView(hotkey: settings.hotkey) { controller.updateHotkey($0) }
+                        Text("· speak · let go")
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    Text("That’s your talk key. \(Hotkey.default.displayName) works great — or click it to pick your own.")
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
                 }
-                .font(.callout)
-                .foregroundStyle(.secondary)
                 primaryButton("Continue") { advance() }
             }
         }
@@ -246,21 +258,5 @@ struct OnboardingView: View {
         case .model: return controller.transcriberState == .ready
         case .welcome, .tryIt: return false
         }
-    }
-}
-
-// A keyboard-key look for naming the talk key, so "hold Right ⌘" reads as a
-// physical key rather than jargon.
-struct KeyCap: View {
-    let label: String
-    init(_ label: String) { self.label = label }
-
-    var body: some View {
-        Text(label)
-            .font(.system(size: 12, weight: .semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator, lineWidth: 0.5))
     }
 }

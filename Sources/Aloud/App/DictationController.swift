@@ -65,6 +65,8 @@ final class DictationController: ObservableObject {
         hotkeyManager.stop()
     }
 
+    var isListening: Bool { hotkeyManager.isActive }
+
     func updateHotkey(_ hotkey: Hotkey) {
         settings.hotkey = hotkey
         hotkeyManager.hotkey = hotkey
