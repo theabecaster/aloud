@@ -75,6 +75,40 @@ final class HotkeyEngineTests: XCTestCase {
         XCTAssertFalse(engine.isLocked)
     }
 
+    func testDoubleTapStopsHandsFree() {
+        var engine = HotkeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .lock)
+        // Double-tapping the hotkey again finishes and commits the session.
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 1.0), .none)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.05), .none)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 1.2), .commit)
+        XCTAssertFalse(engine.isLocked)
+        // The stopping tap's release is swallowed — no cancel, no new session.
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.25), .none)
+        // A fresh press afterwards starts a normal hold, not hands-free.
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 2.0), .begin)
+        XCTAssertFalse(engine.isLocked)
+    }
+
+    func testSlowTapsWhileLockedStayLocked() {
+        var engine = HotkeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .lock)
+        // Presses further apart than the double-tap window do nothing.
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 1.0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.05)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 2.0), .none)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 2.05), .none)
+        XCTAssertTrue(engine.isLocked)
+        // Esc still works as before.
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: [], time: 3.0), .commit)
+    }
+
     func testHandsFreeDisabled() {
         var engine = HotkeyEngine(hotkey: .default, handsFreeEnabled: false)
         _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
