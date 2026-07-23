@@ -26,6 +26,8 @@ struct OnboardingView: View {
     @State private var tryItDone = false
     @State private var isOnline = true
     @State private var networkMonitor = NWPathMonitor()
+    @State private var startingBasic = false
+    @State private var basicUnavailable = false
 
     private let poll = Timer.publish(every: 0.8, on: .main, in: .common).autoconnect()
 
@@ -187,6 +189,7 @@ struct OnboardingView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                    basicDictationOption
                 case .modelMissing:
                     primaryButton("Download") {
                         Task { await controller.prepareModel() }
@@ -197,6 +200,7 @@ struct OnboardingView: View {
                     Text("\(Int(progress * 100))% — you can keep using your Mac")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                    basicDictationOption
                 case .loading:
                     ProgressView()
                     Text("Getting things ready… (first time takes a few seconds)")
@@ -214,7 +218,40 @@ struct OnboardingView: View {
                     primaryButton("Try Again") {
                         Task { await controller.prepareModel() }
                     }
+                    basicDictationOption
                 }
+            }
+        }
+    }
+
+    // "Skip the wait" escape hatch on the download screen: start dictating now
+    // with reduced accuracy, upgrade silently when the download completes.
+    @ViewBuilder
+    private var basicDictationOption: some View {
+        if controller.fallbackAvailable {
+            VStack(spacing: 8) {
+                Divider().frame(width: 200).padding(.vertical, 2)
+                if startingBasic {
+                    ProgressView().controlSize(.small)
+                } else {
+                    secondaryButton("Start Now with Basic Dictation") {
+                        startingBasic = true
+                        basicUnavailable = false
+                        Task {
+                            let ok = await controller.activateFallback(interactive: true)
+                            startingBasic = false
+                            // The 0.8 s poll also advances on .ready — only
+                            // advance if it hasn't beaten us to it.
+                            if ok { if step == .model { advance() } } else { basicUnavailable = true }
+                        }
+                    }
+                }
+                Text(basicUnavailable
+                     ? "Basic dictation isn’t available right now — please wait for the download."
+                     : "Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes\(isOnline ? "" : " — it resumes when you’re back online").")
+                    .font(.footnote)
+                    .foregroundStyle(basicUnavailable ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
+                    .multilineTextAlignment(.center)
             }
         }
     }

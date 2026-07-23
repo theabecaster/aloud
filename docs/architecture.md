@@ -46,6 +46,7 @@ hold hotkey ──▶ HotkeyManager (CGEventTap)
 ## Design rules
 
 - `Transcriber` is a protocol. The engine (currently FluidAudio + Parakeet CoreML) is an implementation detail — swappable, never named in UI.
+- **Basic-dictation fallback.** `SwitchingTranscriber` composes the primary engine with `AppleSpeechTranscriber` (system on-device speech: modern SpeechAnalyzer pipeline on macOS 26+, legacy on-device recognizer below — the latter needs the Speech Recognition permission). It covers the window before the one-time model download finishes: onboarding offers "Start Now with Basic Dictation" (with an accuracy warning), routing is per call so the primary takes over silently the moment it's ready, and the fallback re-activates quietly on relaunch while the download resumes (retried automatically whenever the network returns — `AppDelegate.resumeDownloadWhenOnline`). Activation is always explicit or quiet-and-promptless; a permission dialog can only ever come from the onboarding skip button. Headless check: `Aloud --transcribe-basic <file>`.
 - All transcription/model work off the main thread; UI state via `@MainActor` observable objects.
 - No network at runtime except: one-time model download, daily release update check (both plain HTTPS GET to fixed hosts, no identifiers sent).
 - State on disk: `~/Library/Application Support/Aloud/` (settings via UserDefaults, history JSON, models dir).

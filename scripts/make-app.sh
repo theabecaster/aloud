@@ -41,6 +41,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>Aloud uses the microphone to hear what you say while you hold the dictation key. Audio never leaves your Mac.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Aloud can use your Mac’s built-in dictation as a temporary option while its own voice recognition finishes setting up. Audio never leaves your Mac.</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 </dict>
 </plist>
