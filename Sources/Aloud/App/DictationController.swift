@@ -15,6 +15,11 @@ final class DictationController: ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var transcriberState: TranscriberState = .modelMissing
+    // The primary model's own state while a fallback covers dictation —
+    // drives "finishing setup in the background" UI. Mirrors transcriberState
+    // when there's no fallback in play.
+    @Published private(set) var upgradeState: TranscriberState = .modelMissing
+    @Published private(set) var usingFallback = false
 
     let settings: SettingsStore
     let history: HistoryStore
@@ -39,12 +44,14 @@ final class DictationController: ObservableObject {
 
     init(settings: SettingsStore = .shared,
          history: HistoryStore = .shared,
-         transcriber: Transcriber = ParakeetTranscriber()) {
+         transcriber: Transcriber = SwitchingTranscriber(primary: ParakeetTranscriber(),
+                                                         fallback: AppleSpeechTranscriber.makeIfSupported())) {
         self.settings = settings
         self.history = history
         self.transcriber = transcriber
         self.hotkeyManager = HotkeyManager(hotkey: settings.hotkey, handsFree: settings.handsFree)
         self.transcriberState = transcriber.state
+        self.upgradeState = (transcriber as? SwitchingTranscriber)?.primaryState ?? transcriber.state
         hotkeyManager.onAction = { [weak self] action in
             self?.handle(action)
         }
@@ -96,18 +103,52 @@ final class DictationController: ObservableObject {
         }
     }
 
-    // Download + warm the model, reporting progress into transcriberState.
+    // Download + warm the model, reporting progress into transcriberState
+    // (or, when a fallback is already covering dictation, into upgradeState —
+    // the effective state stays .ready and the finished model takes over
+    // silently on the next dictation).
     func prepareModel() async {
         do {
             try await transcriber.prepare { [weak self] progress in
                 Task { @MainActor in
-                    self?.transcriberState = .downloading(progress: progress)
+                    guard let self else { return }
+                    self.upgradeState = .downloading(progress: progress)
+                    if !self.usingFallback { self.transcriberState = .downloading(progress: progress) }
                 }
             }
         } catch {
             // state already .failed inside the transcriber
         }
+        refreshTranscriberState()
+    }
+
+    // MARK: fallback ("basic dictation")
+
+    private var switcher: SwitchingTranscriber? { transcriber as? SwitchingTranscriber }
+
+    var fallbackAvailable: Bool { switcher?.fallback != nil }
+
+    // Bring up basic dictation so the app is usable before the model download
+    // finishes. `interactive` marks an explicit user action (onboarding skip),
+    // the only context allowed to show a permission prompt; quiet activation
+    // (relaunch mid-download) backs off rather than surprise the user.
+    @discardableResult
+    func activateFallback(interactive: Bool) async -> Bool {
+        // Only worth it while the model isn't even on disk; once downloaded,
+        // loading takes seconds and the fallback would just add a permission
+        // surface for nothing.
+        guard let switcher, !switcher.modelIsDownloaded, switcher.primaryState != .ready
+        else { return false }
+        if !interactive && AppleSpeechTranscriber.wouldPromptForPermission { return false }
+        let ok = await switcher.activateFallback()
+        refreshTranscriberState()
+        return ok
+    }
+
+    private func refreshTranscriberState() {
         transcriberState = transcriber.state
+        upgradeState = switcher?.primaryState ?? transcriber.state
+        usingFallback = switcher?.usingFallback ?? false
     }
 
     // MARK: push-to-talk
