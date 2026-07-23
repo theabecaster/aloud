@@ -15,6 +15,14 @@ enum AppPaths {
         return base.appendingPathComponent(appName, isDirectory: true)
     }
 
+    // The speech SDK keeps its downloaded models in its own directory, not in
+    // our state dir — full cleanups (uninstall, clean-slate upgrade) must
+    // remove this too or "download the voice model" silently short-circuits.
+    static var modelCacheDir: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+    }
+
     static var historyFile: URL { stateDir.appendingPathComponent("history.json") }
     static var lastUpdateCheckFile: URL { stateDir.appendingPathComponent("last-update-check") }
 
