@@ -332,6 +332,18 @@ enum CLI {
                "hotkey: taps ignored while locked")
         expect(engine.handle(type: .keyDown, keyCode: 53, flags: [], time: 5.0) == .commit,
                "hotkey: esc finishes hands-free")
+        // Double-tapping the hotkey again also finishes hands-free, without
+        // re-arming a new session.
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 6.0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 6.05)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 6.2)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 6.25)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 7.0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 7.05)
+        expect(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 7.2) == .commit,
+               "hotkey: double-tap finishes hands-free")
+        expect(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 7.25) == .none,
+               "hotkey: stopping tap release swallowed")
         var noHandsFree = HotkeyEngine(hotkey: .default, handsFreeEnabled: false)
         _ = noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
         _ = noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
