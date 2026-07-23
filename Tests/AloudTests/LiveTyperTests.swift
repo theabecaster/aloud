@@ -64,16 +64,54 @@ final class LiveTyperTests: XCTestCase {
         XCTAssertEqual(typer.typed, "")
     }
 
-    func testFreezeStopsEdits() {
+    // A rebase surrenders the text typed so far and keeps dictation flowing:
+    // later applies sync only the transcript tail at the new cursor position.
+    func testRebaseContinuesWithTailOnly() {
         let typer = LiveTyper(postEvents: false)
         typer.apply("first words")
-        typer.freeze()
-        typer.apply("first words revised")
-        XCTAssertEqual(typer.typed, "first words")
+        typer.rebase()
+        XCTAssertEqual(typer.typed, "")
+        typer.apply("first words and more")
+        XCTAssertEqual(typer.typed, " and more")
+        typer.apply("first words and more still")
+        XCTAssertEqual(typer.typed, " and more still")
+    }
+
+    // Erasing after a rebase removes only the post-rebase tail — the
+    // surrendered text is out of reach and must not be touched.
+    func testEraseAfterRebaseKeepsSurrenderedText() {
+        let typer = LiveTyper(postEvents: false)
+        typer.apply("keep this")
+        typer.rebase()
+        typer.apply("keep this but not this")
         typer.eraseAll()
-        XCTAssertEqual(typer.typed, "first words")   // frozen: nothing is deleted
+        XCTAssertEqual(typer.typed, "")
+        XCTAssertEqual(typer.anchorCount, "keep this".count)
+    }
+
+    // Rebases accumulate: each one moves the anchor past whatever was typed
+    // since the previous rebase.
+    func testRepeatedRebase() {
+        let typer = LiveTyper(postEvents: false)
+        typer.apply("one")
+        typer.rebase()
+        typer.rebase()   // user kept typing; nothing new applied in between
+        typer.apply("one two")
+        XCTAssertEqual(typer.typed, " two")
+        typer.rebase()
+        typer.apply("one two three")
+        XCTAssertEqual(typer.typed, " three")
         typer.reset()
         XCTAssertEqual(typer.typed, "")
-        XCTAssertFalse(typer.isFrozen)
+        XCTAssertEqual(typer.anchorCount, 0)
+    }
+
+    // A revised transcript shorter than the anchor must not crash or type.
+    func testTargetShorterThanAnchor() {
+        let typer = LiveTyper(postEvents: false)
+        typer.apply("hello world")
+        typer.rebase()
+        typer.apply("hello")
+        XCTAssertEqual(typer.typed, "")
     }
 }
