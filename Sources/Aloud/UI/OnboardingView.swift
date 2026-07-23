@@ -308,6 +308,10 @@ struct OnboardingView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                Text("Tip: double-press \(controller.settings.hotkey.displayName) to keep listening hands-free — Esc finishes. You can turn this off in Settings.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
                 if tryItDone {
                     primaryButton("Done") { onFinished() }
                 } else {
