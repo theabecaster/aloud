@@ -19,6 +19,7 @@ enum Uninstaller {
     private static func run() {
         _ = LoginItem.setEnabled(false)
         try? FileManager.default.removeItem(at: AppPaths.stateDir)
+        try? FileManager.default.removeItem(at: AppPaths.modelCacheDir)
         UserDefaults.standard.removePersistentDomain(forName: AppPaths.bundleID)
         UserDefaults.standard.synchronize()
         for service in ["Accessibility", "Microphone"] {

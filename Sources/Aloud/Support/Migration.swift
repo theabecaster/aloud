@@ -16,6 +16,7 @@ enum Migration {
             || FileManager.default.fileExists(atPath: AppPaths.stateDir.path)
         if hadOldInstall {
             try? FileManager.default.removeItem(at: AppPaths.stateDir)
+        try? FileManager.default.removeItem(at: AppPaths.modelCacheDir)
             UserDefaults.standard.removePersistentDomain(forName: AppPaths.bundleID)
             for service in ["Accessibility", "Microphone"] {
                 let reset = Process()
