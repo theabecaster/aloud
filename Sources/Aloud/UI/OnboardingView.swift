@@ -357,6 +357,14 @@ private struct OnboardingButtonStyle: ButtonStyle {
                 TextField("Your words will appear here", text: .constant(controller.lastTranscription))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 300)
+                if controller.usingFallback {
+                    // First impressions happen on the basic engine after a
+                    // skip — make clear this isn't Aloud at full strength.
+                    Text("You’re trying basic dictation — accuracy gets noticeably better on its own once setup finishes.")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
                 if tryItDone {
                     Label("That’s it — you’re set", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
