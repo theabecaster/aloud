@@ -19,7 +19,7 @@ Requires macOS 14 (Sonoma) or later on Apple Silicon.
 
 ## Use
 
-Hold **right ⌥**, speak, release. Text appears where your cursor is. Press **Esc** while holding to cancel. **Double-press** the key to keep listening hands-free — edit, click around, keep talking — then press **Esc** to finish.
+Hold **right ⌥**, speak, release. Text appears where your cursor is. Press **Esc** while holding to cancel. **Double-press** the key to keep listening hands-free — edit, click around, keep talking — then press **Esc** (or double-press again) to finish.
 
 Aloud tidies as it types — removes "um"s, honors "scratch that", applies your personal word fixes — at a clean-up level you choose in Settings (or turn it off for word-for-word). The exact words you said are always kept in History, so nothing is ever silently rewritten. Settings also has the hotkey, microphone, launch-at-login, and a **Vocabulary** list for names and terms it should always get right. Everything stays on this Mac.
 

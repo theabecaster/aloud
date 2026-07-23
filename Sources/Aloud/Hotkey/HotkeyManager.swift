@@ -6,7 +6,7 @@ import Carbon.HIToolbox
 // Listen-only tap on keyDown/keyUp/flagsChanged. A lone-modifier hotkey (the
 // default, left ⌥) is tracked through flagsChanged transitions; a regular key
 // through keyDown/keyUp with matching modifier flags. Esc while holding cancels;
-// Esc during a hands-free session finishes it.
+// Esc or another double-tap during a hands-free session finishes it.
 //
 // The decision logic lives in `HotkeyEngine` (pure, event-in/action-out) so the
 // selftest can drive it with synthetic events without installing a real tap —
@@ -25,8 +25,8 @@ enum HotkeyAction: Equatable {
 // Modes:
 //   hold: press → .begin … release ≥ minimumHold → .commit (shorter → .cancel)
 //   hands-free (optional): two quick taps → second release yields .lock
-//     (recording, begun on the second press, continues); further hotkey
-//     presses are ignored, and Esc finishes → .commit.
+//     (recording, begun on the second press, continues); another double-tap
+//     or Esc finishes → .commit. Single presses while locked are ignored.
 //   Esc while *holding* cancels.
 struct HotkeyEngine {
     var hotkey: Hotkey
@@ -92,10 +92,24 @@ struct HotkeyEngine {
     }
 
     private mutating func press(time: TimeInterval) -> HotkeyAction {
+        if isLocked {
+            // Double-tapping the hotkey again ends hands-free, mirroring how it
+            // began. isHeld stays false so this press's release is swallowed and
+            // lastTapTime is cleared so the pair can't re-arm a new session.
+            if lastTapTime >= 0, (time - lastTapTime) <= Self.doubleTapWindow {
+                isLocked = false
+                isHeld = false
+                lastTapTime = -1
+                return .commit
+            }
+            isHeld = true
+            pressTime = time
+            lastTapTime = time
+            return .none
+        }
         isHeld = true
         pressTime = time
-        // While locked, a press is the "stop" gesture — recording is already on.
-        return isLocked ? .none : .begin
+        return .begin
     }
 
     private mutating func release(time: TimeInterval) -> HotkeyAction {
