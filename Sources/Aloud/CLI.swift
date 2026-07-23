@@ -21,6 +21,15 @@ enum CLI {
                 return 2
             }
             return await transcribe(path: args[1])
+        case "--transcribe-basic":
+            // Same as --transcribe but through the system fallback engine
+            // ("basic dictation") — verifies the degraded path headlessly.
+            // May need the Speech Recognition permission on macOS < 26.
+            guard args.count >= 2 else {
+                FileHandle.standardError.write(Data("usage: Aloud --transcribe-basic <audio-file>\n".utf8))
+                return 2
+            }
+            return await transcribeBasic(path: args[1])
         case "--transcribe-live":
             // Streaming-path twin of --transcribe: feeds the file through a
             // live session in chunks, printing each update to stderr and the
@@ -122,6 +131,32 @@ enum CLI {
             return 0
         } catch {
             FileHandle.standardError.write(Data("transcription failed: \(error.localizedDescription)\n".utf8))
+            return 1
+        }
+    }
+
+    // MARK: --transcribe-basic
+
+    static func transcribeBasic(path: String) async -> Int32 {
+        let url = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            FileHandle.standardError.write(Data("no such file: \(path)\n".utf8))
+            return 2
+        }
+        guard let transcriber = AppleSpeechTranscriber.makeIfSupported() else {
+            FileHandle.standardError.write(Data("basic dictation unsupported on this system\n".utf8))
+            return 1
+        }
+        do {
+            try await transcriber.prepare { _ in }
+            let result = try await transcriber.transcribe(file: url)
+            print(result.text)
+            FileHandle.standardError.write(Data(
+                String(format: "audio=%.2fs processing=%.2fs\n",
+                       result.audioDuration, result.processingTime).utf8))
+            return 0
+        } catch {
+            FileHandle.standardError.write(Data("basic transcription failed: \(error.localizedDescription)\n".utf8))
             return 1
         }
     }
@@ -357,9 +392,12 @@ enum CLI {
         typer.apply("hello")
         typer.apply("hello world")
         let tracked = typer.typed == "hello world"
-        typer.freeze()
+        typer.rebase()
+        typer.apply("hello world again")
+        let rebased = typer.typed == " again"
         typer.eraseAll()
-        expect(tracked && typer.typed == "hello world", "livetyper: tracks text, freeze stops edits")
+        expect(tracked && rebased && typer.typed.isEmpty,
+               "livetyper: tracks text, rebase continues with tail only")
 
         // 7. Updater semver.
         expect(Updater.semverLess("1.0.0", "1.0.1"), "updater: patch compare")

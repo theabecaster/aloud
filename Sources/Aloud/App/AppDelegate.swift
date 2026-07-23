@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Network
 import SwiftUI
 
 // Menu bar app: NSStatusItem + menu, onboarding/settings windows, silent
@@ -39,8 +40,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showOnboarding()
         } else {
             _ = controller.startListening()
-            Task { await controller.prepareModel() }
+            Task {
+                // Relaunched before the model download ever finished: cover
+                // with basic dictation (quiet activation never prompts) while
+                // the download resumes underneath.
+                await controller.activateFallback(interactive: false)
+                await controller.prepareModel()
+            }
         }
+        resumeDownloadWhenOnline()
 
         // Mirror recording state in the menu bar icon.
         phaseObservation = controller.$phase.sink { [weak self] phase in
@@ -48,6 +56,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         silentUpdateCheck()
+    }
+
+    // The one-time model download must survive network loss: whenever
+    // connectivity returns and the model still isn't on disk, kick the
+    // download again (the transcriber serializes concurrent attempts).
+    private var pathMonitor: NWPathMonitor?
+
+    private func resumeDownloadWhenOnline() {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                switch self.controller.upgradeState {
+                case .modelMissing, .failed: await self.controller.prepareModel()
+                default: break
+                }
+            }
+        }
+        monitor.start(queue: .global(qos: .utility))
+        pathMonitor = monitor
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -107,12 +136,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !Permissions.allGranted || !controller.settings.onboardingComplete {
             menu.addItem(withTitle: "Finish Setup…",
                          action: #selector(openOnboarding), keyEquivalent: "").target = self
-        } else if case .modelMissing = controller.transcriberState {
+        } else if case .modelMissing = controller.upgradeState {
             menu.addItem(withTitle: "Download Voice Recognition…",
                          action: #selector(downloadModel), keyEquivalent: "").target = self
-        } else if case .failed = controller.transcriberState {
+        } else if case .failed = controller.upgradeState {
             menu.addItem(withTitle: "Retry Voice Download…",
                          action: #selector(downloadModel), keyEquivalent: "").target = self
+        } else if controller.usingFallback {
+            // Dictation already works (basic); the accuracy upgrade is still
+            // landing in the background. Informational only.
+            let title: String
+            if case .downloading(let p) = controller.upgradeState {
+                title = "Improving accuracy… \(Int(p * 100))%"
+            } else {
+                title = "Improving accuracy…"
+            }
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
         }
 
         menu.addItem(.separator())
