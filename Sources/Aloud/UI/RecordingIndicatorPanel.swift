@@ -29,6 +29,13 @@ final class RecordingIndicatorPanel {
         set { model.onStop = newValue }
     }
 
+    // Basic dictation (fallback engine) in use: the pill carries a small tag
+    // so it's always visible when a session runs at reduced accuracy.
+    var isBasic: Bool {
+        get { model.isBasic }
+        set { model.isBasic = newValue }
+    }
+
     func show(levelProvider: @escaping () -> Float) {
         model.mode = .recording
         model.hint = nil
@@ -121,7 +128,7 @@ final class RecordingIndicatorPanel {
 
     private func ensurePanel() -> NSPanel {
         if let panel { return panel }
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 220, height: 44),
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 44),
                             styleMask: [.borderless, .nonactivatingPanel],
                             backing: .buffered, defer: false)
         panel.level = .statusBar
@@ -139,7 +146,7 @@ final class RecordingIndicatorPanel {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
             ?? NSScreen.main
         guard let screen else { return }
-        panel.setContentSize(NSSize(width: 220, height: 44))
+        panel.setContentSize(NSSize(width: 280, height: 44))
         let f = screen.visibleFrame
         let x = f.midX - panel.frame.width / 2
         let y = f.minY + 96
@@ -155,6 +162,7 @@ final class IndicatorModel: ObservableObject {
     @Published var hint: String?
     @Published var isLocked = false
     @Published var stillListening = false
+    @Published var isBasic = false
     var onStop: (() -> Void)?
 }
 
@@ -170,6 +178,16 @@ struct IndicatorView: View {
                 Image(systemName: "mic.fill")
                     .foregroundStyle(model.isLocked ? Color.orange : Color.red)
                     .symbolEffect(.pulse, isActive: model.stillListening)
+                // Reduced-accuracy session: same tag style as onboarding
+                // badges, present in held and hands-free pills alike.
+                if model.isBasic {
+                    Text("Basic")
+                        .font(.system(size: 9, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .foregroundStyle(.orange)
+                        .overlay(Capsule().strokeBorder(Color.orange.opacity(0.5), lineWidth: 0.5))
+                }
                 if model.stillListening {
                     Text("Still listening…")
                         .foregroundStyle(.orange)
