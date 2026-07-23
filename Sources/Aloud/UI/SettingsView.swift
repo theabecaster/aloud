@@ -33,7 +33,7 @@ struct SettingsView: View {
         } detail: {
             switch section {
             case .general: GeneralSettings(controller: controller)
-            case .dictation: DictationSettings(settings: controller.settings)
+            case .dictation: DictationSettings(controller: controller)
             case .vocabulary: VocabularySettings(settings: controller.settings)
             case .history: HistorySettings(history: controller.history)
             case .about: AboutSettings()
@@ -194,11 +194,42 @@ enum KeyCaptureWindow {
 // MARK: - Dictation
 
 struct DictationSettings: View {
+    @ObservedObject var controller: DictationController
     @ObservedObject var settings: SettingsStore
     @State private var showExperimentalInfo = false
 
+    init(controller: DictationController) {
+        self.controller = controller
+        _settings = ObservedObject(wrappedValue: controller.settings)
+    }
+
     var body: some View {
         Form {
+            // Only present while a session would run at reduced accuracy —
+            // shows how far along the one-time upgrade is.
+            if controller.usingFallback {
+                SwiftUI.Section {
+                    switch controller.upgradeState {
+                    case .downloading(let progress):
+                        ProgressView(value: progress) {
+                            Text("Setting up full accuracy — \(Int(progress * 100))%")
+                        }
+                        Text("Dictation keeps working while this finishes; the switch is automatic.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    case .loading:
+                        ProgressView {
+                            Text("Setting up full accuracy — almost done")
+                        }
+                    default:
+                        Label("Waiting for internet to finish setting up full accuracy", systemImage: "wifi.slash")
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Basic dictation in use")
+                }
+            }
+
             SwiftUI.Section {
                 Picker("Clean-up", selection: $settings.polishLevel) {
                     ForEach(PolishLevel.allCases) { level in

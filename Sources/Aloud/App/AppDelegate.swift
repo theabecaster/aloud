@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var settingsWindow: NSWindow?
     private var pendingUpdate: Updater.LatestRelease?
     private var phaseObservation: AnyCancellable?
+    private var downloadObservation: AnyCancellable?
 
     // File identity of our executable at launch. If the bundle on disk is
     // later replaced (manual update) or trashed, this instance is a zombie:
@@ -53,6 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Mirror recording state in the menu bar icon.
         phaseObservation = controller.$phase.sink { [weak self] phase in
             self?.refreshIcon(for: phase)
+        }
+        // While the one-time model download runs, the icon carries the
+        // percentage so progress is glanceable without opening the menu.
+        downloadObservation = controller.$upgradeState.sink { [weak self] state in
+            self?.refreshDownloadBadge(for: state)
         }
 
         silentUpdateCheck()
@@ -111,6 +117,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         default: name = "waveform"
         }
         button.image = NSImage(systemSymbolName: name, accessibilityDescription: "Aloud")
+    }
+
+    private func refreshDownloadBadge(for state: TranscriberState) {
+        guard let button = statusItem.button else { return }
+        if case .downloading(let progress) = state {
+            statusItem.length = NSStatusItem.variableLength
+            button.imagePosition = .imageLeading
+            button.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+            button.title = " \(Int(progress * 100))%"
+        } else if !button.title.isEmpty {
+            button.title = ""
+            statusItem.length = NSStatusItem.squareLength
+        }
     }
 
     // Rebuild the menu each open so status lines are current.
