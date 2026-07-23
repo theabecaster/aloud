@@ -48,7 +48,7 @@ struct OnboardingView: View {
                 } label: {
                     Label("Back", systemImage: "chevron.left")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(OnboardingButtonStyle(minWidth: 0))
                 .padding(.leading, 20)
                 .padding(.bottom, 20)
             }
@@ -56,7 +56,7 @@ struct OnboardingView: View {
         .overlay(alignment: .bottomTrailing) {
             if step == .liveTyping {
                 Button("Next") { advance() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(OnboardingButtonStyle(prominent: true, minWidth: 60))
                     .keyboardShortcut(.defaultAction)
                     .padding(.trailing, 20)
                     .padding(.bottom, 20)
@@ -242,7 +242,29 @@ struct OnboardingView: View {
         }
     }
 
-    // A radio-style option card: exactly one is selected, shown by the accent
+    // Flat, theme-safe buttons: the system's large bordered styles render a
+// glossy light bezel with dark text no matter the appearance, which reads
+// broken in dark mode. Accent fill for the one main action per screen,
+// quiet fill for everything else.
+private struct OnboardingButtonStyle: ButtonStyle {
+    var prominent = false
+    var minWidth: CGFloat = 160
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(prominent ? .semibold : .regular))
+            .frame(minWidth: minWidth)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .foregroundStyle(prominent ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .background(prominent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary.opacity(0.7)),
+                        in: RoundedRectangle(cornerRadius: 8))
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// A radio-style option card: exactly one is selected, shown by the accent
     // border, tinted fill, and corner checkmark.
     private func choiceCard(symbol: String, title: String, badge: String? = nil, caption: String,
                             selected: Bool, action: @escaping () -> Void) -> some View {
@@ -343,24 +365,16 @@ struct OnboardingView: View {
     }
 
     private func primaryButton(_ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .frame(minWidth: 160)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .keyboardShortcut(.defaultAction)
+        Button(label, action: action)
+            .buttonStyle(OnboardingButtonStyle(prominent: true))
+            .keyboardShortcut(.defaultAction)
     }
 
     // Same size and shape as the primary button, quieter fill — unmistakably
     // clickable, unmistakably not the main path.
     private func secondaryButton(_ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .frame(minWidth: 160)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
+        Button(label, action: action)
+            .buttonStyle(OnboardingButtonStyle())
     }
 
     private var dots: some View {
