@@ -1,6 +1,6 @@
 # Permissions (TCC)
 
-Aloud needs exactly two permissions. Onboarding requests them one screen at a time with plain-language copy; the app stays alive-but-inert until granted.
+Aloud needs exactly two permissions (plus one conditional third, below). Onboarding requests them one screen at a time with plain-language copy; the app stays alive-but-inert until granted.
 
 ## Microphone
 
@@ -17,6 +17,14 @@ Needed for two things: the global hotkey event tap and the synthetic ⌘V paste.
 - Deep link: `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`.
 - Note: a modifier-key event tap can also trip **Input Monitoring** on some configurations; `--doctor` reports both, and onboarding copy tells the user to look in Accessibility first.
 - Gotcha: TCC grants are per-binary-path + signature. A dev build at `.build/debug/Aloud` and the installed `/Applications/Aloud.app` are separate grants. After an in-app update, the Developer ID signature keeps the grant valid (same team + bundle id).
+
+## Speech Recognition (conditional — macOS 14/15 basic-dictation fallback only)
+
+Only requested when the user taps "Start Now with Basic Dictation" during onboarding **and** the OS is older than macOS 26 (the modern system pipeline needs no TCC grant; the legacy on-device recognizer does). Never requested at launch or from any quiet path — `AppleSpeechTranscriber.wouldPromptForPermission` gates automatic re-activation.
+
+- Info.plist: `NSSpeechRecognitionUsageDescription` — set in `scripts/make-app.sh`.
+- Recognition is forced on-device (`requiresOnDeviceRecognition`); the privacy promise holds.
+- Reset for testing: `tccutil reset SpeechRecognition com.abrahamgonzalez.aloud`.
 
 ## Onboarding flow (Setup Assistant style)
 

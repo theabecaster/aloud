@@ -15,6 +15,11 @@ final class DictationController: ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var transcriberState: TranscriberState = .modelMissing
+    // The primary model's own state while a fallback covers dictation —
+    // drives "finishing setup in the background" UI. Mirrors transcriberState
+    // when there's no fallback in play.
+    @Published private(set) var upgradeState: TranscriberState = .modelMissing
+    @Published private(set) var usingFallback = false
 
     let settings: SettingsStore
     let history: HistoryStore
@@ -39,12 +44,14 @@ final class DictationController: ObservableObject {
 
     init(settings: SettingsStore = .shared,
          history: HistoryStore = .shared,
-         transcriber: Transcriber = ParakeetTranscriber()) {
+         transcriber: Transcriber = SwitchingTranscriber(primary: ParakeetTranscriber(),
+                                                         fallback: AppleSpeechTranscriber.makeIfSupported())) {
         self.settings = settings
         self.history = history
         self.transcriber = transcriber
         self.hotkeyManager = HotkeyManager(hotkey: settings.hotkey, handsFree: settings.handsFree)
         self.transcriberState = transcriber.state
+        self.upgradeState = (transcriber as? SwitchingTranscriber)?.primaryState ?? transcriber.state
         hotkeyManager.onAction = { [weak self] action in
             self?.handle(action)
         }
@@ -96,18 +103,52 @@ final class DictationController: ObservableObject {
         }
     }
 
-    // Download + warm the model, reporting progress into transcriberState.
+    // Download + warm the model, reporting progress into transcriberState
+    // (or, when a fallback is already covering dictation, into upgradeState —
+    // the effective state stays .ready and the finished model takes over
+    // silently on the next dictation).
     func prepareModel() async {
         do {
             try await transcriber.prepare { [weak self] progress in
                 Task { @MainActor in
-                    self?.transcriberState = .downloading(progress: progress)
+                    guard let self else { return }
+                    self.upgradeState = .downloading(progress: progress)
+                    if !self.usingFallback { self.transcriberState = .downloading(progress: progress) }
                 }
             }
         } catch {
             // state already .failed inside the transcriber
         }
+        refreshTranscriberState()
+    }
+
+    // MARK: fallback ("basic dictation")
+
+    private var switcher: SwitchingTranscriber? { transcriber as? SwitchingTranscriber }
+
+    var fallbackAvailable: Bool { switcher?.fallback != nil }
+
+    // Bring up basic dictation so the app is usable before the model download
+    // finishes. `interactive` marks an explicit user action (onboarding skip),
+    // the only context allowed to show a permission prompt; quiet activation
+    // (relaunch mid-download) backs off rather than surprise the user.
+    @discardableResult
+    func activateFallback(interactive: Bool) async -> Bool {
+        // Only worth it while the model isn't even on disk; once downloaded,
+        // loading takes seconds and the fallback would just add a permission
+        // surface for nothing.
+        guard let switcher, !switcher.modelIsDownloaded, switcher.primaryState != .ready
+        else { return false }
+        if !interactive && AppleSpeechTranscriber.wouldPromptForPermission { return false }
+        let ok = await switcher.activateFallback()
+        refreshTranscriberState()
+        return ok
+    }
+
+    private func refreshTranscriberState() {
         transcriberState = transcriber.state
+        upgradeState = switcher?.primaryState ?? transcriber.state
+        usingFallback = switcher?.usingFallback ?? false
     }
 
     // MARK: push-to-talk
@@ -153,32 +194,59 @@ final class DictationController: ObservableObject {
 
     // MARK: live typing
 
+    // After the user types mid-dictation, hold preview updates back until
+    // their keyboard has been quiet this long — interleaving synthetic
+    // keystrokes with real ones would garble both.
+    private static let userEditHoldOff: TimeInterval = 1.0
+    private var lastUserKeystroke: Date?
+
     private func startLiveTyping() {
         guard let session = transcriber.makeStreamingTranscription() else { return }
         liveSession = session
         liveTyper.reset()
+        lastUserKeystroke = nil
         recorder.onChunk = { [weak session] chunk in session?.append(samples: chunk) }
         // If the user clicks somewhere or types themselves mid-dictation, the
         // cursor moved (or text was submitted — e.g. Enter in a chat box) and
-        // our edits would land in the wrong place — freeze and leave the text
-        // be. Aloud's own synthetic keystrokes are stamped and ignored; Esc and
-        // a non-modifier hotkey are session control, not editing.
+        // our edits would land in the wrong place — rebase: leave what's on
+        // screen be, keep dictating at the new cursor position. Aloud's own
+        // synthetic keystrokes are stamped and ignored; Esc and a non-modifier
+        // hotkey are session control, not editing.
         let hotkeyCode = settings.hotkey.keyCode
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
-            if event.type == .keyDown {
+            let isKeystroke = event.type == .keyDown
+            if isKeystroke {
                 if event.cgEvent?.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.marker { return }
                 if event.keyCode == UInt16(kVK_Escape) || event.keyCode == hotkeyCode { return }
             }
-            Task { @MainActor in self?.liveTyper.freeze() }
+            Task { @MainActor in
+                guard let self else { return }
+                if isKeystroke { self.lastUserKeystroke = Date() }
+                self.liveTyper.rebase()
+            }
         }
         liveUpdatesTask = Task { [weak self] in
             for await transcript in session.updates {
                 guard let self, self.liveSession === session else { break }
+                // Skip previews while the user is mid-edit; the transcript is
+                // cumulative, so the next quiet update catches everything up.
+                if let last = self.lastUserKeystroke,
+                   Date().timeIntervalSince(last) < Self.userEditHoldOff { continue }
                 let polisher = TextPolisher(level: self.settings.polishLevel,
                                             replacements: self.settings.replacements)
                 self.liveTyper.apply(polisher.polish(transcript.full))
             }
+        }
+    }
+
+    // Wait out the post-keystroke hold-off so a final apply can't interleave
+    // with the user's own typing.
+    private func waitForUserEditQuiet() async {
+        while let last = lastUserKeystroke {
+            let remaining = Self.userEditHoldOff - Date().timeIntervalSince(last)
+            guard remaining > 0 else { return }
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
         }
     }
 
@@ -221,6 +289,7 @@ final class DictationController: ObservableObject {
                                             replacements: settings.replacements)
                 let text = polisher.polish(raw)
                 if !text.isEmpty {
+                    await waitForUserEditQuiet()
                     liveTyper.apply(text)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration),
                                    limit: settings.historyLimit)

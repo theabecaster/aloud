@@ -34,6 +34,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The system-dictation fallback compiles against macOS 26 APIs
+      # (availability-guarded at runtime), so the build needs an SDK-26 Xcode.
+      - name: Select newest Xcode 26
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          test -n "$XCODE" || { echo "no Xcode 26 on runner"; ls /Applications | grep Xcode; exit 1; }
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
       - name: Build (release, warnings are errors)
         run: |
           swift build -c release -Xswiftc -warnings-as-errors 2>&1 | tee build.log

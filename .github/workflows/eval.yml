@@ -24,6 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same SDK-26 requirement as build.yml (macOS 26 APIs behind
+      # availability guards).
+      - name: Select newest Xcode 26
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          test -n "$XCODE" || { echo "no Xcode 26 on runner"; ls /Applications | grep Xcode; exit 1; }
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
       - name: Cache speech model
         uses: actions/cache@v4
         with:

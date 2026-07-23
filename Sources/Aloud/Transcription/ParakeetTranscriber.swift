@@ -71,7 +71,7 @@ final class ParakeetTranscriber: Transcriber {
     // so no extra model state is needed — just a decode function.
     func makeStreamingTranscription() -> StreamingTranscription? {
         guard manager != nil, state == .ready else { return nil }
-        return ParakeetStreamingTranscription { [weak self] samples in
+        return RedecodeStreamingTranscription { [weak self] samples in
             guard let self else { throw TranscriberError.notReady }
             return try await self.transcribe(samples: samples).text
         }
@@ -83,14 +83,15 @@ final class ParakeetTranscriber: Transcriber {
 // decoder state each pass; >15 s audio auto-chunks internally exactly like a
 // committed dictation would). Each update is therefore a full-context best
 // hypothesis — later speech genuinely revises earlier words, and the preview
-// converges on the batch result by construction.
+// converges on the batch result by construction. Engine-agnostic: any
+// Transcriber can stream this way by handing over its decode function.
 //
 // Chosen over the SDK's SlidingWindowAsrManager, whose small-chunk streaming
 // path proved fragile (cross-window token dedup drops words; the decoder's
 // time index can run past short windows and starve, silently losing the tail).
 // Re-decode costs one inference per tick (~0.1 s on Apple silicon for ≤15 s of
 // audio) which comfortably outruns the update cadence.
-final class ParakeetStreamingTranscription: StreamingTranscription, @unchecked Sendable {
+final class RedecodeStreamingTranscription: StreamingTranscription, @unchecked Sendable {
     // New audio required before another decode is worth it.
     private static let minNewSamples = 4_800          // 0.3 s, also the model's floor
     private static let tickInterval: UInt64 = 250_000_000   // 0.25 s poll

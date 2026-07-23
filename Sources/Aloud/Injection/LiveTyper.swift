@@ -39,13 +39,16 @@ enum SyntheticEvent {
 
 // Not thread-safe by design: the controller drives it from the main actor.
 final class LiveTyper {
-    // What we believe is currently in the target field. Only trustworthy while
-    // the user leaves the cursor alone — see `freeze()`.
+    // What we believe sits between the anchor point and the cursor. Only
+    // trustworthy while the user leaves the cursor alone — see `rebase()`.
     private(set) var typed = ""
 
-    // Once frozen (user clicked somewhere mid-dictation) we stop touching the
-    // target entirely; edits would land at the wrong cursor position.
-    private(set) var isFrozen = false
+    // Leading transcript characters surrendered to the user: once they click
+    // or type mid-dictation, text already on screen is out of reach
+    // (backspacing from the new cursor position would eat the wrong
+    // characters). Applies skip this many characters of the target and only
+    // sync the tail at the current cursor position.
+    private(set) var anchorCount = 0
 
     // Event posting is injectable so tests/selftest can run headless.
     private let postEvents: Bool
@@ -56,25 +59,30 @@ final class LiveTyper {
 
     func reset() {
         typed = ""
-        isFrozen = false
+        anchorCount = 0
     }
 
-    func freeze() {
-        isFrozen = true
+    // The user moved the cursor or edited: give up on everything typed so
+    // far and keep dictation flowing at wherever the cursor is now.
+    func rebase() {
+        anchorCount += typed.count
+        typed = ""
     }
 
-    // Bring the target field from `typed` to `target`.
+    // Sync the target field with `target`, skipping any rebased-away prefix.
     func apply(_ target: String) {
-        guard !isFrozen, target != typed else { return }
-        let diff = TypedTextDiff.from(typed, to: target)
+        let tail = anchorCount > 0 ? String(target.dropFirst(anchorCount)) : target
+        guard tail != typed else { return }
+        let diff = TypedTextDiff.from(typed, to: tail)
         if postEvents {
             Self.postBackspaces(diff.backspaces)
             Self.postText(diff.insertion)
         }
-        typed = target
+        typed = tail
     }
 
-    // Remove everything we typed (dictation cancelled).
+    // Remove everything we typed since the last rebase (dictation cancelled).
+    // Text surrendered by a rebase stays — it's beyond the anchor.
     func eraseAll() {
         apply("")
     }
