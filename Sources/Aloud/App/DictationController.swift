@@ -184,6 +184,8 @@ final class DictationController: ObservableObject {
             try recorder.start(deviceUID: settings.microphoneUID)
             phase = .recording
             playCue("Tink")
+            refreshTranscriberState()   // pick up a background engine switch
+            indicator.isBasic = usingFallback
             indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 })
             if settings.liveTyping { startLiveTyping() }
         } catch {
