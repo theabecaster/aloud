@@ -153,32 +153,59 @@ final class DictationController: ObservableObject {
 
     // MARK: live typing
 
+    // After the user types mid-dictation, hold preview updates back until
+    // their keyboard has been quiet this long — interleaving synthetic
+    // keystrokes with real ones would garble both.
+    private static let userEditHoldOff: TimeInterval = 1.0
+    private var lastUserKeystroke: Date?
+
     private func startLiveTyping() {
         guard let session = transcriber.makeStreamingTranscription() else { return }
         liveSession = session
         liveTyper.reset()
+        lastUserKeystroke = nil
         recorder.onChunk = { [weak session] chunk in session?.append(samples: chunk) }
         // If the user clicks somewhere or types themselves mid-dictation, the
         // cursor moved (or text was submitted — e.g. Enter in a chat box) and
-        // our edits would land in the wrong place — freeze and leave the text
-        // be. Aloud's own synthetic keystrokes are stamped and ignored; Esc and
-        // a non-modifier hotkey are session control, not editing.
+        // our edits would land in the wrong place — rebase: leave what's on
+        // screen be, keep dictating at the new cursor position. Aloud's own
+        // synthetic keystrokes are stamped and ignored; Esc and a non-modifier
+        // hotkey are session control, not editing.
         let hotkeyCode = settings.hotkey.keyCode
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
-            if event.type == .keyDown {
+            let isKeystroke = event.type == .keyDown
+            if isKeystroke {
                 if event.cgEvent?.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.marker { return }
                 if event.keyCode == UInt16(kVK_Escape) || event.keyCode == hotkeyCode { return }
             }
-            Task { @MainActor in self?.liveTyper.freeze() }
+            Task { @MainActor in
+                guard let self else { return }
+                if isKeystroke { self.lastUserKeystroke = Date() }
+                self.liveTyper.rebase()
+            }
         }
         liveUpdatesTask = Task { [weak self] in
             for await transcript in session.updates {
                 guard let self, self.liveSession === session else { break }
+                // Skip previews while the user is mid-edit; the transcript is
+                // cumulative, so the next quiet update catches everything up.
+                if let last = self.lastUserKeystroke,
+                   Date().timeIntervalSince(last) < Self.userEditHoldOff { continue }
                 let polisher = TextPolisher(level: self.settings.polishLevel,
                                             replacements: self.settings.replacements)
                 self.liveTyper.apply(polisher.polish(transcript.full))
             }
+        }
+    }
+
+    // Wait out the post-keystroke hold-off so a final apply can't interleave
+    // with the user's own typing.
+    private func waitForUserEditQuiet() async {
+        while let last = lastUserKeystroke {
+            let remaining = Self.userEditHoldOff - Date().timeIntervalSince(last)
+            guard remaining > 0 else { return }
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
         }
     }
 
@@ -221,6 +248,7 @@ final class DictationController: ObservableObject {
                                             replacements: settings.replacements)
                 let text = polisher.polish(raw)
                 if !text.isEmpty {
+                    await waitForUserEditQuiet()
                     liveTyper.apply(text)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration),
                                    limit: settings.historyLimit)

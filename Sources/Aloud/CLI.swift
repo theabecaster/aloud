@@ -357,9 +357,12 @@ enum CLI {
         typer.apply("hello")
         typer.apply("hello world")
         let tracked = typer.typed == "hello world"
-        typer.freeze()
+        typer.rebase()
+        typer.apply("hello world again")
+        let rebased = typer.typed == " again"
         typer.eraseAll()
-        expect(tracked && typer.typed == "hello world", "livetyper: tracks text, freeze stops edits")
+        expect(tracked && rebased && typer.typed.isEmpty,
+               "livetyper: tracks text, rebase continues with tail only")
 
         // 7. Updater semver.
         expect(Updater.semverLess("1.0.0", "1.0.1"), "updater: patch compare")
