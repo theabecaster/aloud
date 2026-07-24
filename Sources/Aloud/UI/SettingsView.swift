@@ -394,6 +394,12 @@ struct VocabularySettings: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
+                Text("\(settings.replacements.count) \(settings.replacements.count == 1 ? "replacement" : "replacements") — add more from History with “Fix…”.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
             }
             Divider()
             HStack(spacing: 8) {
@@ -535,7 +541,7 @@ struct HistorySettings: View {
                     ContentUnavailableView.search(text: searchText)
                 } else {
                     List(filtered) { entry in
-                        HistoryRow(entry: entry)
+                        HistoryRow(entry: entry, settings: settings)
                     }
                     .scrollContentBackground(.hidden)
                 }
@@ -578,7 +584,9 @@ struct StatBlock: View {
 
 struct HistoryRow: View {
     let entry: HistoryEntry
+    @ObservedObject var settings: SettingsStore
     @State private var showRaw = false
+    @State private var showFix = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -597,6 +605,13 @@ struct HistoryRow: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.accentColor)
                 }
+                Button("Fix…") { showFix = true }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .help("Correct this dictation and teach Aloud the right words")
+                    .popover(isPresented: $showFix, arrowEdge: .bottom) {
+                        FixDictationView(entry: entry, settings: settings)
+                    }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -621,6 +636,120 @@ struct HistoryRow: View {
                     NSPasteboard.general.setString(raw, forType: .string)
                 }
             }
+            Button("Fix…") { showFix = true }
+        }
+    }
+}
+
+// The "Fix…" popover: the user corrects what Aloud typed, the correction is
+// diffed against the original, and each changed word or phrase is offered as
+// a permanent vocabulary replacement. One popover, two quiet stages.
+private struct FixDictationView: View {
+    let entry: HistoryEntry
+    @ObservedObject var settings: SettingsStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var corrected: String
+    @State private var candidates: [CorrectionDiff.Candidate] = []
+    @State private var accepted: Set<Int> = []
+    @State private var reviewing = false
+    @State private var noFixFound = false
+
+    init(entry: HistoryEntry, settings: SettingsStore) {
+        self.entry = entry
+        self.settings = settings
+        _corrected = State(initialValue: entry.text)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if reviewing { review } else { editor }
+        }
+        .padding(14)
+        .frame(width: 360)
+    }
+
+    // Stage one: edit the typed text.
+    @ViewBuilder private var editor: some View {
+        Text("Fix This Dictation")
+            .font(.headline)
+        Text("Correct the text below and Aloud learns the words it got wrong.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        TextField("Corrected text", text: $corrected, axis: .vertical)
+            .textFieldStyle(.roundedBorder)
+            .lineLimit(3...8)
+            .onChange(of: corrected) { _, _ in noFixFound = false }
+        if noFixFound {
+            Label("No repeatable fix found", systemImage: "info.circle")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        HStack {
+            Spacer()
+            Button("Cancel") { dismiss() }
+            Button("Save") { findCandidates() }
+                .keyboardShortcut(.defaultAction)
+                .disabled(corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || corrected == entry.text)
+        }
+    }
+
+    // Stage two: confirm which fixes become standing replacements.
+    @ViewBuilder private var review: some View {
+        Text("Always Fix These?")
+            .font(.headline)
+        Text("Checked fixes are applied to every future dictation. Change them any time in Vocabulary.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        ForEach(candidates.indices, id: \.self) { i in
+            Toggle(isOn: acceptedBinding(i)) {
+                Text("Type “\(candidates[i].to)” instead of “\(candidates[i].from)”")
+            }
+            .toggleStyle(.checkbox)
+        }
+        HStack {
+            Spacer()
+            Button("Cancel") { dismiss() }
+            Button("Add to Vocabulary") {
+                addAccepted()
+                dismiss()
+            }
+            .keyboardShortcut(.defaultAction)
+            .disabled(accepted.isEmpty)
+        }
+    }
+
+    private func acceptedBinding(_ i: Int) -> Binding<Bool> {
+        Binding(get: { accepted.contains(i) },
+                set: { on in if on { accepted.insert(i) } else { accepted.remove(i) } })
+    }
+
+    private func findCandidates() {
+        // Candidates already covered by an existing replacement aren't news.
+        let found = CorrectionDiff.candidates(original: entry.text, corrected: corrected)
+            .filter { candidate in
+                !settings.replacements.contains {
+                    $0.pattern.caseInsensitiveCompare(candidate.from) == .orderedSame
+                }
+            }
+        guard !found.isEmpty else {
+            noFixFound = true
+            return
+        }
+        candidates = found
+        accepted = Set(found.indices)
+        reviewing = true
+    }
+
+    private func addAccepted() {
+        for i in accepted.sorted() {
+            let c = candidates[i]
+            // Skip duplicates in case an identical pattern landed meanwhile.
+            guard !settings.replacements.contains(where: {
+                $0.pattern.caseInsensitiveCompare(c.from) == .orderedSame
+            }) else { continue }
+            settings.replacements.append(Replacement(pattern: c.from, replacement: c.to))
         }
     }
 }
