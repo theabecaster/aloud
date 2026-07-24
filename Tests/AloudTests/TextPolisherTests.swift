@@ -50,6 +50,38 @@ final class TextPolisherTests: XCTestCase {
         XCTAssertEqual(polish("Sequels are fun.", replacements: reps), "Sequels are fun.")
     }
 
+    // MARK: proper nouns
+
+    func testNamesCapitalized() {
+        XCTAssertEqual(polish("tell john the meeting moved to london"),
+                       "Tell John the meeting moved to London")
+        XCTAssertEqual(polish("we visited tokyo and kyoto", level: .light),
+                       "We visited Tokyo and Kyoto")
+        XCTAssertEqual(polish("send the report to maria gonzalez at microsoft"),
+                       "Send the report to Maria Gonzalez at Microsoft")
+    }
+
+    func testCommonWordsNeverCapitalized() {
+        // "invoice"/"acme" read as organization names to the tagger, but both
+        // are lexicon words — the conservative filter must hold them back.
+        XCTAssertEqual(polish("the invoice from acme corporation is overdue"),
+                       "The invoice from acme corporation is overdue")
+        XCTAssertEqual(polish("the quick brown fox jumps over the lazy dog"),
+                       "The quick brown fox jumps over the lazy dog")
+    }
+
+    func testNamePassOnlyWithPolishOn() {
+        XCTAssertEqual(polish("say hi to maria gonzalez", level: .off),
+                       "say hi to maria gonzalez")
+    }
+
+    func testReplacementProductsUntouchedByNamePass() {
+        // The user asked for lowercase "chellie" — exactly what they typed wins.
+        let reps = [Replacement(pattern: "shelly", replacement: "chellie")]
+        XCTAssertEqual(polish("Ask shelly to review it.", replacements: reps),
+                       "Ask chellie to review it.")
+    }
+
     // MARK: tidy
 
     func testTidySpacingAndCapitalization() {
