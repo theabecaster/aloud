@@ -7,13 +7,18 @@ struct HistoryEntry: Codable, Identifiable, Equatable {
     let text: String             // what was typed (after clean-up)
     let rawText: String?         // exact model output, when it differs
     let duration: TimeInterval   // spoken audio seconds
+    let appName: String?         // app the text was typed into, when known
+    let appBundleID: String?
 
-    init(text: String, rawText: String? = nil, duration: TimeInterval, date: Date = Date()) {
+    init(text: String, rawText: String? = nil, duration: TimeInterval, date: Date = Date(),
+         appName: String? = nil, appBundleID: String? = nil) {
         self.id = UUID()
         self.date = date
         self.text = text
         self.rawText = (rawText == text) ? nil : rawText
         self.duration = duration
+        self.appName = appName
+        self.appBundleID = appBundleID
     }
 }
 

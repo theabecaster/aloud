@@ -384,6 +384,10 @@ struct HistoryRow: View {
                 .lineLimit(3)
             HStack(spacing: 8) {
                 Text(entry.date, style: .relative)
+                if let app = entry.appName {
+                    Text("·").foregroundStyle(.tertiary)
+                    Text(app)
+                }
                 if entry.rawText != nil {
                     Button(showRaw ? "Hide original" : "Show original") {
                         withAnimation(.spring(duration: 0.25)) { showRaw.toggle() }

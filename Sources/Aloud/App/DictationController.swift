@@ -38,6 +38,10 @@ final class DictationController: ObservableObject {
     // Test-observable last result (used by the "Try it" onboarding step too).
     @Published private(set) var lastTranscription: String = ""
 
+    // The app focused when the session started — where the text will land.
+    // Captured at begin (not commit): hands-free users wander mid-session.
+    private var sessionApp: (name: String?, bundleID: String?) = (nil, nil)
+
     private var cancellables: Set<AnyCancellable> = []
 
     init(settings: SettingsStore = .shared,
@@ -174,6 +178,8 @@ final class DictationController: ObservableObject {
                                : "Finish setup to start dictating")
             return
         }
+        let front = NSWorkspace.shared.frontmostApplication
+        sessionApp = (front?.localizedName, front?.bundleIdentifier)
         do {
             try recorder.start(deviceUID: settings.microphoneUID)
             phase = .recording
@@ -287,7 +293,8 @@ final class DictationController: ObservableObject {
                 if !text.isEmpty {
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
-                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration),
+                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
+                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
                     lastTranscription = text
                 } else {
@@ -334,7 +341,8 @@ final class DictationController: ObservableObject {
                 let text = polisher.polish(raw)
                 if !text.isEmpty {
                     injector.inject(text)
-                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration),
+                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
+                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
                     lastTranscription = text
                 }
