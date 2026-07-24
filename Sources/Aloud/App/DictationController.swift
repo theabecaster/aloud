@@ -42,6 +42,10 @@ final class DictationController: ObservableObject {
     // Captured at begin (not commit): hands-free users wander mid-session.
     private var sessionApp: (name: String?, bundleID: String?) = (nil, nil)
 
+    // Focused-field snapshot taken alongside sessionApp. Plumbing for a later
+    // phase — nothing reads it yet, and it never leaves memory.
+    private var sessionContext: FocusSnapshot?
+
     // A failed dictation's audio is on disk and can be retried (menu item).
     @Published private(set) var retryAvailable = AudioBackup.exists
 
@@ -256,6 +260,8 @@ final class DictationController: ObservableObject {
         }
         let front = NSWorkspace.shared.frontmostApplication
         sessionApp = (front?.localizedName, front?.bundleIdentifier)
+        sessionContext = FocusSnapshot.capture(appName: front?.localizedName,
+                                               appBundleID: front?.bundleIdentifier)
         do {
             try recorder.start(deviceUID: settings.microphoneUID)
             phase = .recording
@@ -380,6 +386,11 @@ final class DictationController: ObservableObject {
                     text = stripped
                     sendReturn = true
                 }
+                // After "press enter" is peeled off, so "my email press enter"
+                // still expands. History keeps the spoken words as rawText.
+                if let expansion = SnippetMatcher.expansion(for: text, snippets: settings.snippets) {
+                    text = expansion
+                }
                 if !text.isEmpty {
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
@@ -438,6 +449,9 @@ final class DictationController: ObservableObject {
                     text = stripped
                     sendReturn = true
                 }
+                if let expansion = SnippetMatcher.expansion(for: text, snippets: settings.snippets) {
+                    text = expansion
+                }
                 if !text.isEmpty {
                     // Return goes out only after the paste has been serviced.
                     injector.inject(text) {
@@ -493,7 +507,10 @@ final class DictationController: ObservableObject {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                let (text, enhanced) = await finishText(from: raw)
+                var (text, enhanced) = await finishText(from: raw)
+                if let expansion = SnippetMatcher.expansion(for: text, snippets: settings.snippets) {
+                    text = expansion
+                }
                 if !text.isEmpty {
                     injector.inject(text)
                     recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: false)
