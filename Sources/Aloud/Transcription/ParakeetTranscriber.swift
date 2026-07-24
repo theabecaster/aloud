@@ -27,6 +27,16 @@ final class ParakeetTranscriber: Transcriber {
         AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(for: .v3))
     }
 
+    // With exactly one declared language, the decoder can skip candidate
+    // tokens from other scripts (SDK script filtering) — a mild guard against
+    // drifting into the wrong alphabet. Several declared languages (or one
+    // the SDK's filter doesn't know) mean full auto-detection, the default.
+    private var languageHint: Language? {
+        let declared = SettingsStore.shared.declaredLanguages
+        guard declared.count == 1, let code = declared.first else { return nil }
+        return Language(rawValue: code)
+    }
+
     func prepare(onProgress: @escaping @Sendable (Double) -> Void) async throws {
         try await prepareLock.run { [self] in
             if manager != nil { state = .ready; return }
@@ -57,7 +67,8 @@ final class ParakeetTranscriber: Transcriber {
     func transcribe(samples: [Float]) async throws -> Transcription {
         guard let manager else { throw TranscriberError.notReady }
         var decoderState = TdtDecoderState.make(decoderLayers: decoderLayers)
-        let result = try await manager.transcribe(samples, decoderState: &decoderState)
+        let result = try await manager.transcribe(samples, decoderState: &decoderState,
+                                                  language: languageHint)
         // Vocabulary biasing runs on the dictation (samples) path only: once
         // per committed dictation, and never on transcribe(file:) — that's the
         // CLI/eval surface, which must stay pure engine output the same way
@@ -78,7 +89,8 @@ final class ParakeetTranscriber: Transcriber {
     func transcribe(file: URL) async throws -> Transcription {
         guard let manager else { throw TranscriberError.notReady }
         var decoderState = TdtDecoderState.make(decoderLayers: decoderLayers)
-        let result = try await manager.transcribe(file, decoderState: &decoderState)
+        let result = try await manager.transcribe(file, decoderState: &decoderState,
+                                                  language: languageHint)
         return Transcription(text: result.text,
                              confidence: result.confidence,
                              audioDuration: result.duration,
@@ -95,7 +107,8 @@ final class ParakeetTranscriber: Transcriber {
         return RedecodeStreamingTranscription { [weak self] samples in
             guard let self, let manager = self.manager else { throw TranscriberError.notReady }
             var decoderState = TdtDecoderState.make(decoderLayers: self.decoderLayers)
-            return try await manager.transcribe(samples, decoderState: &decoderState).text
+            return try await manager.transcribe(samples, decoderState: &decoderState,
+                                                language: self.languageHint).text
         }
     }
 }

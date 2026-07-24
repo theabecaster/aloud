@@ -28,6 +28,10 @@ final class SettingsStore: ObservableObject {
         statsSeconds = defaults.object(forKey: Keys.statsSeconds) as? Double ?? 0
         statsDictations = defaults.object(forKey: Keys.statsDictations) as? Int ?? 0
         liveTyping = defaults.object(forKey: Keys.liveTyping) as? Bool ?? true
+        let storedLanguages = defaults.object(forKey: Keys.declaredLanguages) as? [String] ?? []
+        declaredLanguages = storedLanguages.isEmpty
+            ? [Locale.current.language.languageCode?.identifier ?? "en"]
+            : storedLanguages
         handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
         pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
     }
@@ -53,6 +57,7 @@ final class SettingsStore: ObservableObject {
         static let statsSeconds = "statsSeconds"
         static let statsDictations = "statsDictations"
         static let liveTyping = "liveTyping"
+        static let declaredLanguages = "declaredLanguages"
         static let handsFree = "handsFree"
         static let pressEnterCommand = "pressEnterCommand"
     }
@@ -107,6 +112,13 @@ final class SettingsStore: ObservableObject {
     // Type words as they're spoken instead of all at once on release.
     @Published var liveTyping: Bool {
         didSet { defaults.set(liveTyping, forKey: Keys.liveTyping) }
+    }
+    // Languages the user dictates in (ISO codes, primary first). The primary
+    // engine detects its languages automatically; the declared list steers
+    // the basic-dictation engine's locale and, when a single language is
+    // declared, hints the primary. Default: the system language. Never empty.
+    @Published var declaredLanguages: [String] {
+        didSet { defaults.set(declaredLanguages, forKey: Keys.declaredLanguages) }
     }
     // Double-press the dictation key → keep listening until Esc. On by default.
     @Published var handsFree: Bool {
