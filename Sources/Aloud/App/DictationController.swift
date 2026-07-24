@@ -42,6 +42,10 @@ final class DictationController: ObservableObject {
     // Captured at begin (not commit): hands-free users wander mid-session.
     private var sessionApp: (name: String?, bundleID: String?) = (nil, nil)
 
+    // Focused-field snapshot taken alongside sessionApp. Plumbing for a later
+    // phase — nothing reads it yet, and it never leaves memory.
+    private var sessionContext: FocusSnapshot?
+
     // A failed dictation's audio is on disk and can be retried (menu item).
     @Published private(set) var retryAvailable = AudioBackup.exists
 
@@ -191,6 +195,8 @@ final class DictationController: ObservableObject {
         }
         let front = NSWorkspace.shared.frontmostApplication
         sessionApp = (front?.localizedName, front?.bundleIdentifier)
+        sessionContext = FocusSnapshot.capture(appName: front?.localizedName,
+                                               appBundleID: front?.bundleIdentifier)
         do {
             try recorder.start(deviceUID: settings.microphoneUID)
             phase = .recording
