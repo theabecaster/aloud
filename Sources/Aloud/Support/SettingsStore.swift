@@ -14,6 +14,8 @@ final class SettingsStore: ObservableObject {
         hotkey = Self.loadHotkey(from: defaults) ?? .default
         handsFreeHotkey = (defaults.data(forKey: Keys.handsFreeHotkey))
             .flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) }
+        commandHotkey = (defaults.data(forKey: Keys.commandHotkey))
+            .flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) }
         launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
         microphoneUID = defaults.string(forKey: Keys.microphoneUID)
         onboardingComplete = defaults.bool(forKey: Keys.onboardingComplete)
@@ -49,6 +51,7 @@ final class SettingsStore: ObservableObject {
     private enum Keys {
         static let hotkey = "hotkey"
         static let handsFreeHotkey = "handsFreeHotkey"
+        static let commandHotkey = "commandHotkey"
         static let launchAtLogin = "launchAtLogin"
         static let microphoneUID = "microphoneUID"
         static let onboardingComplete = "onboardingComplete"
@@ -79,6 +82,17 @@ final class SettingsStore: ObservableObject {
                 defaults.set(data, forKey: Keys.handsFreeHotkey)
             } else {
                 defaults.removeObject(forKey: Keys.handsFreeHotkey)
+            }
+        }
+    }
+    // Optional command key: hold it, say what you want done — the transcript
+    // drives an edit or a short generation instead of being typed. nil = off.
+    @Published var commandHotkey: Hotkey? {
+        didSet {
+            if let hk = commandHotkey, let data = try? JSONEncoder().encode(hk) {
+                defaults.set(data, forKey: Keys.commandHotkey)
+            } else {
+                defaults.removeObject(forKey: Keys.commandHotkey)
             }
         }
     }

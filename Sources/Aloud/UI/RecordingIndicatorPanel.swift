@@ -53,10 +53,13 @@ final class RecordingIndicatorPanel {
         set { model.isBasic = newValue }
     }
 
-    func show(levelProvider: @escaping () -> Float) {
+    // `command: true` marks a command hold — same live meter, purple styling,
+    // so "talking to the app" never looks like "typing into the document".
+    func show(levelProvider: @escaping () -> Float, command: Bool = false) {
         model.mode = .recording
         model.hint = nil
         model.isLocked = false
+        model.isCommand = command
         model.stillListening = false
         present()
         // While recording the pill takes mouse input so it can be dragged to
@@ -112,6 +115,16 @@ final class RecordingIndicatorPanel {
     func showTranscribing() {
         levelTimer?.invalidate()
         model.mode = .transcribing
+        model.isCommand = false
+        present()
+        panel?.ignoresMouseEvents = true
+    }
+
+    // Command twin of showTranscribing: the model is thinking, not typing yet.
+    func showWorking() {
+        levelTimer?.invalidate()
+        model.mode = .transcribing
+        model.isCommand = true
         present()
         panel?.ignoresMouseEvents = true
     }
@@ -224,6 +237,7 @@ final class IndicatorModel: ObservableObject {
     @Published var isLocked = false
     @Published var stillListening = false
     @Published var isBasic = false
+    @Published var isCommand = false
     @Published var notice: String?
     var onStop: (() -> Void)?
     var onResetPosition: (() -> Void)?
@@ -242,8 +256,11 @@ struct IndicatorView: View {
             case .recording:
                 // Hands-free trades the red mic for an orange one plus a lock —
                 // a quiet "still listening" that users can discover on their own.
+                // A command hold gets a purple mic: Aloud is listening for an
+                // instruction, not taking dictation.
                 Image(systemName: "mic.fill")
-                    .foregroundStyle(model.isLocked ? Color.orange : Color.red)
+                    .foregroundStyle(model.isCommand ? Color.purple
+                                     : model.isLocked ? Color.orange : Color.red)
                     .symbolEffect(.pulse, isActive: model.stillListening)
                 // Reduced-accuracy session: same tag style as onboarding
                 // badges, present in held and hands-free pills alike.
@@ -284,7 +301,7 @@ struct IndicatorView: View {
             case .transcribing:
                 ProgressView()
                     .controlSize(.small)
-                Text("Typing…")
+                Text(model.isCommand ? "Working…" : "Typing…")
                     .foregroundStyle(.secondary)
             case .hint:
                 Image(systemName: "info.circle")

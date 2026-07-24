@@ -110,6 +110,30 @@ struct GeneralSettings: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
+                // Only on Macs with the on-device engine — elsewhere the row
+                // would record a key that can never do anything.
+                if controller.commandsAvailable {
+                    LabeledContent("Command key") {
+                        HStack(spacing: 6) {
+                            OptionalHotkeyRecorderView(hotkey: settings.commandHotkey) { new in
+                                settings.commandHotkey = new
+                            }
+                            if settings.commandHotkey != nil {
+                                Button {
+                                    settings.commandHotkey = nil
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Remove the command key")
+                            }
+                        }
+                    }
+                    Text("Optional. Hold it and say what you want done — rewrite or translate selected text, or write something new at the cursor.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             } footer: {
                 if settings.handsFree {
                     Text("Double-press the dictation key also works for hands-free; press Esc to finish.")

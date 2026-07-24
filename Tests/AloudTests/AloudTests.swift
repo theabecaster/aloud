@@ -242,6 +242,111 @@ final class HotkeyEngineTests: XCTestCase {
     }
 }
 
+final class CommandKeyEngineTests: XCTestCase {
+    private let key = Hotkey.default.keyCode
+    private let flag = Hotkey.default.modifierFlag!
+
+    func testHoldCommitsCommand() {
+        var engine = CommandKeyEngine(hotkey: .default)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .beginCommand)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.0), .commitCommand)
+    }
+
+    func testShortTapCancelsCommand() {
+        var engine = CommandKeyEngine(hotkey: .default)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .beginCommand)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05), .cancelCommand)
+    }
+
+    func testEscCancelsCommandHold() {
+        var engine = CommandKeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: flag, time: 0.3), .cancelCommand)
+        // The eventual release must not double-fire.
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.5), .none)
+    }
+
+    func testDoubleTapNeverLocks() {
+        // A command is one held utterance — no hands-free variant, ever.
+        var engine = CommandKeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .cancelCommand)
+    }
+
+    func testOtherKeysFallThrough() {
+        // .none = not consumed: the manager falls through to the main engine.
+        var engine = CommandKeyEngine(hotkey: Hotkey(keyCode: 96, modifiers: 0, isModifierKey: false))
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 97, flags: [], time: 0), .none)
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: [], time: 0.1), .none)
+    }
+
+    func testRegularKeyCommandHotkey() {
+        var engine = CommandKeyEngine(hotkey: Hotkey(keyCode: 96, modifiers: 0, isModifierKey: false))
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 96, flags: [], time: 0), .beginCommand)
+        XCTAssertEqual(engine.handle(type: .keyUp, keyCode: 96, flags: [], time: 0.5), .commitCommand)
+    }
+}
+
+final class CommandIntentTests: XCTestCase {
+    func testRoutingFollowsSelection() {
+        // A selection means edit-in-place, whatever the parsed action said;
+        // no selection means write at the cursor.
+        let rewrite = CommandIntent(action: .rewrite, instruction: "make it shorter")
+        XCTAssertEqual(rewrite.route(hasSelection: true), .rewrite)
+        XCTAssertEqual(rewrite.route(hasSelection: false), .generate)
+        let generate = CommandIntent(action: .generate, instruction: "write a thank-you note")
+        XCTAssertEqual(generate.route(hasSelection: true), .rewrite)
+        XCTAssertEqual(generate.route(hasSelection: false), .generate)
+    }
+
+    func testTranslateRouting() {
+        let translate = CommandIntent(action: .translate, instruction: "translate this to Spanish",
+                                      language: "Spanish")
+        XCTAssertEqual(translate.route(hasSelection: true), .translate("Spanish"))
+        XCTAssertEqual(translate.route(hasSelection: false), .generate)
+        // No parsed target language → an ordinary rewrite; the instruction
+        // still carries the intent.
+        let vague = CommandIntent(action: .translate, instruction: "put this in French")
+        XCTAssertEqual(vague.route(hasSelection: true), .rewrite)
+    }
+
+    func testConversationalRestatementFallsBackToSpokenWords() {
+        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "Make it shorter",
+                                                          spoken: "uh make it shorter"),
+                       "Make it shorter")
+        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "I'd be happy to help you rewrite the text.",
+                                                          spoken: "rewrite this as a polite decline"),
+                       "rewrite this as a polite decline")
+        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "  ", spoken: "fix the grammar"),
+                       "fix the grammar")
+    }
+
+    func testLanguageResolver() {
+        XCTAssertEqual(LanguageResolver.language(named: "Spanish")?.languageCode?.identifier, "es")
+        XCTAssertEqual(LanguageResolver.language(named: " german ")?.languageCode?.identifier, "de")
+        XCTAssertEqual(LanguageResolver.language(named: "JAPANESE")?.languageCode?.identifier, "ja")
+        // (Not "Klingon" — ICU genuinely knows it as tlh.)
+        XCTAssertNil(LanguageResolver.language(named: "Wingdings"))
+        XCTAssertNil(LanguageResolver.language(named: ""))
+    }
+
+    func testGeneratedOutputValidation() {
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("  Thanks for the update!  "),
+                       "Thanks for the update!")
+        // Whole-output quoting is unwrapped; interior quotes are left alone.
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("\"I'm back Monday.\""),
+                       "I'm back Monday.")
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("“Back Monday.”"), "Back Monday.")
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("She said \"hi\" and \"bye\""),
+                       "She said \"hi\" and \"bye\"")
+        XCTAssertNil(CommandOutputCheck.validateGenerated(""))
+        XCTAssertNil(CommandOutputCheck.validateGenerated("```swift\nfunc x() {}\n```"))
+        XCTAssertNil(CommandOutputCheck.validateGenerated(String(repeating: "padding ", count: 200)))
+    }
+}
+
 final class UpdaterTests: XCTestCase {
     func testSemver() {
         XCTAssertTrue(Updater.semverLess("1.0.0", "1.0.1"))

@@ -54,6 +54,13 @@ final class DictationController: ObservableObject {
     private let enhancer = EnhancerFactory.make()
     var enhancerAvailable: Bool { enhancer?.isAvailable ?? false }
 
+    // Voice commands ride the same on-device model — same gate: where it
+    // doesn't exist the command key setting is hidden, not broken.
+    private let commandInterpreter = CommandInterpreterFactory.make()
+    var commandsAvailable: Bool { commandInterpreter?.isAvailable ?? false }
+    // True while the current recording is a command hold, not a dictation.
+    private var isCommandSession = false
+
     // Clean-up levels the pickers should offer. Concise appears only where
     // the rewrite engine exists (or is already the saved choice, so the
     // picker never shows a selection it doesn't contain).
@@ -98,6 +105,13 @@ final class DictationController: ObservableObject {
         settings.$handsFreeHotkey
             .sink { [weak self] hk in self?.hotkeyManager.handsFreeHotkey = hk }
             .store(in: &cancellables)
+        // No command engine on this OS → no command key, whatever is saved.
+        if commandsAvailable {
+            hotkeyManager.commandHotkey = settings.commandHotkey
+            settings.$commandHotkey
+                .sink { [weak self] hk in self?.hotkeyManager.commandHotkey = hk }
+                .store(in: &cancellables)
+        }
     }
 
     // MARK: lifecycle
@@ -192,6 +206,9 @@ final class DictationController: ObservableObject {
         case .commit: commitRecording()
         case .cancel: cancelRecording()
         case .lock: indicator.showLocked()   // recording continues hands-free
+        case .beginCommand: beginCommandRecording()
+        case .commitCommand: commitCommandRecording()
+        case .cancelCommand: cancelCommandRecording()
         case .none: break
         }
     }
@@ -452,7 +469,7 @@ final class DictationController: ObservableObject {
     }
 
     private func commitRecording() {
-        guard phase == .recording else { return }
+        guard phase == .recording, !isCommandSession else { return }
         let samples = recorder.stop()
         if let session = liveSession {
             commitLive(session: session, samples: samples)
@@ -510,6 +527,117 @@ final class DictationController: ObservableObject {
         }
     }
 
+    // MARK: voice commands
+
+    // Hold the command key, say what you want done, release. Records exactly
+    // like a dictation (same recorder, same pill spot) but never live-types —
+    // the transcript is an instruction, not content.
+    private func beginCommandRecording() {
+        guard phase == .idle || phase.isError else { return }
+        guard commandsAvailable else {
+            indicator.showHint("Commands aren’t available on this Mac")
+            return
+        }
+        guard transcriber.state == .ready else {
+            indicator.showHint(transcriber.modelIsDownloaded
+                               ? "Voice model is still warming up…"
+                               : "Finish setup to start dictating")
+            return
+        }
+        let front = NSWorkspace.shared.frontmostApplication
+        sessionApp = (front?.localizedName, front?.bundleIdentifier)
+        do {
+            try recorder.start(deviceUID: settings.microphoneUID)
+            phase = .recording
+            isCommandSession = true
+            playCue("Tink")
+            prewarmCommandEngine()
+            indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
+                           command: true)
+        } catch {
+            phase = .error(error.localizedDescription)
+            indicator.showHint("Couldn’t access the microphone")
+        }
+    }
+
+    private func commitCommandRecording() {
+        guard phase == .recording, isCommandSession else { return }
+        isCommandSession = false
+        let samples = recorder.stop()
+        guard Double(samples.count) / AudioRecorder.targetSampleRate >= 0.35 else {
+            indicator.hide()
+            phase = .idle
+            return
+        }
+        indicator.showWorking()
+        phase = .transcribing
+        Task {
+            do {
+                let result = try await transcriber.transcribe(samples: samples)
+                let spoken = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !spoken.isEmpty else {
+                    indicator.hide()
+                    phase = .idle
+                    return
+                }
+                await performCommand(spoken)
+                phase = .idle
+            } catch {
+                playCue("Basso")
+                indicator.showHint("Couldn’t hear that — try again")
+                phase = .error(error.localizedDescription)
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if case .error = phase { phase = .idle }
+            }
+        }
+    }
+
+    private func cancelCommandRecording() {
+        guard phase == .recording, isCommandSession else { return }
+        isCommandSession = false
+        recorder.cancel()
+        indicator.hide()
+        phase = .idle
+    }
+
+    private func prewarmCommandEngine() {
+        commandInterpreter?.prewarm()
+    }
+
+    // Run the spoken instruction. Nothing is ever typed on failure — a wrong
+    // guess pasted over a selection would be worse than doing nothing.
+    private func performCommand(_ spoken: String) async {
+        guard let interpreter = commandInterpreter, interpreter.isAvailable else {
+            playCue("Basso")
+            indicator.showHint("Couldn’t do that — try again")
+            return
+        }
+        // Selection read at commit: the pill never takes focus, so the focused
+        // element is unchanged since the hold began. A rewrite lands by paste,
+        // which replaces the selection in place.
+        let selection = SelectionReader.currentSelection()
+        let result: String? = await withTaskGroup(of: String?.self) { group in
+            group.addTask { try? await interpreter.perform(spoken, selection: selection) }
+            group.addTask {
+                // Two model turns (parse + execute) — a generous budget, then
+                // give up rather than paste something out of nowhere later.
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        guard let result, !result.isEmpty else {
+            playCue("Basso")
+            indicator.showHint("Couldn’t do that — try again")
+            return
+        }
+        injector.inject(result)
+        lastTranscription = result
+        indicator.hide()
+    }
+
     // MARK: failed-dictation retry
 
     private func keepAudioBackup(_ samples: [Float]) {
@@ -565,7 +693,7 @@ final class DictationController: ObservableObject {
     }
 
     private func cancelRecording() {
-        guard phase == .recording else { return }
+        guard phase == .recording, !isCommandSession else { return }
         recorder.cancel()
         if let session = liveSession {
             liveTyper.eraseAll()
