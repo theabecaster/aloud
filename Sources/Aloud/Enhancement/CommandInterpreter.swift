@@ -42,6 +42,19 @@ extension CommandIntent {
         if action == .translate, let language { return .translate(language) }
         return .rewrite
     }
+
+    // The parse step sometimes "restates" the instruction as a chat reply
+    // ("I'd be happy to help you rewrite the text.") instead of an imperative.
+    // The user's own words are always a safe instruction — fall back to them
+    // whenever the restatement smells conversational.
+    static func sanitizedInstruction(parsed: String, spoken: String) -> String {
+        let trimmed = parsed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return spoken }
+        let lowered = trimmed.lowercased()
+        let conversational = ["i'd ", "i'll ", "i will ", "i can ", "sure", "okay", "happy to", "of course"]
+        guard !conversational.contains(where: { lowered.hasPrefix($0) }) else { return spoken }
+        return trimmed
+    }
 }
 
 protocol CommandInterpreter: AnyObject, Sendable {
@@ -134,7 +147,7 @@ private enum SpokenAction: String {
 private struct ParsedCommand {
     @Guide(description: "rewrite when the user wants existing text changed, fixed, rephrased, shortened, or reformatted; translate when they want it in another language; generate when they want new text written")
     var action: SpokenAction
-    @Guide(description: "The user's instruction, restated cleanly without filler words")
+    @Guide(description: "The user's instruction as a short imperative like 'make it shorter' — never a conversational reply")
     var instruction: String
     @Guide(description: "For translate only: the target language name in English, like Spanish. Empty for everything else.")
     var targetLanguage: String
@@ -170,10 +183,10 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
         }
         let response = try await session.respond(to: spoken, generating: ParsedCommand.self,
                                                  options: GenerationOptions(temperature: 0.1))
-        let instruction = response.content.instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         let language = response.content.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
         return CommandIntent(action: CommandIntent.Action(rawValue: response.content.action.rawValue) ?? .rewrite,
-                             instruction: instruction.isEmpty ? spoken : instruction,
+                             instruction: CommandIntent.sanitizedInstruction(
+                                parsed: response.content.instruction, spoken: spoken),
                              language: language.isEmpty ? nil : language)
     }
 

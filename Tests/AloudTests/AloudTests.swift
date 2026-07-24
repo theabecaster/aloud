@@ -292,6 +292,17 @@ final class CommandIntentTests: XCTestCase {
         XCTAssertEqual(vague.route(hasSelection: true), .rewrite)
     }
 
+    func testConversationalRestatementFallsBackToSpokenWords() {
+        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "Make it shorter",
+                                                          spoken: "uh make it shorter"),
+                       "Make it shorter")
+        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "I'd be happy to help you rewrite the text.",
+                                                          spoken: "rewrite this as a polite decline"),
+                       "rewrite this as a polite decline")
+        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "  ", spoken: "fix the grammar"),
+                       "fix the grammar")
+    }
+
     func testLanguageResolver() {
         XCTAssertEqual(LanguageResolver.language(named: "Spanish")?.languageCode?.identifier, "es")
         XCTAssertEqual(LanguageResolver.language(named: " german ")?.languageCode?.identifier, "de")
