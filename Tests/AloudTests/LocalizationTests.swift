@@ -6,7 +6,7 @@ import XCTest
 // the process locale, which the test host controls) so every language is
 // verifiable in a single run.
 final class LocalizationTests: XCTestCase {
-    private static let languages = ["en"]
+    private static let languages = ["en", "es", "de", "fr", "pt-BR"]
 
     // A spread of keys across surfaces: menu bar, status line, settings,
     // onboarding, indicator, uninstall.
@@ -24,7 +24,11 @@ final class LocalizationTests: XCTestCase {
     private let missingMarker = "\u{7F}missing\u{7F}"
 
     private func table(for language: String) throws -> Bundle {
-        let path = try XCTUnwrap(L10n.bundle.path(forResource: language, ofType: "lproj"),
+        // SPM normalizes .lproj directory names to lowercase when copying
+        // resources (pt-BR.lproj → pt-br.lproj), and Bundle's lookup is
+        // case-sensitive — try the declared casing first, then lowercase.
+        let path = try XCTUnwrap(L10n.bundle.path(forResource: language, ofType: "lproj")
+                                 ?? L10n.bundle.path(forResource: language.lowercased(), ofType: "lproj"),
                                  "\(language).lproj missing from module bundle")
         return try XCTUnwrap(Bundle(path: path), "couldn't open \(language).lproj")
     }
@@ -50,6 +54,15 @@ final class LocalizationTests: XCTestCase {
             let formatted = String(format: percent, 42)
             XCTAssertTrue(formatted.contains("42"), language)
             XCTAssertTrue(formatted.contains("%"), language)
+        }
+    }
+
+    func testTranslationsAreNotEnglishCopies() throws {
+        for language in ["es", "de", "fr", "pt-BR"] {
+            let bundle = try table(for: language)
+            let value = bundle.localizedString(forKey: "Quit Aloud", value: missingMarker, table: nil)
+            XCTAssertNotEqual(value, "Quit Aloud", "\(language): translation missing, English leaked through")
+            XCTAssertNotEqual(value, missingMarker, language)
         }
     }
 
