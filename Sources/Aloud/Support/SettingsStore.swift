@@ -1,5 +1,6 @@
-import Foundation
 import Combine
+import CoreGraphics
+import Foundation
 
 // All user settings, UserDefaults-backed (redirectable suite for tests).
 // ObservableObject so SwiftUI settings/onboarding bind directly.
@@ -19,6 +20,8 @@ final class SettingsStore: ObservableObject {
         replacements = (defaults.data(forKey: Keys.replacements))
             .flatMap { try? JSONDecoder().decode([Replacement].self, from: $0) } ?? []
         soundCues = defaults.object(forKey: Keys.soundCues) as? Bool ?? true
+        indicatorPosition = (defaults.data(forKey: Keys.indicatorPosition))
+            .flatMap { try? JSONDecoder().decode(CGPoint.self, from: $0) }
         liveTyping = defaults.object(forKey: Keys.liveTyping) as? Bool ?? true
         handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
     }
@@ -38,6 +41,7 @@ final class SettingsStore: ObservableObject {
         static let polishLevel = "polishLevel"
         static let replacements = "replacements"
         static let soundCues = "soundCues"
+        static let indicatorPosition = "indicatorPosition"
         static let liveTyping = "liveTyping"
         static let handsFree = "handsFree"
     }
@@ -65,6 +69,18 @@ final class SettingsStore: ObservableObject {
     }
     @Published var soundCues: Bool {
         didSet { defaults.set(soundCues, forKey: Keys.soundCues) }
+    }
+    // Where the user parked the recording pill, as fractions (0…1) of the
+    // screen's visible frame — survives display size changes. nil = default
+    // bottom-center.
+    @Published var indicatorPosition: CGPoint? {
+        didSet {
+            if let p = indicatorPosition, let data = try? JSONEncoder().encode(p) {
+                defaults.set(data, forKey: Keys.indicatorPosition)
+            } else {
+                defaults.removeObject(forKey: Keys.indicatorPosition)
+            }
+        }
     }
     // Type words as they're spoken instead of all at once on release.
     @Published var liveTyping: Bool {

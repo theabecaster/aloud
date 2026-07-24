@@ -60,6 +60,7 @@ final class DictationController: ObservableObject {
         indicator.onStopHandsFree = { [weak self] in
             self?.hotkeyManager.endHandsFree()
         }
+        indicator.settings = settings
         settings.$handsFree
             .sink { [weak self] enabled in self?.hotkeyManager.handsFree = enabled }
             .store(in: &cancellables)
