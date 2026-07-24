@@ -368,6 +368,24 @@ enum CLI {
         _ = noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
         expect(noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25) == .cancel,
                "hotkey: hands-free off means double-press never locks")
+        // Command key engine: same hold semantics, relabeled actions, no lock.
+        var commandEngine = CommandKeyEngine(hotkey: .default)
+        expect(commandEngine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0) == .beginCommand,
+               "command key: press begins")
+        expect(commandEngine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.5) == .commitCommand,
+               "command key: release after hold commits")
+        _ = commandEngine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 1.0)
+        expect(commandEngine.handle(type: .keyDown, keyCode: 53, flags: flag, time: 1.2) == .cancelCommand,
+               "command key: esc while held cancels")
+        _ = commandEngine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.3)
+        _ = commandEngine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 2.0)
+        _ = commandEngine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 2.05)
+        _ = commandEngine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 2.2)
+        expect(commandEngine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 2.25) == .cancelCommand,
+               "command key: double-tap never locks")
+        expect(commandEngine.handle(type: .keyDown, keyCode: 97, flags: [], time: 3.0) == HotkeyAction.none,
+               "command key: other keys fall through")
+
         var keyEngine = HotkeyEngine(hotkey: Hotkey(keyCode: 96, modifiers: 0, isModifierKey: false))
         expect(keyEngine.handle(type: .keyDown, keyCode: 96, flags: [], time: 0) == .begin,
                "hotkey: regular key begins")

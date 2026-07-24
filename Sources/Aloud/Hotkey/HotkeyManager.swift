@@ -13,10 +13,13 @@ import Carbon.HIToolbox
 // installing one requires Accessibility, which CI doesn't have.
 
 enum HotkeyAction: Equatable {
-    case begin      // key went down → start recording
-    case commit     // key released → stop + transcribe
-    case cancel     // Esc while held, or accidental tap → discard
-    case lock       // double-press → keep recording hands-free until Esc
+    case begin          // key went down → start recording
+    case commit         // key released → stop + transcribe
+    case cancel         // Esc while held, or accidental tap → discard
+    case lock           // double-press → keep recording hands-free until Esc
+    case beginCommand   // command key went down → start a command recording
+    case commitCommand  // command key released → transcribe + run the command
+    case cancelCommand  // Esc or accidental tap during a command hold → discard
     case none
 }
 
@@ -150,6 +153,35 @@ struct HotkeyEngine {
     }
 }
 
+// Pure wrapper for the optional command key: identical hold semantics to a
+// dictation hold (press begins, release ≥ minimumHold commits, Esc or a short
+// tap cancels) but never hands-free — a command is one held utterance. Reuses
+// HotkeyEngine and only relabels its actions so the selftest and unit tests
+// can drive it with synthetic events like the main engine.
+struct CommandKeyEngine {
+    private var engine: HotkeyEngine
+
+    init(hotkey: Hotkey) {
+        engine = HotkeyEngine(hotkey: hotkey, handsFreeEnabled: false)
+    }
+
+    var hotkey: Hotkey { engine.hotkey }
+    var isHeld: Bool { engine.isHeld }
+
+    mutating func reset() { engine.reset() }
+
+    // .none means "not consumed" — the caller falls through to the main engine.
+    mutating func handle(type: CGEventType, keyCode: UInt16, flags: CGEventFlags,
+                         time: TimeInterval) -> HotkeyAction {
+        switch engine.handle(type: type, keyCode: keyCode, flags: flags, time: time) {
+        case .begin: return .beginCommand
+        case .commit: return .commitCommand
+        case .cancel: return .cancelCommand
+        default: return .none
+        }
+    }
+}
+
 final class HotkeyManager {
     var onAction: ((HotkeyAction) -> Void)?
 
@@ -182,6 +214,18 @@ final class HotkeyManager {
     // duplicates the main key.
     var handsFreeHotkey: Hotkey?
     private var handsFreeModifierWasDown = false
+
+    // Optional dedicated command key: hold to speak an instruction, release to
+    // run it. A parallel engine (also handled ahead of the main one) so a
+    // command hold can never tangle with dictation state; ignored when it
+    // duplicates the main key.
+    var commandHotkey: Hotkey? {
+        didSet {
+            guard commandHotkey != oldValue else { return }
+            commandEngine = commandHotkey.map(CommandKeyEngine.init)
+        }
+    }
+    private var commandEngine: CommandKeyEngine?
 
     // Whether the event tap is installed and listening.
     var isActive: Bool { tap != nil }
@@ -256,6 +300,18 @@ final class HotkeyManager {
                 DispatchQueue.main.async { [weak self] in self?.onAction?(action) }
             }
             return
+        }
+
+        // Command key next: its engine only ever consumes its own key (and Esc
+        // during a command hold); anything else returns .none and falls through.
+        if commandEngine != nil, commandHotkey != engine.hotkey {
+            let commandAction = commandEngine?.handle(
+                type: type, keyCode: keyCode, flags: event.flags,
+                time: ProcessInfo.processInfo.systemUptime) ?? .none
+            if commandAction != .none {
+                DispatchQueue.main.async { [weak self] in self?.onAction?(commandAction) }
+                return
+            }
         }
 
         let action = engine.handle(type: type, keyCode: keyCode, flags: event.flags,

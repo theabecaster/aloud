@@ -222,6 +222,53 @@ final class HotkeyEngineTests: XCTestCase {
     }
 }
 
+final class CommandKeyEngineTests: XCTestCase {
+    private let key = Hotkey.default.keyCode
+    private let flag = Hotkey.default.modifierFlag!
+
+    func testHoldCommitsCommand() {
+        var engine = CommandKeyEngine(hotkey: .default)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .beginCommand)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.0), .commitCommand)
+    }
+
+    func testShortTapCancelsCommand() {
+        var engine = CommandKeyEngine(hotkey: .default)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .beginCommand)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05), .cancelCommand)
+    }
+
+    func testEscCancelsCommandHold() {
+        var engine = CommandKeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: flag, time: 0.3), .cancelCommand)
+        // The eventual release must not double-fire.
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.5), .none)
+    }
+
+    func testDoubleTapNeverLocks() {
+        // A command is one held utterance — no hands-free variant, ever.
+        var engine = CommandKeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .cancelCommand)
+    }
+
+    func testOtherKeysFallThrough() {
+        // .none = not consumed: the manager falls through to the main engine.
+        var engine = CommandKeyEngine(hotkey: Hotkey(keyCode: 96, modifiers: 0, isModifierKey: false))
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 97, flags: [], time: 0), .none)
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: [], time: 0.1), .none)
+    }
+
+    func testRegularKeyCommandHotkey() {
+        var engine = CommandKeyEngine(hotkey: Hotkey(keyCode: 96, modifiers: 0, isModifierKey: false))
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 96, flags: [], time: 0), .beginCommand)
+        XCTAssertEqual(engine.handle(type: .keyUp, keyCode: 96, flags: [], time: 0.5), .commitCommand)
+    }
+}
+
 final class UpdaterTests: XCTestCase {
     func testSemver() {
         XCTAssertTrue(Updater.semverLess("1.0.0", "1.0.1"))
