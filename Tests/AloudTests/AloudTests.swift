@@ -269,6 +269,33 @@ final class CommandKeyEngineTests: XCTestCase {
     }
 }
 
+final class CommandIntentTests: XCTestCase {
+    func testRoutingFollowsSelection() {
+        // A selection means edit-in-place, whatever the parsed action said;
+        // no selection means write at the cursor.
+        let rewrite = CommandIntent(action: .rewrite, instruction: "make it shorter")
+        XCTAssertEqual(rewrite.route(hasSelection: true), .rewrite)
+        XCTAssertEqual(rewrite.route(hasSelection: false), .generate)
+        let generate = CommandIntent(action: .generate, instruction: "write a thank-you note")
+        XCTAssertEqual(generate.route(hasSelection: true), .rewrite)
+        XCTAssertEqual(generate.route(hasSelection: false), .generate)
+    }
+
+    func testGeneratedOutputValidation() {
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("  Thanks for the update!  "),
+                       "Thanks for the update!")
+        // Whole-output quoting is unwrapped; interior quotes are left alone.
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("\"I'm back Monday.\""),
+                       "I'm back Monday.")
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("“Back Monday.”"), "Back Monday.")
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("She said \"hi\" and \"bye\""),
+                       "She said \"hi\" and \"bye\"")
+        XCTAssertNil(CommandOutputCheck.validateGenerated(""))
+        XCTAssertNil(CommandOutputCheck.validateGenerated("```swift\nfunc x() {}\n```"))
+        XCTAssertNil(CommandOutputCheck.validateGenerated(String(repeating: "padding ", count: 200)))
+    }
+}
+
 final class UpdaterTests: XCTestCase {
     func testSemver() {
         XCTAssertTrue(Updater.semverLess("1.0.0", "1.0.1"))

@@ -52,7 +52,8 @@ final class DictationController: ObservableObject {
 
     // Voice commands ride the same on-device model — same gate: where it
     // doesn't exist the command key setting is hidden, not broken.
-    var commandsAvailable: Bool { enhancerAvailable }
+    private let commandInterpreter = CommandInterpreterFactory.make()
+    var commandsAvailable: Bool { commandInterpreter?.isAvailable ?? false }
     // True while the current recording is a command hold, not a dictation.
     private var isCommandSession = false
 
@@ -557,14 +558,41 @@ final class DictationController: ObservableObject {
     }
 
     private func prewarmCommandEngine() {
-        // Filled in with the command interpreter; kept separate so the begin
-        // path reads the same as dictation's enhancer prewarm.
+        commandInterpreter?.prewarm()
     }
 
     // Run the spoken instruction. Nothing is ever typed on failure — a wrong
     // guess pasted over a selection would be worse than doing nothing.
     private func performCommand(_ spoken: String) async {
-        indicator.showHint("Couldn’t do that — try again")
+        guard let interpreter = commandInterpreter, interpreter.isAvailable else {
+            playCue("Basso")
+            indicator.showHint("Couldn’t do that — try again")
+            return
+        }
+        // Selection read at commit: the pill never takes focus, so the focused
+        // element is unchanged since the hold began. A rewrite lands by paste,
+        // which replaces the selection in place.
+        let selection = SelectionReader.currentSelection()
+        let result: String? = await withTaskGroup(of: String?.self) { group in
+            group.addTask { try? await interpreter.perform(spoken, selection: selection) }
+            group.addTask {
+                // Two model turns (parse + execute) — a generous budget, then
+                // give up rather than paste something out of nowhere later.
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        guard let result, !result.isEmpty else {
+            playCue("Basso")
+            indicator.showHint("Couldn’t do that — try again")
+            return
+        }
+        injector.inject(result)
+        lastTranscription = result
+        indicator.hide()
     }
 
     // MARK: failed-dictation retry

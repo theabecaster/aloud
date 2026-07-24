@@ -31,6 +31,21 @@ enum CLI {
                 FileHandle.standardError.write(Data("enhance failed: \(error)\n".utf8))
                 return 1
             }
+        case "--command":
+            // Headless probe of the voice-command path: parse the instruction
+            // with guided generation, execute it against an optional selection
+            // (rewrite) or from scratch (generate), print the result. Exit 2
+            // when the engine isn't available on this machine.
+            guard args.count >= 2 else {
+                FileHandle.standardError.write(Data(
+                    "usage: Aloud --command <instruction> [--selection <text>]\n".utf8))
+                return 64
+            }
+            var selection: String?
+            if let idx = args.firstIndex(of: "--selection"), args.count > idx + 1 {
+                selection = args[idx + 1]
+            }
+            return await command(instruction: args[1], selection: selection)
         case "--selftest":
             return selfTest()
         case "--transcribe":
@@ -86,6 +101,32 @@ enum CLI {
         default:
             FileHandle.standardError.write(Data("unknown flag \(args.first ?? "")\n".utf8))
             return 2
+        }
+    }
+
+    // MARK: --command
+
+    static func command(instruction: String, selection: String?) async -> Int32 {
+        guard let interpreter = CommandInterpreterFactory.make(), interpreter.isAvailable else {
+            FileHandle.standardError.write(Data("command engine unavailable on this machine\n".utf8))
+            return 2
+        }
+        do {
+            let intent = try await interpreter.parse(instruction)
+            FileHandle.standardError.write(Data(
+                "action=\(intent.action.rawValue) instruction='\(intent.instruction)' route=\(intent.route(hasSelection: !(selection ?? "").isEmpty))\n".utf8))
+            let result: String
+            switch intent.route(hasSelection: !(selection ?? "").isEmpty) {
+            case .rewrite:
+                result = try await interpreter.rewrite(selection ?? "", instruction: intent.instruction)
+            case .generate:
+                result = try await interpreter.generate(intent.instruction)
+            }
+            print(result)
+            return 0
+        } catch {
+            FileHandle.standardError.write(Data("command failed: \(error)\n".utf8))
+            return 1
         }
     }
 
@@ -385,6 +426,17 @@ enum CLI {
                "command key: double-tap never locks")
         expect(commandEngine.handle(type: .keyDown, keyCode: 97, flags: [], time: 3.0) == HotkeyAction.none,
                "command key: other keys fall through")
+
+        // Command routing + generated-output checks — pure, no model needed.
+        let intent = CommandIntent(action: .generate, instruction: "fix the grammar")
+        expect(intent.route(hasSelection: true) == .rewrite,
+               "command: selection routes to rewrite")
+        expect(intent.route(hasSelection: false) == .generate,
+               "command: no selection routes to generate")
+        expect(CommandOutputCheck.validateGenerated(" Hi there ") == "Hi there",
+               "command: generated output trimmed")
+        expect(CommandOutputCheck.validateGenerated("```code```") == nil,
+               "command: code fences rejected")
 
         var keyEngine = HotkeyEngine(hotkey: Hotkey(keyCode: 96, modifiers: 0, isModifierKey: false))
         expect(keyEngine.handle(type: .keyDown, keyCode: 96, flags: [], time: 0) == .begin,
