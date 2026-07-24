@@ -23,6 +23,8 @@ final class SettingsStore: ObservableObject {
             .flatMap { try? JSONDecoder().decode([Replacement].self, from: $0) } ?? []
         snippets = (defaults.data(forKey: Keys.snippets))
             .flatMap { try? JSONDecoder().decode([Snippet].self, from: $0) } ?? []
+        appModes = (defaults.data(forKey: Keys.appModes))
+            .flatMap { try? JSONDecoder().decode([AppModeRule].self, from: $0) } ?? []
         soundCues = defaults.object(forKey: Keys.soundCues) as? Bool ?? true
         indicatorPosition = (defaults.data(forKey: Keys.indicatorPosition))
             .flatMap { try? JSONDecoder().decode(CGPoint.self, from: $0) }
@@ -50,6 +52,7 @@ final class SettingsStore: ObservableObject {
         static let polishLevel = "polishLevel"
         static let replacements = "replacements"
         static let snippets = "snippets"
+        static let appModes = "appModes"
         static let soundCues = "soundCues"
         static let indicatorPosition = "indicatorPosition"
         static let statsWords = "statsWords"
@@ -94,6 +97,10 @@ final class SettingsStore: ObservableObject {
     }
     @Published var snippets: [Snippet] {
         didSet { if let data = try? JSONEncoder().encode(snippets) { defaults.set(data, forKey: Keys.snippets) } }
+    }
+    // Per-app mode overrides (Settings → Modes); they beat the built-in table.
+    @Published var appModes: [AppModeRule] {
+        didSet { if let data = try? JSONEncoder().encode(appModes) { defaults.set(data, forKey: Keys.appModes) } }
     }
     @Published var soundCues: Bool {
         didSet { defaults.set(soundCues, forKey: Keys.soundCues) }

@@ -198,14 +198,20 @@ final class DictationController: ObservableObject {
 
     // Deterministic polish first; the Concise rewrite only ever tightens that
     // result, and any failure or slow response falls back to it unchanged.
+    // The session app decides the rewrite's tone (see DictationMode).
     private func finishText(from raw: String) async -> (text: String, enhanced: Bool) {
         let polisher = TextPolisher(level: settings.polishLevel.deterministicLevel,
                                     replacements: settings.replacements)
         let text = polisher.polish(raw)
         guard settings.polishLevel == .concise, !text.isEmpty,
               let enhancer, enhancer.isAvailable else { return (text, false) }
+        // Code apps and user "exact words" rules get the polished words as-is.
+        let decision = ModeResolver.decision(forBundleID: sessionApp.bundleID,
+                                             rules: settings.appModes)
+        guard decision.allowsRewrite else { return (text, false) }
+        let tone = decision.extraInstructions
         let rewritten: String? = await withTaskGroup(of: String?.self) { group in
-            group.addTask { try? await enhancer.enhance(text) }
+            group.addTask { try? await enhancer.enhance(text, extraInstructions: tone) }
             group.addTask {
                 // Budget, not a target: past this the polished text ships as-is.
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
@@ -269,8 +275,14 @@ final class DictationController: ObservableObject {
             refreshTranscriberState()   // pick up a background engine switch
             indicator.isBasic = usingFallback
             // Load the rewrite model while the user is still talking so the
-            // commit path never pays its cold start.
-            if settings.polishLevel == .concise { enhancer?.prewarm() }
+            // commit path never pays its cold start — warmed with the session
+            // app's tone so the session actually gets used at commit. Apps
+            // whose mode skips the rewrite never pay for a warm-up either.
+            if settings.polishLevel == .concise {
+                let decision = ModeResolver.decision(forBundleID: sessionApp.bundleID,
+                                                     rules: settings.appModes)
+                if decision.allowsRewrite { enhancer?.prewarm(extraInstructions: decision.extraInstructions) }
+            }
             indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 })
             if settings.liveTyping { startLiveTyping() }
         } catch {
