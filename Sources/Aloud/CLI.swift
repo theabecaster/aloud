@@ -3,7 +3,7 @@ import AVFoundation
 import Foundation
 
 // Headless verbs so agents and CI can verify subsystems with no GUI and no
-// human. See docs/testing.md. Every path here must run without TCC permissions
+// human. Every path here must run without TCC permissions
 // except --inject (Accessibility) and --transcribe with live capture.
 enum CLI {
     static func run(_ args: [String]) async -> Int32 {
