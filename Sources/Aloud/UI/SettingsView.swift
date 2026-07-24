@@ -8,6 +8,7 @@ struct SettingsView: View {
         case general = "General"
         case dictation = "Dictation"
         case vocabulary = "Vocabulary"
+        case modes = "Modes"
         case history = "History"
         case about = "About"
         var id: String { rawValue }
@@ -16,6 +17,7 @@ struct SettingsView: View {
             case .general: return "gearshape"
             case .dictation: return "waveform"
             case .vocabulary: return "character.book.closed"
+            case .modes: return "macwindow"
             case .history: return "clock"
             case .about: return "info.circle"
             }
@@ -35,6 +37,7 @@ struct SettingsView: View {
             case .general: GeneralSettings(controller: controller)
             case .dictation: DictationSettings(controller: controller)
             case .vocabulary: VocabularySettings(settings: controller.settings)
+            case .modes: ModesSettings(settings: controller.settings)
             case .history: HistorySettings(history: controller.history, settings: controller.settings)
             case .about: AboutSettings()
             }
@@ -410,6 +413,150 @@ struct VocabularySettings: View {
             }
             .padding(12)
         }
+    }
+}
+
+// MARK: - Modes
+
+// Per-app overrides for how the Concise rewrite behaves. Aloud already adapts
+// to well-known chat, email, notes, and code apps on its own; a rule here
+// beats that built-in choice for one specific app.
+struct ModesSettings: View {
+    @ObservedObject var settings: SettingsStore
+
+    // What the behavior picker offers: a built-in category, the user's own
+    // instruction, or the exact words.
+    private enum BehaviorPick: Hashable {
+        case category(DictationMode)
+        case custom
+        case verbatim
+    }
+
+    private static let otherAppTag = "~other"
+
+    @State private var runningApps: [(name: String, bundleID: String)] = []
+    @State private var appSelection = ""      // bundle ID, "" placeholder, or otherAppTag
+    @State private var otherBundleID = ""
+    @State private var behaviorPick: BehaviorPick = .verbatim
+    @State private var customInstruction = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if settings.appModes.isEmpty {
+                ContentUnavailableView(
+                    "No App Modes",
+                    systemImage: "macwindow",
+                    description: Text("Aloud already matches its rewriting to common chat, email, notes, and code apps — and keeps your exact words in terminals. Add an app here to choose yourself: a built-in style, your own instruction, or exactly what you said."))
+                    .frame(maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(settings.appModes) { rule in
+                        HStack {
+                            Text(rule.appName ?? rule.bundleID)
+                                .help(rule.bundleID)
+                            Image(systemName: "arrow.right")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                            Text(rule.summary)
+                                .fontWeight(.medium)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer()
+                            Button {
+                                settings.appModes.removeAll { $0.id == rule.id }
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Picker("App", selection: $appSelection) {
+                        Text("Choose an app…").tag("")
+                        ForEach(runningApps, id: \.bundleID) { app in
+                            Text(app.name).tag(app.bundleID)
+                        }
+                        Divider()
+                        Text("Other app…").tag(Self.otherAppTag)
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 220)
+                    Picker("Behavior", selection: $behaviorPick) {
+                        Text("Exact words").tag(BehaviorPick.verbatim)
+                        Divider()
+                        ForEach(DictationMode.allCases) { mode in
+                            Text("\(mode.displayName) style").tag(BehaviorPick.category(mode))
+                        }
+                        Divider()
+                        Text("Custom instruction…").tag(BehaviorPick.custom)
+                    }
+                    .labelsHidden()
+                    Button("Add") { addRule() }
+                        .disabled(!canAdd)
+                }
+                if appSelection == Self.otherAppTag {
+                    TextField("Bundle ID, e.g. com.example.app", text: $otherBundleID)
+                        .textFieldStyle(.roundedBorder)
+                }
+                if behaviorPick == .custom {
+                    TextField("How should it be written there? e.g. Warm and upbeat.",
+                              text: $customInstruction)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+            .padding(12)
+        }
+        .onAppear { refreshRunningApps() }
+    }
+
+    private var chosenBundleID: String {
+        appSelection == Self.otherAppTag
+            ? otherBundleID.trimmingCharacters(in: .whitespaces)
+            : appSelection
+    }
+
+    private var canAdd: Bool {
+        guard !chosenBundleID.isEmpty else { return false }
+        if behaviorPick == .custom,
+           customInstruction.trimmingCharacters(in: .whitespaces).isEmpty { return false }
+        return true
+    }
+
+    private func addRule() {
+        let bundleID = chosenBundleID
+        guard !bundleID.isEmpty else { return }
+        let name = runningApps.first { $0.bundleID == bundleID }?.name
+        let behavior: AppModeRule.Behavior
+        switch behaviorPick {
+        case .category(let mode): behavior = .category(mode)
+        case .custom: behavior = .custom(customInstruction.trimmingCharacters(in: .whitespaces))
+        case .verbatim: behavior = .verbatim
+        }
+        // One rule per app: adding again replaces the old choice.
+        settings.appModes.removeAll { $0.bundleID.lowercased() == bundleID.lowercased() }
+        settings.appModes.append(AppModeRule(appName: name, bundleID: bundleID, behavior: behavior))
+        appSelection = ""
+        otherBundleID = ""
+        customInstruction = ""
+    }
+
+    private func refreshRunningApps() {
+        var seen = Set<String>()
+        runningApps = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { app in
+                guard let id = app.bundleIdentifier, let name = app.localizedName,
+                      id != Bundle.main.bundleIdentifier, seen.insert(id).inserted
+                else { return nil }
+                return (name: name, bundleID: id)
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }
 

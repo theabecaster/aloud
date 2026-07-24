@@ -201,10 +201,11 @@ final class DictationController: ObservableObject {
         let text = polisher.polish(raw)
         guard settings.polishLevel == .concise, !text.isEmpty,
               let enhancer, enhancer.isAvailable else { return (text, false) }
-        // Code apps get the exact polished words — no rewrite, ever.
-        let mode = DictationMode.builtIn(forBundleID: sessionApp.bundleID)
-        guard mode.allowsRewrite else { return (text, false) }
-        let tone = mode.toneInstruction
+        // Code apps and user "exact words" rules get the polished words as-is.
+        let decision = ModeResolver.decision(forBundleID: sessionApp.bundleID,
+                                             rules: settings.appModes)
+        guard decision.allowsRewrite else { return (text, false) }
+        let tone = decision.extraInstructions
         let rewritten: String? = await withTaskGroup(of: String?.self) { group in
             group.addTask { try? await enhancer.enhance(text, extraInstructions: tone) }
             group.addTask {
@@ -272,8 +273,9 @@ final class DictationController: ObservableObject {
             // app's tone so the session actually gets used at commit. Apps
             // whose mode skips the rewrite never pay for a warm-up either.
             if settings.polishLevel == .concise {
-                let mode = DictationMode.builtIn(forBundleID: sessionApp.bundleID)
-                if mode.allowsRewrite { enhancer?.prewarm(extraInstructions: mode.toneInstruction) }
+                let decision = ModeResolver.decision(forBundleID: sessionApp.bundleID,
+                                                     rules: settings.appModes)
+                if decision.allowsRewrite { enhancer?.prewarm(extraInstructions: decision.extraInstructions) }
             }
             indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 })
             if settings.liveTyping { startLiveTyping() }

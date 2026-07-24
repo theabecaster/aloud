@@ -83,4 +83,89 @@ final class DictationModeTests: XCTestCase {
         XCTAssertEqual(EnhancerInstructions.combine("base", extra: "tone line"),
                        "base\n\ntone line")
     }
+
+    // MARK: custom rule precedence
+
+    func testWithoutRulesTheBuiltInTableDecides() {
+        let slack = ModeResolver.decision(forBundleID: "com.tinyspeck.slackmacgap", rules: [])
+        XCTAssertTrue(slack.allowsRewrite)
+        XCTAssertEqual(slack.extraInstructions, DictationMode.messaging.toneInstruction)
+        let terminal = ModeResolver.decision(forBundleID: "com.apple.Terminal", rules: [])
+        XCTAssertEqual(terminal, ModeDecision(allowsRewrite: false, extraInstructions: nil))
+        let unknown = ModeResolver.decision(forBundleID: "com.example.someapp", rules: [])
+        XCTAssertEqual(unknown, ModeDecision(allowsRewrite: true, extraInstructions: nil))
+    }
+
+    func testVerbatimRuleBeatsBuiltInCategory() {
+        let rules = [AppModeRule(appName: "Slack", bundleID: "com.tinyspeck.slackmacgap",
+                                 behavior: .verbatim)]
+        let decision = ModeResolver.decision(forBundleID: "com.tinyspeck.slackmacgap", rules: rules)
+        XCTAssertEqual(decision, ModeDecision(allowsRewrite: false, extraInstructions: nil))
+        // Other apps are untouched by the rule.
+        XCTAssertTrue(ModeResolver.decision(forBundleID: "com.apple.mail", rules: rules).allowsRewrite)
+    }
+
+    func testCategoryOverrideRuleBeatsBuiltInCategory() {
+        // Slack pinned to the email tone — someone's workspace is formal.
+        let rules = [AppModeRule(appName: "Slack", bundleID: "com.tinyspeck.slackmacgap",
+                                 behavior: .category(.email))]
+        let decision = ModeResolver.decision(forBundleID: "com.tinyspeck.slackmacgap", rules: rules)
+        XCTAssertTrue(decision.allowsRewrite)
+        XCTAssertEqual(decision.extraInstructions, DictationMode.email.toneInstruction)
+        // A category override to code inherits its verbatim safety.
+        let toCode = [AppModeRule(appName: nil, bundleID: "com.example.someapp",
+                                  behavior: .category(.code))]
+        XCTAssertFalse(ModeResolver.decision(forBundleID: "com.example.someapp", rules: toCode).allowsRewrite)
+    }
+
+    func testCustomInstructionRuleCarriesTheInstruction() {
+        let rules = [AppModeRule(appName: nil, bundleID: "com.example.journal",
+                                 behavior: .custom("  Warm and upbeat.  "))]
+        let decision = ModeResolver.decision(forBundleID: "com.example.journal", rules: rules)
+        XCTAssertEqual(decision, ModeDecision(allowsRewrite: true, extraInstructions: "Warm and upbeat."))
+        // A whitespace-only instruction degrades to no extra instructions.
+        let blank = [AppModeRule(appName: nil, bundleID: "com.example.journal",
+                                 behavior: .custom("   "))]
+        XCTAssertEqual(ModeResolver.decision(forBundleID: "com.example.journal", rules: blank),
+                       ModeDecision(allowsRewrite: true, extraInstructions: nil))
+    }
+
+    func testRuleMatchingIgnoresBundleIDCase() {
+        let rules = [AppModeRule(appName: nil, bundleID: "Com.Example.App", behavior: .verbatim)]
+        XCTAssertFalse(ModeResolver.decision(forBundleID: "com.example.app", rules: rules).allowsRewrite)
+    }
+
+    // MARK: persistence
+
+    func testAppModeRuleCodableRoundTrip() throws {
+        let rules = [
+            AppModeRule(appName: "Slack", bundleID: "com.tinyspeck.slackmacgap",
+                        behavior: .category(.email)),
+            AppModeRule(appName: nil, bundleID: "com.example.journal",
+                        behavior: .custom("Warm and upbeat.")),
+            AppModeRule(appName: "Terminal", bundleID: "com.apple.Terminal",
+                        behavior: .verbatim),
+        ]
+        let data = try JSONEncoder().encode(rules)
+        XCTAssertEqual(try JSONDecoder().decode([AppModeRule].self, from: data), rules)
+    }
+
+    // The on-disk shape is a contract: saved rules must keep decoding across
+    // releases, so this pins the exact JSON rather than just a round-trip.
+    func testAppModeRuleDecodesTheStableWireFormat() throws {
+        let json = """
+        [{"id":"0A0B0C0D-0000-0000-0000-000000000001","appName":"Slack",
+          "bundleID":"com.tinyspeck.slackmacgap","behavior":{"kind":"category","category":"messaging"}},
+         {"id":"0A0B0C0D-0000-0000-0000-000000000002",
+          "bundleID":"com.example.journal","behavior":{"kind":"custom","instruction":"Warm."}},
+         {"id":"0A0B0C0D-0000-0000-0000-000000000003","appName":"Terminal",
+          "bundleID":"com.apple.Terminal","behavior":{"kind":"verbatim"}}]
+        """
+        let rules = try JSONDecoder().decode([AppModeRule].self, from: Data(json.utf8))
+        XCTAssertEqual(rules.count, 3)
+        XCTAssertEqual(rules[0].behavior, .category(.messaging))
+        XCTAssertNil(rules[1].appName)
+        XCTAssertEqual(rules[1].behavior, .custom("Warm."))
+        XCTAssertEqual(rules[2].behavior, .verbatim)
+    }
 }
