@@ -25,7 +25,10 @@ enum L10n {
         let name = "Aloud_Aloud.bundle"
         let candidates: [URL?] = [
             Bundle.main.resourceURL,                                  // .app: Contents/Resources
-            Bundle(for: BundleFinder.self).resourceURL,               // test runner: next to the code
+            Bundle(for: BundleFinder.self).resourceURL,               // frameworks-style layouts
+            // Tests: the .xctest bundle sits in the build dir, next to the
+            // resource bundle — its parent is where to look.
+            Bundle(for: BundleFinder.self).bundleURL.deletingLastPathComponent(),
             Bundle.main.executableURL?.deletingLastPathComponent(),   // bare `swift build` binary
             Bundle.main.bundleURL,                                    // SwiftPM's own guess
         ]
