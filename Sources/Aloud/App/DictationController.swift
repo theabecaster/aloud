@@ -298,8 +298,16 @@ final class DictationController: ObservableObject {
         }
         let front = NSWorkspace.shared.frontmostApplication
         sessionApp = (front?.localizedName, front?.bundleIdentifier)
-        sessionContext = FocusSnapshot.capture(appName: front?.localizedName,
-                                               appBundleID: front?.bundleIdentifier)
+        // Off the critical path: AX reads can stall tens of milliseconds, and
+        // recording start must stay instant (a slow start also delays event
+        // processing enough to eat quick taps). Best-effort by commit time.
+        sessionContext = nil
+        let appName = front?.localizedName
+        let appBundleID = front?.bundleIdentifier
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let snapshot = FocusSnapshot.capture(appName: appName, appBundleID: appBundleID)
+            await MainActor.run { self?.sessionContext = snapshot }
+        }
         do {
             try recorder.start(deviceUID: settings.microphoneUID)
             phase = .recording

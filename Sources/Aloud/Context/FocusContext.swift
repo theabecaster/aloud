@@ -30,7 +30,9 @@ struct FocusSnapshot: Equatable {
     private static let budget: TimeInterval = 0.05
     private static let perCallTimeout: Float = 0.02
 
-    @MainActor
+    // Callable off the main actor on purpose: the AX reads can stall for tens
+    // of milliseconds, and recording start must never wait on them. The AX C
+    // API has no main-thread requirement.
     static func capture(appName: String?, appBundleID: String?) -> FocusSnapshot {
         var snapshot = FocusSnapshot(appName: appName, appBundleID: appBundleID)
         let deadline = Date().addingTimeInterval(budget)
