@@ -64,6 +64,9 @@ final class DictationController: ObservableObject {
             self?.hotkeyManager.endHandsFree()
         }
         indicator.settings = settings
+        recorder.onDeviceChange = { [weak self] in
+            self?.indicator.showNotice("Microphone changed — still listening")
+        }
         settings.$handsFree
             .sink { [weak self] enabled in self?.hotkeyManager.handsFree = enabled }
             .store(in: &cancellables)

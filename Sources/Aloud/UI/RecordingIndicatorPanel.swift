@@ -94,6 +94,16 @@ final class RecordingIndicatorPanel {
         model.stillListening = inputIdle > Self.inputIdleGrace
     }
 
+    // Brief note inside a live recording pill (e.g. mic switched) — the meter
+    // comes right back; unlike showHint this never leaves recording mode.
+    func showNotice(_ text: String) {
+        guard model.mode == .recording else { return }
+        model.notice = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
+            if self?.model.notice == text { self?.model.notice = nil }
+        }
+    }
+
     func showTranscribing() {
         levelTimer?.invalidate()
         model.mode = .transcribing
@@ -209,6 +219,7 @@ final class IndicatorModel: ObservableObject {
     @Published var isLocked = false
     @Published var stillListening = false
     @Published var isBasic = false
+    @Published var notice: String?
     var onStop: (() -> Void)?
     var onResetPosition: (() -> Void)?
     var settings: SettingsStore?
@@ -236,7 +247,11 @@ struct IndicatorView: View {
                         .foregroundStyle(.orange)
                         .overlay(Capsule().strokeBorder(Color.orange.opacity(0.5), lineWidth: 0.5))
                 }
-                if model.stillListening {
+                if let notice = model.notice {
+                    Text(notice)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if model.stillListening {
                     Text("Still listening…")
                         .foregroundStyle(.orange)
                         .frame(width: 90)
@@ -280,6 +295,7 @@ struct IndicatorView: View {
         .animation(.spring(duration: 0.25), value: model.mode == .recording)
         .animation(.spring(duration: 0.25), value: model.isLocked)
         .animation(.spring(duration: 0.25), value: model.stillListening)
+        .animation(.spring(duration: 0.25), value: model.notice)
         .contextMenu { quickMenu }
     }
 

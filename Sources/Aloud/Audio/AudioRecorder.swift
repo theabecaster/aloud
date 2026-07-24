@@ -21,6 +21,11 @@ final class AudioRecorder {
     // Samples still accumulate for `stop()` regardless. Cleared on stop.
     var onChunk: (([Float]) -> Void)?
 
+    // Fires (on the main queue) after the input device disappeared mid-session
+    // and capture was rebuilt on the current default input.
+    var onDeviceChange: (() -> Void)?
+    private var configObserver: NSObjectProtocol?
+
     // Select a specific input device by pointing the engine's input AU at it.
     // No-op (default device) when uid is nil or stale.
     private func applyInputDevice(uid: String?) {
@@ -61,12 +66,43 @@ final class AudioRecorder {
         engine.prepare()
         try engine.start()
         isRecording = true
+
+        // Unplugging the active mic (or an AirPods hand-off) fires a config
+        // change and silences the tap. Rebuild capture on whatever input the
+        // system now considers default; samples already recorded are kept.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            self?.recoverFromConfigurationChange()
+        }
+    }
+
+    private func recoverFromConfigurationChange() {
+        guard isRecording else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        let input = engine.inputNode
+        let hwFormat = input.outputFormat(forBus: 0)
+        guard hwFormat.sampleRate > 0,
+              let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                               sampleRate: Self.targetSampleRate,
+                                               channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: hwFormat, to: targetFormat)
+        else { return }   // no input at all — stop() will still return what we have
+        self.converter = converter
+        input.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) { [weak self] buffer, _ in
+            self?.consume(buffer: buffer, converter: converter, targetFormat: targetFormat)
+        }
+        engine.prepare()
+        guard (try? engine.start()) != nil else { return }
+        onDeviceChange?()
     }
 
     // Stop and return 16 kHz mono samples.
     @discardableResult
     func stop() -> [Float] {
         guard isRecording else { return [] }
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = nil
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRecording = false
