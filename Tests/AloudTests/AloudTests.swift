@@ -93,6 +93,15 @@ final class HotkeyEngineTests: XCTestCase {
         XCTAssertFalse(engine.isLocked)
     }
 
+    func testSlowTapsDoNotLock() {
+        var engine = HotkeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05), .cancel)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 1.0)   // outside window
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.05), .cancel)
+        XCTAssertFalse(engine.isLocked)
+    }
+
     func testSlowTapsWhileLockedStayLocked() {
         var engine = HotkeyEngine(hotkey: .default)
         _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
