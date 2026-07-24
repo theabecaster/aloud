@@ -8,6 +8,7 @@ struct SettingsView: View {
         case general = "General"
         case dictation = "Dictation"
         case vocabulary = "Vocabulary"
+        case snippets = "Snippets"
         case history = "History"
         case about = "About"
         var id: String { rawValue }
@@ -16,6 +17,7 @@ struct SettingsView: View {
             case .general: return "gearshape"
             case .dictation: return "waveform"
             case .vocabulary: return "character.book.closed"
+            case .snippets: return "text.insert"
             case .history: return "clock"
             case .about: return "info.circle"
             }
@@ -35,6 +37,7 @@ struct SettingsView: View {
             case .general: GeneralSettings(controller: controller)
             case .dictation: DictationSettings(controller: controller)
             case .vocabulary: VocabularySettings(settings: controller.settings)
+            case .snippets: SnippetsSettings(settings: controller.settings)
             case .history: HistorySettings(history: controller.history, settings: controller.settings)
             case .about: AboutSettings()
             }
@@ -401,6 +404,66 @@ struct VocabularySettings: View {
                 }
                 .disabled(newPattern.trimmingCharacters(in: .whitespaces).isEmpty
                           || newReplacement.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(12)
+        }
+    }
+}
+
+// MARK: - Snippets
+
+struct SnippetsSettings: View {
+    @ObservedObject var settings: SettingsStore
+    @State private var newTrigger = ""
+    @State private var newExpansion = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if settings.snippets.isEmpty {
+                ContentUnavailableView(
+                    "No Snippets",
+                    systemImage: "text.insert",
+                    description: Text("Type the same thing a lot? Give it a spoken phrase — say “my email” (or “insert my email”) as a whole dictation and the full text is typed instead."))
+                    .frame(maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(settings.snippets) { s in
+                        HStack {
+                            Text("“\(s.trigger)”")
+                            Image(systemName: "arrow.right")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                            Text(s.expansion)
+                                .fontWeight(.medium)
+                                .lineLimit(2)
+                            Spacer()
+                            Button {
+                                settings.snippets.removeAll { $0.id == s.id }
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+            }
+            Divider()
+            HStack(spacing: 8) {
+                TextField("When you say…", text: $newTrigger)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Aloud types…", text: $newExpansion)
+                    .textFieldStyle(.roundedBorder)
+                Button("Add") {
+                    let t = newTrigger.trimmingCharacters(in: .whitespaces)
+                    let e = newExpansion.trimmingCharacters(in: .whitespaces)
+                    guard !t.isEmpty, !e.isEmpty else { return }
+                    settings.snippets.append(Snippet(trigger: t, expansion: e))
+                    newTrigger = ""; newExpansion = ""
+                }
+                .disabled(newTrigger.trimmingCharacters(in: .whitespaces).isEmpty
+                          || newExpansion.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(12)
         }

@@ -21,6 +21,8 @@ final class SettingsStore: ObservableObject {
         polishLevel = (defaults.string(forKey: Keys.polishLevel)).flatMap(PolishLevel.init) ?? .standard
         replacements = (defaults.data(forKey: Keys.replacements))
             .flatMap { try? JSONDecoder().decode([Replacement].self, from: $0) } ?? []
+        snippets = (defaults.data(forKey: Keys.snippets))
+            .flatMap { try? JSONDecoder().decode([Snippet].self, from: $0) } ?? []
         soundCues = defaults.object(forKey: Keys.soundCues) as? Bool ?? true
         indicatorPosition = (defaults.data(forKey: Keys.indicatorPosition))
             .flatMap { try? JSONDecoder().decode(CGPoint.self, from: $0) }
@@ -47,6 +49,7 @@ final class SettingsStore: ObservableObject {
         static let historyLimit = "historyLimit"
         static let polishLevel = "polishLevel"
         static let replacements = "replacements"
+        static let snippets = "snippets"
         static let soundCues = "soundCues"
         static let indicatorPosition = "indicatorPosition"
         static let statsWords = "statsWords"
@@ -88,6 +91,9 @@ final class SettingsStore: ObservableObject {
     }
     @Published var replacements: [Replacement] {
         didSet { if let data = try? JSONEncoder().encode(replacements) { defaults.set(data, forKey: Keys.replacements) } }
+    }
+    @Published var snippets: [Snippet] {
+        didSet { if let data = try? JSONEncoder().encode(snippets) { defaults.set(data, forKey: Keys.snippets) } }
     }
     @Published var soundCues: Bool {
         didSet { defaults.set(soundCues, forKey: Keys.soundCues) }

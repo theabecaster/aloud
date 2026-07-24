@@ -320,6 +320,11 @@ final class DictationController: ObservableObject {
                     text = stripped
                     sendReturn = true
                 }
+                // After "press enter" is peeled off, so "my email press enter"
+                // still expands. History keeps the spoken words as rawText.
+                if let expansion = SnippetMatcher.expansion(for: text, snippets: settings.snippets) {
+                    text = expansion
+                }
                 if !text.isEmpty {
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
@@ -379,6 +384,9 @@ final class DictationController: ObservableObject {
                     text = stripped
                     sendReturn = true
                 }
+                if let expansion = SnippetMatcher.expansion(for: text, snippets: settings.snippets) {
+                    text = expansion
+                }
                 if !text.isEmpty {
                     // Return goes out only after the paste has been serviced.
                     injector.inject(text) {
@@ -435,7 +443,10 @@ final class DictationController: ObservableObject {
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let polisher = TextPolisher(level: settings.polishLevel,
                                             replacements: settings.replacements)
-                let text = polisher.polish(raw)
+                var text = polisher.polish(raw)
+                if let expansion = SnippetMatcher.expansion(for: text, snippets: settings.snippets) {
+                    text = expansion
+                }
                 if !text.isEmpty {
                     injector.inject(text)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
