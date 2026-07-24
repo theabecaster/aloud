@@ -13,9 +13,31 @@ import Foundation
 protocol Enhancer: AnyObject, Sendable {
     var isAvailable: Bool { get }
     // Load the model ahead of need (called when recording starts) so the
-    // rewrite doesn't pay the cold-start cost at commit time.
-    func prewarm()
-    func enhance(_ text: String) async throws -> String
+    // rewrite doesn't pay the cold-start cost at commit time. Pass the same
+    // extra instructions the enhance call will use so the warmed session is
+    // actually the one consumed.
+    func prewarm(extraInstructions: String?)
+    // extraInstructions: an optional per-app tone line (see DictationMode)
+    // appended to the engine's base instructions for this one rewrite.
+    func enhance(_ text: String, extraInstructions: String?) async throws -> String
+}
+
+// One-argument conveniences so existing call sites read unchanged.
+extension Enhancer {
+    func prewarm() { prewarm(extraInstructions: nil) }
+    func enhance(_ text: String) async throws -> String {
+        try await enhance(text, extraInstructions: nil)
+    }
+}
+
+// Combines the base rewrite instructions with a per-app tone line. Pure so
+// it's testable without the model.
+enum EnhancerInstructions {
+    static func combine(_ base: String, extra: String?) -> String {
+        guard let extra = extra?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !extra.isEmpty else { return base }
+        return base + "\n\n" + extra
+    }
 }
 
 enum EnhancerFactory {
@@ -61,27 +83,30 @@ final class FoundationModelEnhancer: Enhancer, @unchecked Sendable {
     // whatever people say; cleaning them up is exactly the sanctioned use.
     private let model = SystemLanguageModel(guardrails: .permissiveContentTransformations)
     private let lock = NSLock()
-    private var warmSession: LanguageModelSession?
+    private var warmSession: (session: LanguageModelSession, instructions: String)?
 
     var isAvailable: Bool {
         if case .available = model.availability { return true }
         return false
     }
 
-    func prewarm() {
+    func prewarm(extraInstructions: String?) {
         guard isAvailable else { return }
-        let session = LanguageModelSession(model: model, instructions: Self.instructions)
+        let instructions = EnhancerInstructions.combine(Self.instructions, extra: extraInstructions)
+        let session = LanguageModelSession(model: model, instructions: instructions)
         session.prewarm()
-        lock.withLock { warmSession = session }
+        lock.withLock { warmSession = (session, instructions) }
     }
 
-    func enhance(_ text: String) async throws -> String {
+    func enhance(_ text: String, extraInstructions: String?) async throws -> String {
         guard isAvailable else { throw EnhancerError.unavailable }
-        // Sessions are single-turn here; take the prewarmed one, never reuse.
-        let session = lock.withLock {
-            let s = warmSession ?? LanguageModelSession(model: model, instructions: Self.instructions)
-            warmSession = nil
-            return s
+        let instructions = EnhancerInstructions.combine(Self.instructions, extra: extraInstructions)
+        // Sessions are single-turn here; take the prewarmed one only when it
+        // was built with the same instructions, and never reuse it.
+        let session: LanguageModelSession = lock.withLock {
+            defer { warmSession = nil }
+            if let warm = warmSession, warm.instructions == instructions { return warm.session }
+            return LanguageModelSession(model: model, instructions: instructions)
         }
         let response = try await session.respond(to: text,
                                                  options: GenerationOptions(temperature: 0.1))

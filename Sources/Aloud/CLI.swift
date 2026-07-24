@@ -15,17 +15,28 @@ enum CLI {
             return doctor()
         case "--enhance":
             // Headless probe of the on-device rewrite: text in, rewrite out.
+            // Optional second arg: a per-app mode (messaging|email|notes|…)
+            // whose tone instruction rides along, for probing the tones.
             // Exit 2 when the engine isn't available on this machine.
             guard args.count >= 2 else {
-                FileHandle.standardError.write(Data("usage: Aloud --enhance <text>\n".utf8))
+                FileHandle.standardError.write(Data("usage: Aloud --enhance <text> [mode]\n".utf8))
                 return 64
+            }
+            var mode: DictationMode?
+            if args.count >= 3 {
+                guard let m = DictationMode(rawValue: args[2]) else {
+                    let names = DictationMode.allCases.map(\.rawValue).joined(separator: "|")
+                    FileHandle.standardError.write(Data("unknown mode \(args[2]) (\(names))\n".utf8))
+                    return 64
+                }
+                mode = m
             }
             guard let enhancer = EnhancerFactory.make(), enhancer.isAvailable else {
                 FileHandle.standardError.write(Data("enhancer unavailable on this machine\n".utf8))
                 return 2
             }
             do {
-                print(try await enhancer.enhance(args[1]))
+                print(try await enhancer.enhance(args[1], extraInstructions: mode?.toneInstruction))
                 return 0
             } catch {
                 FileHandle.standardError.write(Data("enhance failed: \(error)\n".utf8))
