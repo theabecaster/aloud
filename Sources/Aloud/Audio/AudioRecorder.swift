@@ -109,9 +109,4 @@ final class AudioRecorder {
         lock.unlock()
         onChunk?(chunk)
     }
-
-    var recordedDuration: TimeInterval {
-        lock.lock(); defer { lock.unlock() }
-        return Double(samples.count) / Self.targetSampleRate
-    }
 }

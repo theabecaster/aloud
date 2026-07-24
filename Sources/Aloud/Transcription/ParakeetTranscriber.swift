@@ -13,7 +13,6 @@ import FluidAudio
 final class ParakeetTranscriber: Transcriber {
     private(set) var state: TranscriberState = .modelMissing
     private var manager: AsrManager?
-    private var models: AsrModels?
     private var decoderLayers: Int = 0
     private let prepareLock = AsyncSerialGate()
 
@@ -38,7 +37,6 @@ final class ParakeetTranscriber: Transcriber {
                 try await asr.loadModels(models)
                 decoderLayers = await asr.decoderLayerCount
                 manager = asr
-                self.models = models
                 state = .ready
             } catch {
                 state = .failed(error.localizedDescription)

@@ -22,7 +22,6 @@ struct OnboardingView: View {
     @State private var step: Step = .welcome
     @State private var micStatus = Permissions.microphone
     @State private var axStatus = Permissions.accessibility
-    @State private var micDeniedOnce = false
     @State private var tryItDone = false
     @State private var isOnline = true
     @State private var networkMonitor = NWPathMonitor()
@@ -150,7 +149,7 @@ struct OnboardingView: View {
                     primaryButton("Allow Microphone") {
                         Permissions.requestMicrophone { granted in
                             micStatus = Permissions.microphone
-                            if granted { advance() } else { micDeniedOnce = true }
+                            if granted { advance() }
                         }
                     }
                 }
@@ -279,29 +278,7 @@ struct OnboardingView: View {
         }
     }
 
-    // Flat, theme-safe buttons: the system's large bordered styles render a
-// glossy light bezel with dark text no matter the appearance, which reads
-// broken in dark mode. Accent fill for the one main action per screen,
-// quiet fill for everything else.
-private struct OnboardingButtonStyle: ButtonStyle {
-    var prominent = false
-    var minWidth: CGFloat = 160
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.body.weight(prominent ? .semibold : .regular))
-            .frame(minWidth: minWidth)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .foregroundStyle(prominent ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-            .background(prominent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary.opacity(0.7)),
-                        in: RoundedRectangle(cornerRadius: 8))
-            .opacity(configuration.isPressed ? 0.7 : 1)
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-// A radio-style option card: exactly one is selected, shown by the accent
+    // A radio-style option card: exactly one is selected, shown by the accent
     // border, tinted fill, and corner checkmark.
     private func choiceCard(symbol: String, title: String, badge: String? = nil, caption: String,
                             selected: Bool, action: @escaping () -> Void) -> some View {
@@ -463,5 +440,27 @@ private struct OnboardingButtonStyle: ButtonStyle {
         case .model: return controller.transcriberState == .ready
         case .welcome, .liveTyping, .tryIt: return false
         }
+    }
+}
+
+// Flat, theme-safe buttons: the system's large bordered styles render a
+// glossy light bezel with dark text no matter the appearance, which reads
+// broken in dark mode. Accent fill for the one main action per screen,
+// quiet fill for everything else.
+private struct OnboardingButtonStyle: ButtonStyle {
+    var prominent = false
+    var minWidth: CGFloat = 160
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(prominent ? .semibold : .regular))
+            .frame(minWidth: minWidth)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .foregroundStyle(prominent ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .background(prominent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary.opacity(0.7)),
+                        in: RoundedRectangle(cornerRadius: 8))
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
     }
 }
