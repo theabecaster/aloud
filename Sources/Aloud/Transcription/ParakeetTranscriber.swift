@@ -15,6 +15,9 @@ final class ParakeetTranscriber: Transcriber {
     private var manager: AsrManager?
     private var decoderLayers: Int = 0
     private let prepareLock = AsyncSerialGate()
+    // Decode-time biasing toward the user's Vocabulary replacements. Loads its
+    // own auxiliary models lazily and only when replacements exist.
+    private let booster = VocabularyBooster()
 
     init() {
         state = modelIsDownloaded ? .loading : .modelMissing
@@ -22,6 +25,16 @@ final class ParakeetTranscriber: Transcriber {
 
     var modelIsDownloaded: Bool {
         AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(for: .v3))
+    }
+
+    // With exactly one declared language, the decoder can skip candidate
+    // tokens from other scripts (SDK script filtering) — a mild guard against
+    // drifting into the wrong alphabet. Several declared languages (or one
+    // the SDK's filter doesn't know) mean full auto-detection, the default.
+    private var languageHint: Language? {
+        let declared = SettingsStore.shared.declaredLanguages
+        guard declared.count == 1, let code = declared.first else { return nil }
+        return Language(rawValue: code)
     }
 
     func prepare(onProgress: @escaping @Sendable (Double) -> Void) async throws {
@@ -38,6 +51,12 @@ final class ParakeetTranscriber: Transcriber {
                 decoderLayers = await asr.decoderLayerCount
                 manager = asr
                 state = .ready
+                // Warm vocabulary biasing off the critical path so the first
+                // dictation can already benefit from it.
+                let booster = booster
+                Task.detached(priority: .utility) {
+                    await booster.warm(terms: SettingsStore.shared.replacements)
+                }
             } catch {
                 state = .failed(error.localizedDescription)
                 throw error
@@ -48,8 +67,20 @@ final class ParakeetTranscriber: Transcriber {
     func transcribe(samples: [Float]) async throws -> Transcription {
         guard let manager else { throw TranscriberError.notReady }
         var decoderState = TdtDecoderState.make(decoderLayers: decoderLayers)
-        let result = try await manager.transcribe(samples, decoderState: &decoderState)
-        return Transcription(text: result.text,
+        let result = try await manager.transcribe(samples, decoderState: &decoderState,
+                                                  language: languageHint)
+        // Vocabulary biasing runs on the dictation (samples) path only: once
+        // per committed dictation, and never on transcribe(file:) — that's the
+        // CLI/eval surface, which must stay pure engine output the same way
+        // the text polisher never touches it.
+        var text = result.text
+        if let timings = result.tokenTimings,
+           let boosted = await booster.rescore(text: text, tokenTimings: timings,
+                                               samples: samples,
+                                               terms: SettingsStore.shared.replacements) {
+            text = boosted
+        }
+        return Transcription(text: text,
                              confidence: result.confidence,
                              audioDuration: result.duration,
                              processingTime: result.processingTime)
@@ -58,7 +89,8 @@ final class ParakeetTranscriber: Transcriber {
     func transcribe(file: URL) async throws -> Transcription {
         guard let manager else { throw TranscriberError.notReady }
         var decoderState = TdtDecoderState.make(decoderLayers: decoderLayers)
-        let result = try await manager.transcribe(file, decoderState: &decoderState)
+        let result = try await manager.transcribe(file, decoderState: &decoderState,
+                                                  language: languageHint)
         return Transcription(text: result.text,
                              confidence: result.confidence,
                              audioDuration: result.duration,
@@ -66,12 +98,17 @@ final class ParakeetTranscriber: Transcriber {
     }
 
     // Live sessions decode with the same batch pipeline as transcribe(samples:),
-    // so no extra model state is needed — just a decode function.
+    // so no extra model state is needed — just a decode function. Previews
+    // skip vocabulary biasing (it would add a CTC inference every tick); the
+    // final commit goes through transcribe(samples:) and applies it once —
+    // preview-vs-final divergence the live-typing contract already allows.
     func makeStreamingTranscription() -> StreamingTranscription? {
         guard manager != nil, state == .ready else { return nil }
         return RedecodeStreamingTranscription { [weak self] samples in
-            guard let self else { throw TranscriberError.notReady }
-            return try await self.transcribe(samples: samples).text
+            guard let self, let manager = self.manager else { throw TranscriberError.notReady }
+            var decoderState = TdtDecoderState.make(decoderLayers: self.decoderLayers)
+            return try await manager.transcribe(samples, decoderState: &decoderState,
+                                                language: self.languageHint).text
         }
     }
 }

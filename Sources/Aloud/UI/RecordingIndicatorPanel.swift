@@ -36,6 +36,11 @@ final class RecordingIndicatorPanel {
         set { model.settings = newValue }
     }
 
+    var levelsProvider: (() -> [PolishLevel])? {
+        get { model.levelsProvider }
+        set { model.levelsProvider = newValue }
+    }
+
     // True while we set the frame ourselves, so the didMove observer only
     // records user drags.
     private var isRepositioning = false
@@ -48,10 +53,13 @@ final class RecordingIndicatorPanel {
         set { model.isBasic = newValue }
     }
 
-    func show(levelProvider: @escaping () -> Float) {
+    // `command: true` marks a command hold — same live meter, purple styling,
+    // so "talking to the app" never looks like "typing into the document".
+    func show(levelProvider: @escaping () -> Float, command: Bool = false) {
         model.mode = .recording
         model.hint = nil
         model.isLocked = false
+        model.isCommand = command
         model.stillListening = false
         present()
         // While recording the pill takes mouse input so it can be dragged to
@@ -107,6 +115,16 @@ final class RecordingIndicatorPanel {
     func showTranscribing() {
         levelTimer?.invalidate()
         model.mode = .transcribing
+        model.isCommand = false
+        present()
+        panel?.ignoresMouseEvents = true
+    }
+
+    // Command twin of showTranscribing: the model is thinking, not typing yet.
+    func showWorking() {
+        levelTimer?.invalidate()
+        model.mode = .transcribing
+        model.isCommand = true
         present()
         panel?.ignoresMouseEvents = true
     }
@@ -219,10 +237,14 @@ final class IndicatorModel: ObservableObject {
     @Published var isLocked = false
     @Published var stillListening = false
     @Published var isBasic = false
+    @Published var isCommand = false
     @Published var notice: String?
     var onStop: (() -> Void)?
     var onResetPosition: (() -> Void)?
     var settings: SettingsStore?
+    // Which clean-up levels the quick menu offers (Concise only where the
+    // rewrite engine exists) — supplied by the controller.
+    var levelsProvider: (() -> [PolishLevel])?
 }
 
 struct IndicatorView: View {
@@ -234,13 +256,16 @@ struct IndicatorView: View {
             case .recording:
                 // Hands-free trades the red mic for an orange one plus a lock —
                 // a quiet "still listening" that users can discover on their own.
+                // A command hold gets a purple mic: Aloud is listening for an
+                // instruction, not taking dictation.
                 Image(systemName: "mic.fill")
-                    .foregroundStyle(model.isLocked ? Color.orange : Color.red)
+                    .foregroundStyle(model.isCommand ? Color.purple
+                                     : model.isLocked ? Color.orange : Color.red)
                     .symbolEffect(.pulse, isActive: model.stillListening)
                 // Reduced-accuracy session: same tag style as onboarding
                 // badges, present in held and hands-free pills alike.
                 if model.isBasic {
-                    Text("Basic")
+                    Text(loc("Basic"))
                         .font(.system(size: 9, weight: .semibold))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1.5)
@@ -252,7 +277,7 @@ struct IndicatorView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 } else if model.stillListening {
-                    Text("Still listening…")
+                    Text(loc("Still listening…"))
                         .foregroundStyle(.orange)
                         .frame(width: 90)
                 } else {
@@ -271,12 +296,12 @@ struct IndicatorView: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Stop — or press Esc")
+                    .help(loc("Stop — or press Esc"))
                 }
             case .transcribing:
                 ProgressView()
                     .controlSize(.small)
-                Text("Typing…")
+                Text(model.isCommand ? loc("Working…") : loc("Typing…"))
                     .foregroundStyle(.secondary)
             case .hint:
                 Image(systemName: "info.circle")
@@ -304,23 +329,23 @@ struct IndicatorView: View {
     @ViewBuilder
     private var quickMenu: some View {
         if let settings = model.settings {
-            Picker("Microphone", selection: Binding(
+            Picker(loc("Microphone"), selection: Binding(
                 get: { settings.microphoneUID },
                 set: { settings.microphoneUID = $0 })) {
-                Text("System default").tag(nil as String?)
+                Text(loc("System default")).tag(nil as String?)
                 ForEach(AudioDevices.inputDevices()) { d in
                     Text(d.name).tag(d.uid as String?)
                 }
             }
-            Picker("Clean-up", selection: Binding(
+            Picker(loc("Clean-up"), selection: Binding(
                 get: { settings.polishLevel },
                 set: { settings.polishLevel = $0 })) {
-                ForEach(PolishLevel.allCases) { level in
+                ForEach(model.levelsProvider?() ?? PolishLevel.allCases) { level in
                     Text(level.displayName).tag(level)
                 }
             }
             Divider()
-            Button("Reset Position") { model.onResetPosition?() }
+            Button(loc("Reset Position")) { model.onResetPosition?() }
         }
     }
 }

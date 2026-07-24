@@ -87,6 +87,14 @@ final class LiveTyper {
         apply("")
     }
 
+    // Replace text that ends at the cursor: backspace over `old`, type `new`.
+    // Used by "type exact words instead" — the enhanced text was just
+    // injected, so the cursor sits at its end.
+    static func replaceTrailing(_ old: String, with new: String) {
+        postBackspaces(old.count)
+        postText(new)
+    }
+
     // MARK: event synthesis
 
     private static func postBackspaces(_ count: Int) {

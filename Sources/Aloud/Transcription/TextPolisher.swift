@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 // Deterministic, fully-local post-processing of raw transcripts. No LLM, no
 // network: conservative rules that remove noise without ever rewriting meaning.
@@ -7,27 +8,38 @@ import Foundation
 //
 // Levels (Settings → Dictation → Clean-up):
 //   .off    — raw model output untouched
-//   .light  — filler words removed, whitespace/punctuation tidied
+//   .light  — filler words removed, whitespace/punctuation tidied,
+//             confidently-recognized names capitalized
 //   .standard (default) — light + spoken self-corrections ("scratch that")
 //                          + the user's personal replacements
+//   .concise — standard first, then an on-device rewrite tightens the wording
+//              (only offered on Macs whose system provides the rewrite engine;
+//              the exact words are still kept in History)
 enum PolishLevel: String, Codable, CaseIterable, Identifiable {
-    case off, light, standard
+    case off, light, standard, concise
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .off: return "Off"
-        case .light: return "Light"
-        case .standard: return "Standard"
+        case .off: return loc("Off")
+        case .light: return loc("Light")
+        case .standard: return loc("Standard")
+        case .concise: return loc("Concise")
         }
     }
 
     var explanation: String {
         switch self {
-        case .off: return "Exactly what you said, word for word."
-        case .light: return "Removes “um” and “uh”, tidies spacing."
-        case .standard: return "Also honors “scratch that” corrections and your replacements."
+        case .off: return loc("Exactly what you said, word for word.")
+        case .light: return loc("Removes “um” and “uh”, tidies spacing, capitalizes names.")
+        case .standard: return loc("Also honors “scratch that” corrections and your replacements.")
+        case .concise: return loc("Rewrites your words to be tighter — entirely on this Mac.")
         }
+    }
+
+    // The rule-based level that runs before (or instead of) the rewrite.
+    var deterministicLevel: PolishLevel {
+        self == .concise ? .standard : self
     }
 }
 
@@ -65,6 +77,12 @@ struct TextPolisher {
         }
 
         text = Self.tidy(text)
+        // Words the replacements just produced are the user's exact spelling —
+        // the name pass must never second-guess them.
+        let protected = level == .standard
+            ? Set(replacements.flatMap { $0.replacement.lowercased().split(separator: " ").map(String.init) })
+            : []
+        text = Self.capitalizeProperNouns(text, skipping: protected)
         return text
     }
 
@@ -152,5 +170,79 @@ struct TextPolisher {
             }
         }
         return String(chars)
+    }
+
+    // MARK: proper nouns
+
+    // The ASR model emits many names lowercase ("tell john i'm in london").
+    // Fix the confident ones deterministically with the system's on-device
+    // name tagger. Two hurdles make this conservative by construction:
+    //
+    // 1. The tagger leans heavily on capitalization, so it barely recognizes
+    //    lowercase names in place. It runs over a title-cased *probe* of the
+    //    text instead — same UTF-16 layout, every lowercase word capitalized —
+    //    which restores the shape it expects.
+    // 2. Probing that way over-fires on common nouns ("Invoice" reads as an
+    //    organization), so a word is only accepted when it is *not* in the
+    //    system's English lexicon — names like "gonzalez" aren't, words like
+    //    "invoice" are. No lexicon available → the whole pass stands down.
+    //
+    // Only all-lowercase words are ever touched, and never ones a replacement
+    // produced; a miss just leaves the transcript as the model wrote it.
+    private static let lexicon = NLEmbedding.wordEmbedding(for: .english)
+
+    static func capitalizeProperNouns(_ text: String, skipping skip: Set<String>) -> String {
+        guard let lexicon, !text.isEmpty else { return text }
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = text
+        var tokens: [Range<String.Index>] = []
+        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
+            tokens.append(range); return true
+        }
+
+        // Build the probe back to front so untouched ranges stay valid.
+        var probe = text
+        var candidates: [Range<String.Index>] = []
+        for range in tokens.reversed() {
+            let word = String(text[range])
+            guard word.count >= 2, word.contains(where: \.isLetter),
+                  word == word.lowercased() else { continue }
+            let first = word.first!
+            let upper = String(first).uppercased()
+            // Case changes that alter length (ß → SS) would break the shared
+            // layout — leave such words alone.
+            guard upper.utf16.count == String(first).utf16.count else { continue }
+            let firstRange = range.lowerBound..<text.index(after: range.lowerBound)
+            probe.replaceSubrange(sameRange(firstRange, in: probe, as: text), with: upper)
+            candidates.append(range)
+        }
+        guard !candidates.isEmpty else { return text }
+
+        let tagger = NLTagger(tagSchemes: [.nameType])
+        tagger.string = probe
+        let nameTags: Set<NLTag> = [.personalName, .placeName, .organizationName]
+        var result = text
+        for range in candidates {   // still back to front
+            let word = String(text[range]).lowercased()
+            guard !skip.contains(word), !lexicon.contains(word) else { continue }
+            let probeStart = sameRange(range, in: probe, as: text).lowerBound
+            guard let tag = tagger.tag(at: probeStart, unit: .word, scheme: .nameType).0,
+                  nameTags.contains(tag) else { continue }
+            let firstRange = range.lowerBound..<text.index(after: range.lowerBound)
+            result.replaceSubrange(firstRange, with: String(text[firstRange]).uppercased())
+        }
+        return result
+    }
+
+    // Probe and text share a UTF-16 layout by construction, so a range in one
+    // is the same pair of offsets in the other.
+    private static func sameRange(_ range: Range<String.Index>, in probe: String,
+                                  as text: String) -> Range<String.Index> {
+        let lo = text.utf16.distance(from: text.utf16.startIndex, to: range.lowerBound)
+        let hi = text.utf16.distance(from: text.utf16.startIndex, to: range.upperBound)
+        let plo = probe.utf16.index(probe.utf16.startIndex, offsetBy: lo)
+        let phi = probe.utf16.index(probe.utf16.startIndex, offsetBy: hi)
+        return (plo.samePosition(in: probe) ?? probe.startIndex)
+            ..< (phi.samePosition(in: probe) ?? probe.endIndex)
     }
 }

@@ -31,13 +31,39 @@ final class AppleSpeechTranscriber: Transcriber {
         return SFSpeechRecognizer.authorizationStatus() == .notDetermined
     }
 
+    // Declared dictation languages first (the user told us what they speak),
+    // then the system locale, then English as the always-available floor.
     private static var localeCandidates: [Locale] {
-        [Locale.current, Locale(identifier: "en_US")]
+        SettingsStore.shared.declaredLanguages.map { Locale(identifier: $0) }
+            + [Locale.current, Locale(identifier: "en_US")]
+    }
+
+    // A declared language is a bare code ("pt"); recognizer locales are
+    // regioned ("pt-BR"). Prefer an exact locale, settle for any region of
+    // the same language.
+    private static func resolve(from supported: [Locale]) -> Locale? {
+        for candidate in localeCandidates {
+            if let exact = supported.first(where: {
+                $0.identifier(.bcp47) == candidate.identifier(.bcp47)
+            }) { return exact }
+            if let sameLanguage = supported.first(where: {
+                $0.language.languageCode == candidate.language.languageCode
+            }) { return sameLanguage }
+        }
+        return nil
     }
 
     private static func legacyRecognizer() -> SFSpeechRecognizer? {
-        for locale in localeCandidates {
-            if let rec = SFSpeechRecognizer(locale: locale), rec.supportsOnDeviceRecognition {
+        guard let locale = resolve(from: Array(SFSpeechRecognizer.supportedLocales())) else {
+            return nil
+        }
+        if let rec = SFSpeechRecognizer(locale: locale), rec.supportsOnDeviceRecognition {
+            return rec
+        }
+        // The best language match may lack on-device support — fall back to
+        // anything that has it rather than lose basic dictation entirely.
+        for candidate in [Locale.current, Locale(identifier: "en_US")] {
+            if let rec = SFSpeechRecognizer(locale: candidate), rec.supportsOnDeviceRecognition {
                 return rec
             }
         }
@@ -69,9 +95,9 @@ final class AppleSpeechTranscriber: Transcriber {
     @available(macOS 26, *)
     private func prepareModern() async throws {
         let supported = await SpeechTranscriber.supportedLocales
-        guard let match = Self.localeCandidates.first(where: { candidate in
-            supported.contains { $0.identifier(.bcp47) == candidate.identifier(.bcp47) }
-        }) else { throw AppleSpeechError.unavailable }
+        guard let match = Self.resolve(from: supported) else {
+            throw AppleSpeechError.unavailable
+        }
         // System-managed asset install; a no-op when already present. Needs
         // network the first time, so this can fail offline — callers surface
         // that as "basic dictation isn't available right now".

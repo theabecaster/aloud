@@ -9,9 +9,10 @@ struct HistoryEntry: Codable, Identifiable, Equatable {
     let duration: TimeInterval   // spoken audio seconds
     let appName: String?         // app the text was typed into, when known
     let appBundleID: String?
+    let languageCode: String?    // detected language of the transcript, when confident
 
     init(text: String, rawText: String? = nil, duration: TimeInterval, date: Date = Date(),
-         appName: String? = nil, appBundleID: String? = nil) {
+         appName: String? = nil, appBundleID: String? = nil, languageCode: String? = nil) {
         self.id = UUID()
         self.date = date
         self.text = text
@@ -19,6 +20,7 @@ struct HistoryEntry: Codable, Identifiable, Equatable {
         self.duration = duration
         self.appName = appName
         self.appBundleID = appBundleID
+        self.languageCode = languageCode
     }
 }
 

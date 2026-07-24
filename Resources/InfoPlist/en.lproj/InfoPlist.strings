@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "Aloud uses the microphone to hear what you say while you hold the dictation key. Audio never leaves your Mac.";
+"NSSpeechRecognitionUsageDescription" = "Aloud can use your Mac’s built-in dictation as a temporary option while its own voice recognition finishes setting up. Audio never leaves your Mac.";

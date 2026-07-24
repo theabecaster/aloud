@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "Aloud usa el micrófono para oír lo que dices mientras mantienes pulsada la tecla de dictado. El audio nunca sale de tu Mac.";
+"NSSpeechRecognitionUsageDescription" = "Aloud puede usar el dictado integrado de tu Mac como opción temporal mientras su propio reconocimiento de voz termina de configurarse. El audio nunca sale de tu Mac.";

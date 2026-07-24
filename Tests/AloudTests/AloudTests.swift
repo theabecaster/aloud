@@ -161,6 +161,43 @@ final class HotkeyEngineTests: XCTestCase {
         XCTAssertEqual(engine.handle(type: .otherMouseDown, keyCode: 3, flags: [], time: 0), .none)
     }
 
+    func testEnhancerOutputValidation() {
+        let original = "We should move the launch back a week because testing is not done."
+        // Good rewrite passes through trimmed.
+        XCTAssertEqual(EnhancerOutputCheck.validate("  Move the launch back a week.  ", original: original),
+                       "Move the launch back a week.")
+        // The observed failure modes are all rejected.
+        XCTAssertNil(EnhancerOutputCheck.validate("", original: original))
+        XCTAssertNil(EnhancerOutputCheck.validate("```swift\nfunc x() {}\n```", original: original))
+        XCTAssertNil(EnhancerOutputCheck.validate(String(repeating: "padding ", count: 60), original: original))
+        XCTAssertNil(EnhancerOutputCheck.validate("I cannot rewrite the text as requested.", original: original))
+        XCTAssertNil(EnhancerOutputCheck.validate("I'm sorry, but I can't help with that.", original: original))
+        // A transcript that merely starts with "I can't" in the speaker's own
+        // voice is longer than a refusal and must survive — prefix match only
+        // rejects, it never rewrites, so the fallback keeps the polished text.
+        XCTAssertNotNil(EnhancerOutputCheck.validate("It cannot ship this week.", original: original))
+    }
+
+    @MainActor
+    func testContextHintBuiltFromFieldText() {
+        XCTAssertNil(DictationController.contextHint(from: nil))
+        XCTAssertNil(DictationController.contextHint(from: FocusSnapshot(appName: "X", appBundleID: "x")))
+        var snap = FocusSnapshot(appName: "Mail", appBundleID: "com.apple.mail")
+        snap.fieldText = "Hi Chellie — following up on the Smyth contract."
+        let hint = DictationController.contextHint(from: snap)
+        XCTAssertNotNil(hint)
+        XCTAssertTrue(hint!.contains("Chellie"))
+        // Long fields keep only the tail near the cursor.
+        snap.fieldText = String(repeating: "a", count: 1000) + " Chellie"
+        XCTAssertLessThan(DictationController.contextHint(from: snap)!.count, 450)
+    }
+
+    func testConciseFallsBackToStandardRules() {
+        XCTAssertEqual(PolishLevel.concise.deterministicLevel, .standard)
+        XCTAssertEqual(PolishLevel.standard.deterministicLevel, .standard)
+        XCTAssertEqual(PolishLevel.off.deterministicLevel, .off)
+    }
+
     func testHistorySearchMatching() {
         let entry = HistoryEntry(text: "Review the pull request",
                                  rawText: "review the the pull request",
@@ -205,6 +242,111 @@ final class HotkeyEngineTests: XCTestCase {
     }
 }
 
+final class CommandKeyEngineTests: XCTestCase {
+    private let key = Hotkey.default.keyCode
+    private let flag = Hotkey.default.modifierFlag!
+
+    func testHoldCommitsCommand() {
+        var engine = CommandKeyEngine(hotkey: .default)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .beginCommand)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.0), .commitCommand)
+    }
+
+    func testShortTapCancelsCommand() {
+        var engine = CommandKeyEngine(hotkey: .default)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .beginCommand)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05), .cancelCommand)
+    }
+
+    func testEscCancelsCommandHold() {
+        var engine = CommandKeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: flag, time: 0.3), .cancelCommand)
+        // The eventual release must not double-fire.
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.5), .none)
+    }
+
+    func testDoubleTapNeverLocks() {
+        // A command is one held utterance — no hands-free variant, ever.
+        var engine = CommandKeyEngine(hotkey: .default)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
+        _ = engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
+        XCTAssertEqual(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .cancelCommand)
+    }
+
+    func testOtherKeysFallThrough() {
+        // .none = not consumed: the manager falls through to the main engine.
+        var engine = CommandKeyEngine(hotkey: Hotkey(keyCode: 96, modifiers: 0, isModifierKey: false))
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 97, flags: [], time: 0), .none)
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: [], time: 0.1), .none)
+    }
+
+    func testRegularKeyCommandHotkey() {
+        var engine = CommandKeyEngine(hotkey: Hotkey(keyCode: 96, modifiers: 0, isModifierKey: false))
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 96, flags: [], time: 0), .beginCommand)
+        XCTAssertEqual(engine.handle(type: .keyUp, keyCode: 96, flags: [], time: 0.5), .commitCommand)
+    }
+}
+
+final class CommandIntentTests: XCTestCase {
+    func testRoutingFollowsSelection() {
+        // A selection means edit-in-place, whatever the parsed action said;
+        // no selection means write at the cursor.
+        let rewrite = CommandIntent(action: .rewrite, instruction: "make it shorter")
+        XCTAssertEqual(rewrite.route(hasSelection: true), .rewrite)
+        XCTAssertEqual(rewrite.route(hasSelection: false), .generate)
+        let generate = CommandIntent(action: .generate, instruction: "write a thank-you note")
+        XCTAssertEqual(generate.route(hasSelection: true), .rewrite)
+        XCTAssertEqual(generate.route(hasSelection: false), .generate)
+    }
+
+    func testTranslateRouting() {
+        let translate = CommandIntent(action: .translate, instruction: "translate this to Spanish",
+                                      language: "Spanish")
+        XCTAssertEqual(translate.route(hasSelection: true), .translate("Spanish"))
+        XCTAssertEqual(translate.route(hasSelection: false), .generate)
+        // No parsed target language → an ordinary rewrite; the instruction
+        // still carries the intent.
+        let vague = CommandIntent(action: .translate, instruction: "put this in French")
+        XCTAssertEqual(vague.route(hasSelection: true), .rewrite)
+    }
+
+    func testConversationalRestatementFallsBackToSpokenWords() {
+        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "Make it shorter",
+                                                          spoken: "uh make it shorter"),
+                       "Make it shorter")
+        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "I'd be happy to help you rewrite the text.",
+                                                          spoken: "rewrite this as a polite decline"),
+                       "rewrite this as a polite decline")
+        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "  ", spoken: "fix the grammar"),
+                       "fix the grammar")
+    }
+
+    func testLanguageResolver() {
+        XCTAssertEqual(LanguageResolver.language(named: "Spanish")?.languageCode?.identifier, "es")
+        XCTAssertEqual(LanguageResolver.language(named: " german ")?.languageCode?.identifier, "de")
+        XCTAssertEqual(LanguageResolver.language(named: "JAPANESE")?.languageCode?.identifier, "ja")
+        // (Not "Klingon" — ICU genuinely knows it as tlh.)
+        XCTAssertNil(LanguageResolver.language(named: "Wingdings"))
+        XCTAssertNil(LanguageResolver.language(named: ""))
+    }
+
+    func testGeneratedOutputValidation() {
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("  Thanks for the update!  "),
+                       "Thanks for the update!")
+        // Whole-output quoting is unwrapped; interior quotes are left alone.
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("\"I'm back Monday.\""),
+                       "I'm back Monday.")
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("“Back Monday.”"), "Back Monday.")
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("She said \"hi\" and \"bye\""),
+                       "She said \"hi\" and \"bye\"")
+        XCTAssertNil(CommandOutputCheck.validateGenerated(""))
+        XCTAssertNil(CommandOutputCheck.validateGenerated("```swift\nfunc x() {}\n```"))
+        XCTAssertNil(CommandOutputCheck.validateGenerated(String(repeating: "padding ", count: 200)))
+    }
+}
+
 final class UpdaterTests: XCTestCase {
     func testSemver() {
         XCTAssertTrue(Updater.semverLess("1.0.0", "1.0.1"))
@@ -236,6 +378,31 @@ final class HistoryStoreTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.2)
         let reloaded = HistoryStore(fileURL: url)
         XCTAssertEqual(reloaded.entries.count, 5)
+    }
+}
+
+final class LanguageDetectionTests: XCTestCase {
+    func testDetectsClearLanguages() {
+        XCTAssertEqual(LanguageDetection.code(
+            for: "Please send the quarterly report to the whole team before Friday."), "en")
+        XCTAssertEqual(LanguageDetection.code(
+            for: "Por favor envía el informe trimestral a todo el equipo antes del viernes."), "es")
+    }
+
+    func testShortTextNeverGuessed() {
+        XCTAssertNil(LanguageDetection.code(for: "ok"))
+        XCTAssertNil(LanguageDetection.code(for: "   "))
+    }
+
+    func testHistoryEntryDecodesLegacyPayloadWithoutLanguage() throws {
+        // Persisted before languageCode existed — must decode, not be set aside.
+        let legacy = Data("""
+        {"id":"E621E1F8-C36C-495A-93FC-0C247A3E6E5F","date":700000000,
+         "text":"hello there","duration":1.5}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(HistoryEntry.self, from: legacy)
+        XCTAssertEqual(decoded.text, "hello there")
+        XCTAssertNil(decoded.languageCode)
     }
 }
 

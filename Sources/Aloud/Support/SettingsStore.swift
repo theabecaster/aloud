@@ -14,6 +14,8 @@ final class SettingsStore: ObservableObject {
         hotkey = Self.loadHotkey(from: defaults) ?? .default
         handsFreeHotkey = (defaults.data(forKey: Keys.handsFreeHotkey))
             .flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) }
+        commandHotkey = (defaults.data(forKey: Keys.commandHotkey))
+            .flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) }
         launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
         microphoneUID = defaults.string(forKey: Keys.microphoneUID)
         onboardingComplete = defaults.bool(forKey: Keys.onboardingComplete)
@@ -21,6 +23,10 @@ final class SettingsStore: ObservableObject {
         polishLevel = (defaults.string(forKey: Keys.polishLevel)).flatMap(PolishLevel.init) ?? .standard
         replacements = (defaults.data(forKey: Keys.replacements))
             .flatMap { try? JSONDecoder().decode([Replacement].self, from: $0) } ?? []
+        snippets = (defaults.data(forKey: Keys.snippets))
+            .flatMap { try? JSONDecoder().decode([Snippet].self, from: $0) } ?? []
+        appModes = (defaults.data(forKey: Keys.appModes))
+            .flatMap { try? JSONDecoder().decode([AppModeRule].self, from: $0) } ?? []
         soundCues = defaults.object(forKey: Keys.soundCues) as? Bool ?? true
         indicatorPosition = (defaults.data(forKey: Keys.indicatorPosition))
             .flatMap { try? JSONDecoder().decode(CGPoint.self, from: $0) }
@@ -28,6 +34,10 @@ final class SettingsStore: ObservableObject {
         statsSeconds = defaults.object(forKey: Keys.statsSeconds) as? Double ?? 0
         statsDictations = defaults.object(forKey: Keys.statsDictations) as? Int ?? 0
         liveTyping = defaults.object(forKey: Keys.liveTyping) as? Bool ?? true
+        let storedLanguages = defaults.object(forKey: Keys.declaredLanguages) as? [String] ?? []
+        declaredLanguages = storedLanguages.isEmpty
+            ? [Locale.current.language.languageCode?.identifier ?? "en"]
+            : storedLanguages
         handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
         pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
     }
@@ -41,18 +51,22 @@ final class SettingsStore: ObservableObject {
     private enum Keys {
         static let hotkey = "hotkey"
         static let handsFreeHotkey = "handsFreeHotkey"
+        static let commandHotkey = "commandHotkey"
         static let launchAtLogin = "launchAtLogin"
         static let microphoneUID = "microphoneUID"
         static let onboardingComplete = "onboardingComplete"
         static let historyLimit = "historyLimit"
         static let polishLevel = "polishLevel"
         static let replacements = "replacements"
+        static let snippets = "snippets"
+        static let appModes = "appModes"
         static let soundCues = "soundCues"
         static let indicatorPosition = "indicatorPosition"
         static let statsWords = "statsWords"
         static let statsSeconds = "statsSeconds"
         static let statsDictations = "statsDictations"
         static let liveTyping = "liveTyping"
+        static let declaredLanguages = "declaredLanguages"
         static let handsFree = "handsFree"
         static let pressEnterCommand = "pressEnterCommand"
     }
@@ -68,6 +82,17 @@ final class SettingsStore: ObservableObject {
                 defaults.set(data, forKey: Keys.handsFreeHotkey)
             } else {
                 defaults.removeObject(forKey: Keys.handsFreeHotkey)
+            }
+        }
+    }
+    // Optional command key: hold it, say what you want done — the transcript
+    // drives an edit or a short generation instead of being typed. nil = off.
+    @Published var commandHotkey: Hotkey? {
+        didSet {
+            if let hk = commandHotkey, let data = try? JSONEncoder().encode(hk) {
+                defaults.set(data, forKey: Keys.commandHotkey)
+            } else {
+                defaults.removeObject(forKey: Keys.commandHotkey)
             }
         }
     }
@@ -89,6 +114,13 @@ final class SettingsStore: ObservableObject {
     @Published var replacements: [Replacement] {
         didSet { if let data = try? JSONEncoder().encode(replacements) { defaults.set(data, forKey: Keys.replacements) } }
     }
+    @Published var snippets: [Snippet] {
+        didSet { if let data = try? JSONEncoder().encode(snippets) { defaults.set(data, forKey: Keys.snippets) } }
+    }
+    // Per-app mode overrides (Settings → Modes); they beat the built-in table.
+    @Published var appModes: [AppModeRule] {
+        didSet { if let data = try? JSONEncoder().encode(appModes) { defaults.set(data, forKey: Keys.appModes) } }
+    }
     @Published var soundCues: Bool {
         didSet { defaults.set(soundCues, forKey: Keys.soundCues) }
     }
@@ -107,6 +139,13 @@ final class SettingsStore: ObservableObject {
     // Type words as they're spoken instead of all at once on release.
     @Published var liveTyping: Bool {
         didSet { defaults.set(liveTyping, forKey: Keys.liveTyping) }
+    }
+    // Languages the user dictates in (ISO codes, primary first). The primary
+    // engine detects its languages automatically; the declared list steers
+    // the basic-dictation engine's locale and, when a single language is
+    // declared, hints the primary. Default: the system language. Never empty.
+    @Published var declaredLanguages: [String] {
+        didSet { defaults.set(declaredLanguages, forKey: Keys.declaredLanguages) }
     }
     // Double-press the dictation key → keep listening until Esc. On by default.
     @Published var handsFree: Bool {

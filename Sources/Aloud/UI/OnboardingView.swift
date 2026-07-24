@@ -47,7 +47,7 @@ struct OnboardingView: View {
                 Button {
                     retreat()
                 } label: {
-                    Label("Back", systemImage: "chevron.left")
+                    Label(loc("Back"), systemImage: "chevron.left")
                 }
                 .buttonStyle(OnboardingButtonStyle(minWidth: 0))
                 .padding(.leading, 20)
@@ -56,7 +56,7 @@ struct OnboardingView: View {
         }
         .overlay(alignment: .bottomTrailing) {
             if step == .liveTyping {
-                Button("Next") { advance() }
+                Button(loc("Next")) { advance() }
                     .buttonStyle(OnboardingButtonStyle(prominent: true, minWidth: 60))
                     .keyboardShortcut(.defaultAction)
                     .padding(.trailing, 20)
@@ -114,39 +114,39 @@ struct OnboardingView: View {
 
     private var welcome: some View {
         screen(symbol: "waveform",
-               title: "Welcome to Aloud",
-               message: "Speak instead of typing — your words appear wherever your cursor is. Everything happens on your Mac; nothing you say ever leaves it.") {
+               title: loc("Welcome to Aloud"),
+               message: loc("Speak instead of typing — your words appear wherever your cursor is. Everything happens on your Mac; nothing you say ever leaves it.")) {
             VStack(spacing: 16) {
                 VStack(spacing: 10) {
                     HStack(spacing: 6) {
-                        Text("Hold")
+                        Text(loc("Hold"))
                         HotkeyRecorderView(hotkey: settings.hotkey) { controller.updateHotkey($0) }
-                        Text("· speak · let go")
+                        Text(loc("· speak · let go"))
                     }
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    Text("That’s your talk key. \(Hotkey.default.displayName) works great — or click it to pick your own.")
+                    Text(loc("That’s your talk key. %@ works great — or click it to pick your own.", Hotkey.default.displayName))
                         .font(.footnote)
                         .foregroundStyle(.tertiary)
                 }
-                primaryButton("Continue") { advance() }
+                primaryButton(loc("Continue")) { advance() }
             }
         }
     }
 
     private var microphone: some View {
         screen(symbol: "mic",
-               title: "Allow the Microphone",
-               message: "Aloud needs the microphone to hear you while you hold the dictation key. Audio is processed on this Mac and never uploaded.") {
+               title: loc("Allow the Microphone"),
+               message: loc("Aloud needs the microphone to hear you while you hold the dictation key. Audio is processed on this Mac and never uploaded.")) {
             VStack(spacing: 12) {
                 if micStatus == .denied {
-                    Text("Microphone access is turned off. Turn it on for Aloud in System Settings, then come back — this screen will move on automatically.")
+                    Text(loc("Microphone access is turned off. Turn it on for Aloud in System Settings, then come back — this screen will move on automatically."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                    primaryButton("Open System Settings") { Permissions.openMicrophoneSettings() }
+                    primaryButton(loc("Open System Settings")) { Permissions.openMicrophoneSettings() }
                 } else {
-                    primaryButton("Allow Microphone") {
+                    primaryButton(loc("Allow Microphone")) {
                         Permissions.requestMicrophone { granted in
                             micStatus = Permissions.microphone
                             if granted { advance() }
@@ -159,14 +159,14 @@ struct OnboardingView: View {
 
     private var accessibility: some View {
         screen(symbol: "keyboard",
-               title: "Let Aloud Type for You",
-               message: "This lets your talk key work in every app, and lets Aloud type the words where your cursor is. macOS calls this “Accessibility” access.") {
+               title: loc("Let Aloud Type for You"),
+               message: loc("This lets your talk key work in every app, and lets Aloud type the words where your cursor is. macOS calls this “Accessibility” access.")) {
             VStack(spacing: 12) {
-                Text("In System Settings, turn on the switch next to Aloud under Privacy & Security → Accessibility. This screen will move on automatically once it's on.")
+                Text(loc("In System Settings, turn on the switch next to Aloud under Privacy & Security → Accessibility. This screen will move on automatically once it's on."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                primaryButton("Open System Settings") {
+                primaryButton(loc("Open System Settings")) {
                     Permissions.openAccessibilitySettings()
                 }
             }
@@ -177,44 +177,44 @@ struct OnboardingView: View {
     // so this screen usually just shows progress and auto-advances when ready.
     private var model: some View {
         screen(symbol: "arrow.down.circle",
-               title: "Setting Up Your Voice",
-               message: "Aloud is downloading its voice recognition — this happens once (about 500 MB). After this, dictation works completely offline, forever.") {
+               title: loc("Setting Up Your Voice"),
+               message: loc("Aloud is downloading its voice recognition — this happens once (about 500 MB). After this, dictation works completely offline, forever.")) {
             VStack(spacing: 14) {
                 switch controller.transcriberState {
                 case .modelMissing where !isOnline, .failed where !isOnline:
-                    Label("No internet connection", systemImage: "wifi.slash")
+                    Label(loc("No internet connection"), systemImage: "wifi.slash")
                         .foregroundStyle(.secondary)
-                    Text("Aloud needs the internet once, for this download. This screen will continue automatically when you're back online.")
+                    Text(loc("Aloud needs the internet once, for this download. This screen will continue automatically when you're back online."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                     basicDictationOption
                 case .modelMissing:
-                    primaryButton("Download") {
+                    primaryButton(loc("Download")) {
                         Task { await controller.prepareModel() }
                     }
                 case .downloading(let progress):
                     ProgressView(value: progress)
                         .frame(width: 260)
-                    Text("\(Int(progress * 100))% — you can keep using your Mac")
+                    Text(loc("%ld%% — you can keep using your Mac", Int(progress * 100)))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     basicDictationOption
                 case .loading:
                     ProgressView()
-                    Text("Getting things ready… (first time takes a few seconds)")
+                    Text(loc("Getting things ready… (first time takes a few seconds)"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 case .ready:
-                    Label("Ready", systemImage: "checkmark.circle.fill")
+                    Label(loc("Ready"), systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                    primaryButton("Continue") { advance() }
+                    primaryButton(loc("Continue")) { advance() }
                 case .failed:
-                    Text("The download didn’t finish. Check your internet connection and try again.")
+                    Text(loc("The download didn’t finish. Check your internet connection and try again."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                    primaryButton("Try Again") {
+                    primaryButton(loc("Try Again")) {
                         Task { await controller.prepareModel() }
                     }
                     basicDictationOption
@@ -233,7 +233,7 @@ struct OnboardingView: View {
                 if startingBasic {
                     ProgressView().controlSize(.small)
                 } else {
-                    secondaryButton("Start Now with Basic Dictation") {
+                    secondaryButton(loc("Start Now with Basic Dictation")) {
                         startingBasic = true
                         basicUnavailable = false
                         Task {
@@ -246,8 +246,10 @@ struct OnboardingView: View {
                     }
                 }
                 Text(basicUnavailable
-                     ? "Basic dictation isn’t available right now — please wait for the download."
-                     : "Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes\(isOnline ? "" : " — it resumes when you’re back online").")
+                     ? loc("Basic dictation isn’t available right now — please wait for the download.")
+                     : isOnline
+                     ? loc("Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes.")
+                     : loc("Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes — it resumes when you’re back online."))
                     .font(.footnote)
                     .foregroundStyle(basicUnavailable ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
                     .multilineTextAlignment(.center)
@@ -257,19 +259,19 @@ struct OnboardingView: View {
 
     private var liveTyping: some View {
         screen(symbol: "text.cursor",
-               title: "How Should Words Appear?",
-               message: "You can change this any time in Settings.") {
+               title: loc("How Should Words Appear?"),
+               message: loc("You can change this any time in Settings.")) {
             HStack(spacing: 12) {
                 choiceCard(symbol: "text.cursor",
-                           title: "Live",
-                           badge: "Experimental",
-                           caption: "Words appear as you say them and settle as Aloud hears more.",
+                           title: loc("Live"),
+                           badge: loc("Experimental"),
+                           caption: loc("Words appear as you say them and settle as Aloud hears more."),
                            selected: settings.liveTyping) {
                     settings.liveTyping = true
                 }
                 choiceCard(symbol: "text.insert",
-                           title: "All at once",
-                           caption: "Everything is typed the moment you let go of the key.",
+                           title: loc("All at once"),
+                           caption: loc("Everything is typed the moment you let go of the key."),
                            selected: !settings.liveTyping) {
                     settings.liveTyping = false
                 }
@@ -328,38 +330,38 @@ struct OnboardingView: View {
 
     private var tryIt: some View {
         screen(symbol: "quote.bubble",
-               title: "Try It",
-               message: "Click the box below, hold \(controller.settings.hotkey.displayName) while you say something, then let go.") {
+               title: loc("Try It"),
+               message: loc("Click the box below, hold %@ while you say something, then let go.", controller.settings.hotkey.displayName)) {
             VStack(spacing: 16) {
-                TextField("Your words will appear here", text: .constant(controller.lastTranscription))
+                TextField(loc("Your words will appear here"), text: .constant(controller.lastTranscription))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 300)
                 if controller.usingFallback {
                     // First impressions happen on the basic engine after a
                     // skip — make clear this isn't Aloud at full strength.
-                    Text("You’re trying basic dictation — accuracy gets noticeably better on its own once setup finishes.")
+                    Text(loc("You’re trying basic dictation — accuracy gets noticeably better on its own once setup finishes."))
                         .font(.footnote)
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
                 }
                 if tryItDone {
-                    Label("That’s it — you’re set", systemImage: "checkmark.circle.fill")
+                    Label(loc("That’s it — you’re set"), systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 }
-                (Text("Aloud lives in your menu bar — the ")
+                (Text(loc("Aloud lives in your menu bar — the "))
                  + Text(Image(systemName: "waveform"))
-                 + Text(" icon at the top of your screen."))
+                 + Text(loc(" icon at the top of your screen.")))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                Text("Tip: double-press \(controller.settings.hotkey.displayName) to keep listening hands-free — Esc finishes. You can turn this off in Settings.")
+                Text(loc("Tip: double-press %@ to keep listening hands-free — Esc finishes. You can turn this off in Settings.", controller.settings.hotkey.displayName))
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
                 if tryItDone {
-                    primaryButton("Done") { onFinished() }
+                    primaryButton(loc("Done")) { onFinished() }
                 } else {
-                    secondaryButton("Skip for now") { onFinished() }
+                    secondaryButton(loc("Skip for now")) { onFinished() }
                 }
             }
         }
@@ -421,7 +423,7 @@ struct OnboardingView: View {
 
     private func reclaimFocus() {
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.windows.first { $0.title == "Welcome to Aloud" }?.makeKeyAndOrderFront(nil)
+        NSApp.windows.first { $0.title == loc("Welcome to Aloud") }?.makeKeyAndOrderFront(nil)
     }
 
     // Mirror of advance(): step backwards, skipping steps that are already
