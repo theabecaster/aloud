@@ -2,7 +2,7 @@ import AVFoundation
 import AppKit
 import ApplicationServices
 
-// Central permission checks + System Settings deep links. See docs/permissions.md.
+// Central permission checks + System Settings deep links.
 enum Permissions {
     enum Status: String { case granted, denied, notDetermined }
 
