@@ -55,6 +55,14 @@ struct HotkeyEngine {
         lastTapTime = -1
     }
 
+    // Jump straight to a hands-free session (the dedicated hands-free key
+    // skips the double-tap dance). Caller emits .begin/.lock itself.
+    mutating func forceLock() {
+        isHeld = false
+        isLocked = true
+        lastTapTime = -1
+    }
+
     mutating func handle(type: CGEventType, keyCode: UInt16, flags: CGEventFlags,
                          time: TimeInterval) -> HotkeyAction {
         switch type {
@@ -68,6 +76,14 @@ struct HotkeyEngine {
             }
             return .none
 
+        case .otherMouseDown:
+            guard hotkey.isMouseButton, keyCode == hotkey.keyCode, !isHeld else { return .none }
+            return press(time: time)
+
+        case .otherMouseUp:
+            guard hotkey.isMouseButton, keyCode == hotkey.keyCode, isHeld else { return .none }
+            return release(time: time)
+
         case .keyDown:
             if keyCode == UInt16(kVK_Escape), isHeld || isLocked {
                 // Esc finishes a hands-free session (all that dictation should
@@ -76,14 +92,15 @@ struct HotkeyEngine {
                 isHeld = false; isLocked = false; lastTapTime = -1
                 return wasLocked ? .commit : .cancel
             }
-            guard !hotkey.isModifierKey, keyCode == hotkey.keyCode, !isHeld,
+            guard !hotkey.isModifierKey, !hotkey.isMouseButton, keyCode == hotkey.keyCode, !isHeld,
                   flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).rawValue
                     == CGEventFlags(rawValue: hotkey.modifiers).intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).rawValue
             else { return .none }
             return press(time: time)
 
         case .keyUp:
-            guard !hotkey.isModifierKey, keyCode == hotkey.keyCode, isHeld else { return .none }
+            guard !hotkey.isModifierKey, !hotkey.isMouseButton, keyCode == hotkey.keyCode, isHeld
+            else { return .none }
             return release(time: time)
 
         default:
@@ -160,6 +177,12 @@ final class HotkeyManager {
         set { engine.handsFreeEnabled = newValue }
     }
 
+    // Optional dedicated hands-free key: one press starts a locked session,
+    // another finishes it. Handled ahead of the engine; ignored when it
+    // duplicates the main key.
+    var handsFreeHotkey: Hotkey?
+    private var handsFreeModifierWasDown = false
+
     // Whether the event tap is installed and listening.
     var isActive: Bool { tap != nil }
 
@@ -184,7 +207,9 @@ final class HotkeyManager {
         let mask: CGEventMask =
             (1 << CGEventType.keyDown.rawValue) |
             (1 << CGEventType.keyUp.rawValue) |
-            (1 << CGEventType.flagsChanged.rawValue)
+            (1 << CGEventType.flagsChanged.rawValue) |
+            (1 << CGEventType.otherMouseDown.rawValue) |
+            (1 << CGEventType.otherMouseUp.rawValue)
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -220,11 +245,62 @@ final class HotkeyManager {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
-        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        // Mouse events carry a button number instead of a keycode.
+        let isMouse = type == .otherMouseDown || type == .otherMouseUp
+        let keyCode = isMouse
+            ? UInt16(clamping: event.getIntegerValueField(.mouseEventButtonNumber))
+            : UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+
+        if let action = handsFreeKeyAction(type: type, keyCode: keyCode, flags: event.flags) {
+            if action != .none {
+                DispatchQueue.main.async { [weak self] in self?.onAction?(action) }
+            }
+            return
+        }
+
         let action = engine.handle(type: type, keyCode: keyCode, flags: event.flags,
                                    time: ProcessInfo.processInfo.systemUptime)
         if action != .none {
             DispatchQueue.main.async { [weak self] in self?.onAction?(action) }
         }
+    }
+
+    // Detect a press of the dedicated hands-free key. Returns nil when the
+    // event isn't ours (fall through to the engine); .none swallows a release.
+    private func handsFreeKeyAction(type: CGEventType, keyCode: UInt16,
+                                    flags: CGEventFlags) -> HotkeyAction? {
+        guard let hk = handsFreeHotkey, hk != engine.hotkey else { return nil }
+        let pressed: Bool
+        switch type {
+        case .otherMouseDown where hk.isMouseButton && keyCode == hk.keyCode:
+            pressed = true
+        case .otherMouseUp where hk.isMouseButton && keyCode == hk.keyCode:
+            return HotkeyAction.none
+        case .keyDown where !hk.isModifierKey && !hk.isMouseButton && keyCode == hk.keyCode:
+            let relevant: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
+            guard flags.intersection(relevant).rawValue
+                    == CGEventFlags(rawValue: hk.modifiers).intersection(relevant).rawValue
+            else { return nil }
+            pressed = true
+        case .keyUp where !hk.isModifierKey && !hk.isMouseButton && keyCode == hk.keyCode:
+            return HotkeyAction.none
+        case .flagsChanged where hk.isModifierKey && keyCode == hk.keyCode:
+            guard let flag = hk.modifierFlag else { return nil }
+            let nowDown = flags.contains(flag)
+            defer { handsFreeModifierWasDown = nowDown }
+            guard nowDown, !handsFreeModifierWasDown else { return HotkeyAction.none }
+            pressed = true
+        default:
+            return nil
+        }
+        guard pressed else { return HotkeyAction.none }
+        // A session in any state ends; idle begins a locked one.
+        if engine.isLocked || engine.isHeld {
+            engine.reset()
+            return .commit
+        }
+        engine.forceLock()
+        DispatchQueue.main.async { [weak self] in self?.onAction?(.begin) }
+        return .lock
     }
 }

@@ -79,12 +79,34 @@ struct GeneralSettings: View {
                         controller.updateHotkey(new)
                     }
                 }
-                Text("Hold to talk, release to type. Press Esc while holding to cancel.")
+                Text("Hold to talk, release to type. Press Esc while holding to cancel. Extra mouse buttons work too.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                if settings.handsFree {
+                    LabeledContent("Hands-free key") {
+                        HStack(spacing: 6) {
+                            OptionalHotkeyRecorderView(hotkey: settings.handsFreeHotkey) { new in
+                                settings.handsFreeHotkey = new
+                            }
+                            if settings.handsFreeHotkey != nil {
+                                Button {
+                                    settings.handsFreeHotkey = nil
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Remove the hands-free key")
+                            }
+                        }
+                    }
+                    Text("Optional. Press once to start listening hands-free, press again to finish.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             } footer: {
                 if settings.handsFree {
-                    Text("Double-press the key to keep listening hands-free; press Esc to finish.")
+                    Text("Double-press the dictation key also works for hands-free; press Esc to finish.")
                         .font(.footnote)
                         .foregroundStyle(.tertiary)
                 }
@@ -145,6 +167,28 @@ struct HotkeyRecorderView: View {
     }
 }
 
+// Same recorder for an optional slot — shows "None" until a key is set.
+struct OptionalHotkeyRecorderView: View {
+    var hotkey: Hotkey?
+    var onChange: (Hotkey) -> Void
+    @State private var recording = false
+
+    var body: some View {
+        Button {
+            recording.toggle()
+            if recording { KeyCaptureWindow.begin { captured in
+                recording = false
+                if let captured { onChange(captured) }
+            } }
+        } label: {
+            Text(recording ? "Press a key…" : (hotkey?.displayName ?? "None"))
+                .frame(minWidth: 110)
+        }
+        .buttonStyle(.bordered)
+        .tint(recording ? .accentColor : nil)
+    }
+}
+
 // Captures the next key or lone-modifier press via a local event monitor.
 @MainActor
 enum KeyCaptureWindow {
@@ -153,7 +197,14 @@ enum KeyCaptureWindow {
     static func begin(completion: @escaping (Hotkey?) -> Void) {
         end()
         var lastFlags = NSEvent.modifierFlags
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .otherMouseDown]) { event in
+            if event.type == .otherMouseDown {
+                // Extra mouse buttons (3rd and up) can be push-to-talk keys.
+                end()
+                completion(Hotkey(keyCode: UInt16(clamping: event.buttonNumber),
+                                  modifiers: 0, isModifierKey: false, isMouseButton: true))
+                return nil
+            }
             if event.type == .keyDown {
                 if event.keyCode == 53 { // Esc cancels recording
                     end(); completion(nil); return nil

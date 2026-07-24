@@ -64,6 +64,10 @@ final class DictationController: ObservableObject {
         settings.$handsFree
             .sink { [weak self] enabled in self?.hotkeyManager.handsFree = enabled }
             .store(in: &cancellables)
+        hotkeyManager.handsFreeHotkey = settings.handsFreeHotkey
+        settings.$handsFreeHotkey
+            .sink { [weak self] hk in self?.hotkeyManager.handsFreeHotkey = hk }
+            .store(in: &cancellables)
     }
 
     // MARK: lifecycle
@@ -215,13 +219,21 @@ final class DictationController: ObservableObject {
         // screen be, keep dictating at the new cursor position. Aloud's own
         // synthetic keystrokes are stamped and ignored; Esc and a non-modifier
         // hotkey are session control, not editing.
-        let hotkeyCode = settings.hotkey.keyCode
+        let hotkey = settings.hotkey
+        let handsFreeKey = settings.handsFreeHotkey
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
             let isKeystroke = event.type == .keyDown
             if isKeystroke {
                 if event.cgEvent?.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.marker { return }
-                if event.keyCode == UInt16(kVK_Escape) || event.keyCode == hotkeyCode { return }
+                if event.keyCode == UInt16(kVK_Escape) || event.keyCode == hotkey.keyCode { return }
+                if let hk = handsFreeKey, !hk.isMouseButton, event.keyCode == hk.keyCode { return }
+            }
+            // A press of a mouse-button hotkey is session control, not a cursor
+            // move — rebasing on it would re-type the whole dictation at commit.
+            if event.type == .otherMouseDown {
+                if hotkey.isMouseButton, event.buttonNumber == Int(hotkey.keyCode) { return }
+                if let hk = handsFreeKey, hk.isMouseButton, event.buttonNumber == Int(hk.keyCode) { return }
             }
             Task { @MainActor in
                 guard let self else { return }

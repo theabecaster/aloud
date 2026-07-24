@@ -12,6 +12,8 @@ final class SettingsStore: ObservableObject {
     init(defaults: UserDefaults = SettingsStore.resolveDefaults()) {
         self.defaults = defaults
         hotkey = Self.loadHotkey(from: defaults) ?? .default
+        handsFreeHotkey = (defaults.data(forKey: Keys.handsFreeHotkey))
+            .flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) }
         launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
         microphoneUID = defaults.string(forKey: Keys.microphoneUID)
         onboardingComplete = defaults.bool(forKey: Keys.onboardingComplete)
@@ -34,6 +36,7 @@ final class SettingsStore: ObservableObject {
 
     private enum Keys {
         static let hotkey = "hotkey"
+        static let handsFreeHotkey = "handsFreeHotkey"
         static let launchAtLogin = "launchAtLogin"
         static let microphoneUID = "microphoneUID"
         static let onboardingComplete = "onboardingComplete"
@@ -48,6 +51,17 @@ final class SettingsStore: ObservableObject {
 
     @Published var hotkey: Hotkey {
         didSet { if let data = try? JSONEncoder().encode(hotkey) { defaults.set(data, forKey: Keys.hotkey) } }
+    }
+    // Optional dedicated hands-free key: press to start a locked session,
+    // press again to finish. nil = double-tap the main key only.
+    @Published var handsFreeHotkey: Hotkey? {
+        didSet {
+            if let hk = handsFreeHotkey, let data = try? JSONEncoder().encode(hk) {
+                defaults.set(data, forKey: Keys.handsFreeHotkey)
+            } else {
+                defaults.removeObject(forKey: Keys.handsFreeHotkey)
+            }
+        }
     }
     @Published var launchAtLogin: Bool {
         didSet { defaults.set(launchAtLogin, forKey: Keys.launchAtLogin) }

@@ -138,6 +138,37 @@ final class HotkeyEngineTests: XCTestCase {
         let decoded = try JSONDecoder().decode(Hotkey.self, from: JSONEncoder().encode(hk))
         XCTAssertEqual(decoded, hk)
     }
+
+    func testHotkeyDecodesLegacyPayloadWithoutMouseField() throws {
+        // Persisted before isMouseButton existed — must decode, not reset to default.
+        let legacy = Data(#"{"keyCode":58,"modifiers":0,"isModifierKey":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(Hotkey.self, from: legacy)
+        XCTAssertEqual(decoded, .default)
+        XCTAssertFalse(decoded.isMouseButton)
+    }
+
+    func testMouseButtonHotkeyHoldCommit() {
+        var engine = HotkeyEngine(hotkey: Hotkey(keyCode: 3, modifiers: 0,
+                                                 isModifierKey: false, isMouseButton: true))
+        XCTAssertEqual(engine.handle(type: .otherMouseDown, keyCode: 3, flags: [], time: 0), .begin)
+        XCTAssertEqual(engine.handle(type: .otherMouseUp, keyCode: 3, flags: [], time: 0.5), .commit)
+        // A keyboard key with the same code must not trigger a mouse hotkey.
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 3, flags: [], time: 1.0), .none)
+    }
+
+    func testMouseButtonIgnoredForKeyboardHotkey() {
+        var engine = HotkeyEngine(hotkey: Hotkey(keyCode: 3, modifiers: 0, isModifierKey: false))
+        XCTAssertEqual(engine.handle(type: .otherMouseDown, keyCode: 3, flags: [], time: 0), .none)
+    }
+
+    func testForceLockBehavesLikeHandsFreeSession() {
+        var engine = HotkeyEngine(hotkey: .default)
+        engine.forceLock()
+        XCTAssertTrue(engine.isLocked)
+        // Esc finishes and commits, exactly like a double-tap lock.
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: [], time: 1.0), .commit)
+        XCTAssertFalse(engine.isLocked)
+    }
 }
 
 final class UpdaterTests: XCTestCase {
