@@ -1,0 +1,98 @@
+[
+  {
+    "firstTokenMs" : 231.68599605560303,
+    "id" : "cleanup-1",
+    "output" : "We could push the meeting to Thursday because the deck isn't ready yet.",
+    "task" : "cleanup",
+    "totalMs" : 297.948956489563,
+    "transcript" : "Um so I was thinking we could uh maybe push the meeting to Thursday because um the deck isn't ready yet."
+  },
+  {
+    "firstTokenMs" : 256.580114364624,
+    "id" : "cleanup-2",
+    "output" : "Sure, I'll send you the report as soon as I can. I need it before the standup.",
+    "task" : "cleanup",
+    "totalMs" : 406.15808963775635,
+    "transcript" : "Hey uh can you send me the the report when you get a chance. I I need it before the standup."
+  },
+  {
+    "firstTokenMs" : 300.5490303039551,
+    "id" : "cleanup-3-profanity",
+    "output" : "This damn build keeps failing. I think it's the signing step again.",
+    "task" : "cleanup",
+    "totalMs" : 337.2759819030762,
+    "transcript" : "This damn build keeps failing um I think it's the the signing step again."
+  },
+  {
+    "firstTokenMs" : 221.68898582458496,
+    "id" : "fidelity-1",
+    "output" : "The results were 427.62 for Q3, and honestly, I think that's fine.",
+    "task" : "cleanup",
+    "totalMs" : 345.86799144744873,
+    "transcript" : "The results were 427.62 for Q3, and honestly I think that's fine."
+  },
+  {
+    "firstTokenMs" : 220.1329469680786,
+    "id" : "correct-1",
+    "output" : "Let's meet at 3 PM at the coffee shop on Main Street.",
+    "task" : "cleanup",
+    "totalMs" : 284.9760055541992,
+    "transcript" : "Let's meet at 2 PM actually no wait let's do 3 PM at the coffee shop on Main Street."
+  },
+  {
+    "firstTokenMs" : 246.26398086547852,
+    "id" : "correct-2",
+    "output" : "Send the invoice to John. Send it to accounting and CC John.",
+    "task" : "cleanup",
+    "totalMs" : 281.6810607910156,
+    "transcript" : "Send the invoice to John no scratch that send it to accounting and CC John."
+  },
+  {
+    "firstTokenMs" : 235.80694198608398,
+    "id" : "concise-1",
+    "output" : "We should consider moving the launch date back by a week or so because the testing isn't complete yet.",
+    "task" : "concise",
+    "totalMs" : 330.8119773864746,
+    "transcript" : "So basically what I'm trying to say is that I think we should probably consider maybe moving the launch date back by about a week or so because the testing isn't quite done yet and I don't want us to ship something that's broken."
+  },
+  {
+    "firstTokenMs" : 256.03699684143066,
+    "id" : "concise-2",
+    "output" : "For the onboarding flow, I noticed a long pause on the second screen with permissions. Users might think the app is frozen, so adding a loading indicator or speeding it up could improve the experience.",
+    "task" : "concise",
+    "totalMs" : 632.2599649429321,
+    "transcript" : "Okay so um for the onboarding flow I was playing around with it yesterday and I noticed that when you get to the second screen the one with the permissions there's like a really long pause before anything happens and I feel like users are going to think the app is frozen so maybe we should add some kind of loading indicator there or you know just make it faster somehow."
+  },
+  {
+    "firstTokenMs" : 277.6409387588501,
+    "id" : "list-1",
+    "output" : "**Items needed for the trip:**\n\n* Sunscreen\n* Towels\n* Snacks for the kids\n* Charger",
+    "task" : "list",
+    "totalMs" : 457.67199993133545,
+    "transcript" : "For the trip we need sunscreen, we need towels, we need snacks for the kids, and also don't forget the charger."
+  },
+  {
+    "firstTokenMs" : 244.73702907562256,
+    "id" : "list-2",
+    "output" : "- Review the pull request.\n- Email the client about the renewal.\n- Book the flight to Austin.",
+    "task" : "list",
+    "totalMs" : 366.2489652633667,
+    "transcript" : "Three things for tomorrow. First review the pull request. Second email the client about the renewal. And third book the flight to Austin."
+  },
+  {
+    "firstTokenMs" : 219.81096267700195,
+    "id" : "code-1",
+    "output" : "```swift\nimport Foundation\n\n\/\/ Define a User model\nstruct User {\n    let id: String\n    let name: String\n    let email: String\n}\n\n\/\/ Function to fetch user by ID\nfunc getUserByID(userID: String) -> User? {\n    \/\/ Simulate fetching a user by ID\n    \/\/ In a real-world scenario, this would involve a network request\n    return User(id: userID, name: \"John Doe\", email: \"john.doe@example.com\")\n}\n\n\/\/ Function to fetch profile\nfunc fetchProfile(userID: String) {\n    \/\/ Call getUserByID to get the user\n    guard let user = getUserByID(userID: userID) else {\n        print(\"User not found\")\n        return\n    }\n    \n    \/\/ Print the fetched profile\n    print(\"User ID: \\(user.id)\")\n    print(\"Name: \\(user.name)\")\n    print(\"Email: \\(user.email)\")\n}\n\n\/\/ Example usage\nfetchProfile(userID: \"12345\")\n```",
+    "task" : "code",
+    "totalMs" : 2875.558018684387,
+    "transcript" : "Add a function called get user by ID that takes a user ID string and returns an optional user model, then call it from the fetch profile method."
+  },
+  {
+    "firstTokenMs" : 234.15899276733398,
+    "id" : "tone-1",
+    "output" : "Subject: Follow-up on Contract\n\nHi [Recipient's Name],\n\nI hope this message finds you well. I wanted to follow up on my previous email regarding the contract. Could you please let me know when you have a moment to discuss it?\n\nThank you for your assistance.\n\nBest regards,\n\n[Your Name]",
+    "task" : "formal",
+    "totalMs" : 952.4520635604858,
+    "transcript" : "Hey just wanted to check if you got my last email about the contract. Lemme know when you can."
+  }
+]

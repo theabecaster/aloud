@@ -1,0 +1,98 @@
+[
+  {
+    "firstTokenMs" : 272.11904525756836,
+    "id" : "cleanup-1",
+    "output" : "I was thinking we could maybe push the meeting to Thursday because the deck isn't ready yet.",
+    "task" : "cleanup",
+    "totalMs" : 393.3650255203247,
+    "transcript" : "Um so I was thinking we could uh maybe push the meeting to Thursday because um the deck isn't ready yet."
+  },
+  {
+    "firstTokenMs" : 241.24205112457275,
+    "id" : "cleanup-2",
+    "output" : "Hey, can you send me the report when you get a chance? I need it before the standup.",
+    "task" : "cleanup",
+    "totalMs" : 363.21496963500977,
+    "transcript" : "Hey uh can you send me the the report when you get a chance. I I need it before the standup."
+  },
+  {
+    "firstTokenMs" : 326.17104053497314,
+    "id" : "cleanup-3-profanity",
+    "output" : "This damn build keeps failing. I think it's the signing step again.",
+    "task" : "cleanup",
+    "totalMs" : 363.1700277328491,
+    "transcript" : "This damn build keeps failing um I think it's the the signing step again."
+  },
+  {
+    "firstTokenMs" : 239.43793773651123,
+    "id" : "fidelity-1",
+    "output" : "The results were 427.62 for Q3, and honestly, I think that's fine.",
+    "task" : "cleanup",
+    "totalMs" : 360.37492752075195,
+    "transcript" : "The results were 427.62 for Q3, and honestly I think that's fine."
+  },
+  {
+    "firstTokenMs" : 237.76698112487793,
+    "id" : "correct-1",
+    "output" : "Let's meet at 3 PM at the coffee shop on Main Street.",
+    "task" : "cleanup",
+    "totalMs" : 302.47294902801514,
+    "transcript" : "Let's meet at 2 PM actually no wait let's do 3 PM at the coffee shop on Main Street."
+  },
+  {
+    "firstTokenMs" : 224.0520715713501,
+    "id" : "correct-2",
+    "output" : "Send invoice to John.",
+    "task" : "cleanup",
+    "totalMs" : 226.98307037353516,
+    "transcript" : "Send the invoice to John no scratch that send it to accounting and CC John."
+  },
+  {
+    "firstTokenMs" : 223.68597984313965,
+    "id" : "concise-1",
+    "output" : "We should probably consider moving the launch date back by a week or so because the testing isn't quite done yet.",
+    "task" : "concise",
+    "totalMs" : 375.40292739868164,
+    "transcript" : "So basically what I'm trying to say is that I think we should probably consider maybe moving the launch date back by about a week or so because the testing isn't quite done yet and I don't want us to ship something that's broken."
+  },
+  {
+    "firstTokenMs" : 331.1460018157959,
+    "id" : "concise-2",
+    "output" : "I noticed a long pause on the second screen with permissions yesterday. Users might think the app is frozen. Adding a loading indicator or speeding it up could help.",
+    "task" : "concise",
+    "totalMs" : 654.0570259094238,
+    "transcript" : "Okay so um for the onboarding flow I was playing around with it yesterday and I noticed that when you get to the second screen the one with the permissions there's like a really long pause before anything happens and I feel like users are going to think the app is frozen so maybe we should add some kind of loading indicator there or you know just make it faster somehow."
+  },
+  {
+    "firstTokenMs" : 252.74193286895752,
+    "id" : "list-1",
+    "output" : "- Sunscreen\n- Towels\n- Snacks for the kids\n- Charger",
+    "task" : "list",
+    "totalMs" : 318.22097301483154,
+    "transcript" : "For the trip we need sunscreen, we need towels, we need snacks for the kids, and also don't forget the charger."
+  },
+  {
+    "firstTokenMs" : 254.99403476715088,
+    "id" : "list-2",
+    "output" : "- Review the pull request.\n- Email the client about the renewal.\n- Book the flight to Austin.",
+    "task" : "list",
+    "totalMs" : 375.08106231689453,
+    "transcript" : "Three things for tomorrow. First review the pull request. Second email the client about the renewal. And third book the flight to Austin."
+  },
+  {
+    "firstTokenMs" : 219.1990613937378,
+    "id" : "code-1",
+    "output" : "```javascript\nfunction getUserById(userId) {\n  return fetch(`\/api\/users\/${userId}`)\n    .then(response => response.json())\n    .catch(error => {\n      console.error('Error fetching user:', error);\n      return null;\n    });\n}\n\nfetchProfile() {\n  const userId = '12345'; \/\/ Replace with actual user ID\n  const userModel = getUserById(userId);\n\n  if (userModel) {\n    console.log('User fetched successfully:', userModel);\n  } else {\n    console.log('Failed to fetch user');\n  }\n}\n```",
+    "task" : "code",
+    "totalMs" : 2030.0960540771484,
+    "transcript" : "Add a function called get user by ID that takes a user ID string and returns an optional user model, then call it from the fetch profile method."
+  },
+  {
+    "firstTokenMs" : 338.689923286438,
+    "id" : "tone-1",
+    "output" : "I have not received your email regarding the contract. Please let me know when you can send it.",
+    "task" : "formal",
+    "totalMs" : 432.5079917907715,
+    "transcript" : "Hey just wanted to check if you got my last email about the contract. Lemme know when you can."
+  }
+]
