@@ -31,7 +31,7 @@ enum DictationMode: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .messaging: return "The text is a chat message: keep it casual and short. Keep questions as questions."
         case .email: return "Use a professional, clear tone with full sentences. Keep the speaker's questions and requests aimed at the reader. Still no greetings or sign-offs."
-        case .notes: return "The text is a note: keep it structured and keep the detail."
+        case .notes: return "The text is a note: tighten it like normal, keep the key details, and use a short list when it enumerates items or steps."
         case .code, .general: return nil
         }
     }

@@ -216,22 +216,38 @@ final class DictationController: ObservableObject {
     // Deterministic polish first; the Concise rewrite only ever tightens that
     // result, and any failure or slow response falls back to it unchanged.
     // The session app decides the rewrite's tone (see DictationMode).
+    // Apps already told once this launch that their text stays verbatim —
+    // the notice teaches, it shouldn't nag.
+    private var verbatimNoticeShown: Set<String> = []
+
     private func finishText(from raw: String) async -> (text: String, enhanced: Bool) {
         let polisher = TextPolisher(level: settings.polishLevel.deterministicLevel,
                                     replacements: settings.replacements)
         let text = polisher.polish(raw)
-        guard settings.polishLevel == .concise, !text.isEmpty,
-              let enhancer, enhancer.isAvailable else { return (text, false) }
-        // Code apps and user "exact words" rules get the polished words as-is.
+        guard let rewritten = await rewriteIfAllowed(text) else { return (text, false) }
+        return (rewritten, true)
+    }
+
+    // The Concise rewrite, when the level, engine, and app mode all allow it.
+    // nil = ship the polished text (and, the first time an app's mode blocks
+    // the rewrite, say so — silence here read as "the feature is broken").
+    private func rewriteIfAllowed(_ polished: String) async -> String? {
+        guard settings.polishLevel == .concise, !polished.isEmpty,
+              let enhancer, enhancer.isAvailable else { return nil }
         let decision = ModeResolver.decision(forBundleID: sessionApp.bundleID,
                                              rules: settings.appModes)
-        guard decision.allowsRewrite else { return (text, false) }
+        guard decision.allowsRewrite else {
+            if let id = sessionApp.bundleID, verbatimNoticeShown.insert(id).inserted {
+                indicator.showHint(loc("Kept your exact words — Aloud never rewrites here"))
+            }
+            return nil
+        }
         let extra = [decision.extraInstructions, Self.contextHint(from: sessionContext)]
             .compactMap { $0 }
             .joined(separator: "\n")
         let tone = extra.isEmpty ? nil : extra
         let rewritten: String? = await withTaskGroup(of: String?.self) { group in
-            group.addTask { try? await enhancer.enhance(text, extraInstructions: tone) }
+            group.addTask { try? await enhancer.enhance(polished, extraInstructions: tone) }
             group.addTask {
                 // Budget, not a target: past this the polished text ships as-is.
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
@@ -241,8 +257,8 @@ final class DictationController: ObservableObject {
             group.cancelAll()
             return first
         }
-        guard let rewritten, rewritten != text else { return (text, false) }
-        return (rewritten, true)
+        guard let rewritten, rewritten != polished else { return nil }
+        return rewritten
     }
 
     // What's already in the focused field helps the rewrite match the
@@ -413,9 +429,15 @@ final class DictationController: ObservableObject {
     // window boundaries can drop the odd word), and one last diff pass settles
     // whatever is on screen into that canonical result.
     private func commitLive(session: StreamingTranscription, samples: [Float]) {
-        // The words are already on screen — flashing "Typing…" while the final
-        // pass settles them reads as noise. Just dismiss the pill.
-        indicator.hide()
+        // The words are already on screen, so a "Typing…" flash is usually
+        // noise — except when a Concise rewrite is coming: that takes a
+        // second, and the silent gap before the text reshapes itself read as
+        // a glitch. Show what's happening instead.
+        if settings.polishLevel == .concise, enhancerAvailable {
+            indicator.showTranscribing(label: loc("Polishing…"))
+        } else {
+            indicator.hide()
+        }
         phase = .transcribing
         // Stop preview updates first so a late one can't race the final pass.
         liveUpdatesTask?.cancel()
@@ -432,7 +454,22 @@ final class DictationController: ObservableObject {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                var (text, enhanced) = await finishText(from: raw)
+                let polisher = TextPolisher(level: settings.polishLevel.deterministicLevel,
+                                            replacements: settings.replacements)
+                var text = polisher.polish(raw)
+                var enhanced = false
+                // The rewrite only runs while the screen is still ours: once
+                // the user clicks or types, the preview belongs to them —
+                // swapping it out from underneath would fight their cursor
+                // (and half-apply after a rebase). Screen wins; History still
+                // gets what was typed.
+                if liveTyper.anchorCount == 0, lastUserKeystroke == nil {
+                    if let rewritten = await rewriteIfAllowed(text),
+                       liveTyper.anchorCount == 0, lastUserKeystroke == nil {
+                        text = rewritten
+                        enhanced = true
+                    }
+                }
                 var sendReturn = false
                 if settings.pressEnterCommand, let stripped = TrailingCommand.stripPressEnter(text) {
                     text = stripped
@@ -443,17 +480,19 @@ final class DictationController: ObservableObject {
                 if let expansion = SnippetMatcher.expansion(for: text, snippets: settings.snippets) {
                     text = expansion
                 }
+                let duration = max(result.audioDuration,
+                                   Double(samples.count) / AudioRecorder.targetSampleRate)
                 if !text.isEmpty {
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
                     recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: sendReturn)
-                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
+                    history.append(HistoryEntry(text: text, rawText: raw, duration: duration,
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID,
                                                 languageCode: LanguageDetection.code(for: raw)),
                                    limit: settings.historyLimit)
                     lastTranscription = text
                     settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
-                                             seconds: result.audioDuration)
+                                             seconds: duration)
                     clearAudioBackup()
                 } else {
                     liveTyper.eraseAll()

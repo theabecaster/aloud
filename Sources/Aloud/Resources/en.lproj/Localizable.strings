@@ -44,15 +44,15 @@
 "Cancel" = "Cancel";
 
 /* Update failure reasons (embedded in the update alert) */
-"couldn’t create a temporary folder" = "Couldn’t create a temporary folder";
-"download failed" = "The download failed";
-"couldn’t save the download" = "Couldn’t save the download";
-"couldn’t unpack the download" = "Couldn’t unpack the download";
-"the download was incomplete" = "The download was incomplete";
-"the download failed signature verification" = "The download failed signature verification";
-"the download isn’t signed by the Aloud developer" = "The download isn’t signed by the Aloud developer";
-"couldn’t stage the installer" = "Couldn’t stage the installer";
-"couldn’t launch the installer" = "Couldn’t launch the installer";
+"couldn’t create a temporary folder" = "couldn’t create a temporary folder";
+"download failed" = "download failed";
+"couldn’t save the download" = "couldn’t save the download";
+"couldn’t unpack the download" = "couldn’t unpack the download";
+"the download was incomplete" = "the download was incomplete";
+"the download failed signature verification" = "the download failed signature verification";
+"the download isn’t signed by the Aloud developer" = "the download isn’t signed by the Aloud developer";
+"couldn’t stage the installer" = "couldn’t stage the installer";
+"couldn’t launch the installer" = "couldn’t launch the installer";
 
 /* Recording indicator pill */
 "Basic" = "Basic";
@@ -81,27 +81,38 @@
 
 /* Settings sidebar */
 "General" = "General";
+"Keys" = "Keys";
 "Dictation" = "Dictation";
 "Vocabulary" = "Vocabulary";
 "Snippets" = "Snippets";
-"Modes" = "Modes";
+"App Rules" = "App Rules";
 "History" = "History";
 "About" = "About";
 
 /* Settings — general */
 "Stopped listening so you can change settings" = "Stopped listening so you can change settings";
-"Dictation key" = "Dictation key";
-"Hold to talk, release to type. Press Esc while holding to cancel. Extra mouse buttons work too." = "Hold to talk, release to type. Press Esc while holding to cancel. Extra mouse buttons work too.";
-"Hands-free key" = "Hands-free key";
-"Remove the hands-free key" = "Remove the hands-free key";
-"Optional. Press once to start listening hands-free, press again to finish." = "Optional. Press once to start listening hands-free, press again to finish.";
-"Command key" = "Command key";
-"Remove the command key" = "Remove the command key";
-"Optional. Hold it and say what you want done — rewrite or translate selected text, or write something new at the cursor." = "Optional. Hold it and say what you want done — rewrite or translate selected text, or write something new at the cursor.";
-"Double-press the dictation key also works for hands-free; press Esc to finish." = "Double-press the dictation key also works for hands-free; press Esc to finish.";
+"Permissions" = "Permissions";
+"Microphone access" = "Microphone access";
+"Accessibility access" = "Accessibility access";
+"Allowed" = "Allowed";
+"Open Settings" = "Open Settings";
+"Without both, Aloud can’t hear you or type for you." = "Without both, Aloud can’t hear you or type for you.";
 "Microphone" = "Microphone";
 "System default" = "System default";
+"Sound when recording starts" = "Sound when recording starts";
 "Open Aloud at login" = "Open Aloud at login";
+
+/* Settings — keys */
+"Dictation key" = "Dictation key";
+"Hold to talk, release to type. Esc while holding cancels. Extra mouse buttons work too." = "Hold to talk, release to type. Esc while holding cancels. Extra mouse buttons work too.";
+"Hands-free mode" = "Hands-free mode";
+"Hands-free key" = "Hands-free key";
+"Remove the hands-free key" = "Remove the hands-free key";
+"Double-press the dictation key — or set a key of its own — to keep listening without holding. Esc finishes and types everything." = "Double-press the dictation key — or set a key of its own — to keep listening without holding. Esc finishes and types everything.";
+"Off: the dictation key only listens while you hold it." = "Off: the dictation key only listens while you hold it.";
+"Command key" = "Command key";
+"Remove the command key" = "Remove the command key";
+"Optional. Hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Optional. Hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor.";
 "Press a key…" = "Press a key…";
 "None" = "None";
 
@@ -112,24 +123,19 @@
 "Setting up full accuracy — almost done" = "Setting up full accuracy — almost done";
 "Waiting for internet to finish setting up full accuracy" = "Waiting for internet to finish setting up full accuracy";
 "Clean-up" = "Clean-up";
-"The rewrite engine isn't available right now — Standard clean-up is used instead." = "The rewrite engine isn't available right now — Standard clean-up is used instead.";
-"The exact words you said are always kept in History, whatever the clean-up level." = "The exact words you said are always kept in History, whatever the clean-up level.";
+"The rewrite engine isn’t available right now — Standard clean-up is used instead." = "The rewrite engine isn’t available right now — Standard clean-up is used instead.";
+"History always keeps your exact words." = "History always keeps your exact words.";
 "Languages" = "Languages";
 "Remove this language" = "Remove this language";
 "Add a Language" = "Add a Language";
-"Voice recognition understands 25 languages. Listing the ones you dictate in helps when a recording could be read more than one way." = "Voice recognition understands 25 languages. Listing the ones you dictate in helps when a recording could be read more than one way.";
-"Hands-free mode" = "Hands-free mode";
-"Double-press the dictation key to keep listening without holding it — edit, click around, keep talking. Press Esc when you're done and everything is typed." = "Double-press the dictation key to keep listening without holding it — edit, click around, keep talking. Press Esc when you're done and everything is typed.";
-"The dictation key only listens while held." = "The dictation key only listens while held.";
-"“Press enter” command" = "“Press enter” command";
-"End a dictation with “press enter” and Aloud presses Return after typing — handy for chat apps." = "End a dictation with “press enter” and Aloud presses Return after typing — handy for chat apps.";
-"Saying “press enter” types the words like anything else." = "Saying “press enter” types the words like anything else.";
-"Sound when recording starts" = "Sound when recording starts";
+"Listing the languages you dictate in helps when a recording could be read more than one way." = "Listing the languages you dictate in helps when a recording could be read more than one way.";
+"Say “press enter” to send" = "Say “press enter” to send";
+"End a dictation with those words and Aloud presses Return after typing — handy in chat apps." = "End a dictation with those words and Aloud presses Return after typing — handy in chat apps.";
 "Live typing" = "Live typing";
-"Words appear as you say them and settle as Aloud hears more." = "Words appear as you say them and settle as Aloud hears more.";
+"Words appear as you speak and settle as Aloud hears more." = "Words appear as you speak and settle as Aloud hears more.";
 "Everything is typed at once when you release the key." = "Everything is typed at once when you release the key.";
 "Experimental" = "Experimental";
-"Experimental features are ones we’re still polishing. They’re good enough to be worth trying — just expect the occasional hiccup. You can turn them off any time." = "Experimental features are ones we’re still polishing. They’re good enough to be worth trying — just expect the occasional hiccup. You can turn them off any time.";
+"Experimental features work, but expect the occasional hiccup. You can turn them off any time." = "Experimental features work, but expect the occasional hiccup. You can turn them off any time.";
 
 /* Clean-up levels */
 "Off" = "Off";
@@ -141,23 +147,25 @@
 "Also honors “scratch that” corrections and your replacements." = "Also honors “scratch that” corrections and your replacements.";
 "Rewrites your words to be tighter — entirely on this Mac." = "Rewrites your words to be tighter — entirely on this Mac.";
 
-/* Settings — vocabulary */
-"No Replacements" = "No Replacements";
-"Fix words Aloud keeps getting wrong — a name, a product, a term of art. Tell it what it types and what it should be instead, and it's corrected every time." = "Fix words Aloud keeps getting wrong — a name, a product, a term of art. Tell it what it types and what it should be instead, and it's corrected every time.";
-"%ld replacement — add more from History with “Fix…”." = "%ld replacement — add more from History with “Fix…”.";
-"%ld replacements — add more from History with “Fix…”." = "%ld replacements — add more from History with “Fix…”.";
-"Aloud types…" = "Aloud types…";
-"It should be…" = "It should be…";
+/* Settings — list editors (Vocabulary, Snippets, App Rules) */
+"Add one below." = "Add one below.";
+"Remove" = "Remove";
 "Add" = "Add";
 
+/* Settings — vocabulary */
+"Words Aloud keeps getting wrong — a name, a product, a term of art. You can also add these from History with “Fix…”." = "Words Aloud keeps getting wrong — a name, a product, a term of art. You can also add these from History with “Fix…”.";
+"No Corrections Yet" = "No Corrections Yet";
+"Aloud types…" = "Aloud types…";
+"It should be…" = "It should be…";
+
 /* Settings — snippets */
-"No Snippets" = "No Snippets";
-"Type the same thing a lot? Give it a spoken phrase — say “my email” (or “insert my email”) as a whole dictation and the full text is typed instead." = "Type the same thing a lot? Give it a spoken phrase — say “my email” (or “insert my email”) as a whole dictation and the full text is typed instead.";
+"Say a short phrase as a whole dictation and Aloud types the long version — say “my email”, get your address." = "Say a short phrase as a whole dictation and Aloud types the long version — say “my email”, get your address.";
+"No Snippets Yet" = "No Snippets Yet";
 "When you say…" = "When you say…";
 
-/* Settings — modes */
-"No App Modes" = "No App Modes";
-"Aloud already matches its rewriting to common chat, email, notes, and code apps — and keeps your exact words in terminals. Add an app here to choose yourself: a built-in style, your own instruction, or exactly what you said." = "Aloud already matches its rewriting to common chat, email, notes, and code apps — and keeps your exact words in terminals. Add an app here to choose yourself: a built-in style, your own instruction, or exactly what you said.";
+/* Settings — app rules */
+"Pin how Aloud writes in one app. Without a rule it adapts on its own — chat, email, notes, and code all read differently." = "Pin how Aloud writes in one app. Without a rule it adapts on its own — chat, email, notes, and code all read differently.";
+"No App Rules" = "No App Rules";
 "App" = "App";
 "Behavior" = "Behavior";
 "Choose an app…" = "Choose an app…";
@@ -207,47 +215,41 @@
 
 /* Onboarding */
 "Back" = "Back";
-"Next" = "Next";
 "Continue" = "Continue";
-"Speak instead of typing — your words appear wherever your cursor is. Everything happens on your Mac; nothing you say ever leaves it." = "Speak instead of typing — your words appear wherever your cursor is. Everything happens on your Mac; nothing you say ever leaves it.";
+"Step %1$ld of %2$ld" = "Step %1$ld of %2$ld";
+"Speak instead of typing. Your words land wherever the cursor is, and nothing you say leaves this Mac." = "Speak instead of typing. Your words land wherever the cursor is, and nothing you say leaves this Mac.";
 "Hold" = "Hold";
 "· speak · let go" = "· speak · let go";
-"That’s your talk key. %@ works great — or click it to pick your own." = "That’s your talk key. %@ works great — or click it to pick your own.";
-"Allow the Microphone" = "Allow the Microphone";
-"Aloud needs the microphone to hear you while you hold the dictation key. Audio is processed on this Mac and never uploaded." = "Aloud needs the microphone to hear you while you hold the dictation key. Audio is processed on this Mac and never uploaded.";
-"Microphone access is turned off. Turn it on for Aloud in System Settings, then come back — this screen will move on automatically." = "Microphone access is turned off. Turn it on for Aloud in System Settings, then come back — this screen will move on automatically.";
-"Open System Settings" = "Open System Settings";
-"Allow Microphone" = "Allow Microphone";
-"Let Aloud Type for You" = "Let Aloud Type for You";
-"This lets your talk key work in every app, and lets Aloud type the words where your cursor is. macOS calls this “Accessibility” access." = "This lets your talk key work in every app, and lets Aloud type the words where your cursor is. macOS calls this “Accessibility” access.";
-"In System Settings, turn on the switch next to Aloud under Privacy & Security → Accessibility. This screen will move on automatically once it's on." = "In System Settings, turn on the switch next to Aloud under Privacy & Security → Accessibility. This screen will move on automatically once it's on.";
-"Setting Up Your Voice" = "Setting Up Your Voice";
-"Aloud is downloading its voice recognition — this happens once (about 500 MB). After this, dictation works completely offline, forever." = "Aloud is downloading its voice recognition — this happens once (about 500 MB). After this, dictation works completely offline, forever.";
+"Click the key to pick a different one." = "Click the key to pick a different one.";
+"Let Aloud Hear and Type" = "Let Aloud Hear and Type";
+"macOS guards both of these. Aloud needs them to work." = "macOS guards both of these. Aloud needs them to work.";
+"Hears you while you hold the key." = "Hears you while you hold the key.";
+"Allow" = "Allow";
+"Accessibility" = "Accessibility";
+"Types your words, and makes the key work in every app." = "Types your words, and makes the key work in every app.";
+"In System Settings, turn on the switch next to Aloud. This screen continues on its own." = "In System Settings, turn on the switch next to Aloud. This screen continues on its own.";
+"Switch already on? Turn it off and on again — macOS keeps a stale entry after an update." = "Switch already on? Turn it off and on again — macOS keeps a stale entry after an update.";
+"Setting Up Voice Recognition" = "Setting Up Voice Recognition";
+"A one-time download, about 500 MB. After this, dictation works offline." = "A one-time download, about 500 MB. After this, dictation works offline.";
 "No internet connection" = "No internet connection";
-"Aloud needs the internet once, for this download. This screen will continue automatically when you're back online." = "Aloud needs the internet once, for this download. This screen will continue automatically when you're back online.";
+"This screen continues on its own once you're back online." = "This screen continues on its own once you're back online.";
 "Download" = "Download";
 "%ld%% — you can keep using your Mac" = "%ld%% — you can keep using your Mac";
-"Getting things ready… (first time takes a few seconds)" = "Getting things ready… (first time takes a few seconds)";
+"Almost ready…" = "Almost ready…";
 "Ready" = "Ready";
 "The download didn’t finish. Check your internet connection and try again." = "The download didn’t finish. Check your internet connection and try again.";
 "Try Again" = "Try Again";
 "Start Now with Basic Dictation" = "Start Now with Basic Dictation";
 "Basic dictation isn’t available right now — please wait for the download." = "Basic dictation isn’t available right now — please wait for the download.";
-"Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes." = "Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes.";
-"Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes — it resumes when you’re back online." = "Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes — it resumes when you’re back online.";
-"How Should Words Appear?" = "How Should Words Appear?";
-"You can change this any time in Settings." = "You can change this any time in Settings.";
-"Live" = "Live";
-"All at once" = "All at once";
-"Everything is typed the moment you let go of the key." = "Everything is typed the moment you let go of the key.";
+"Less accurate. Aloud switches to full accuracy on its own when the download finishes." = "Less accurate. Aloud switches to full accuracy on its own when the download finishes.";
 "Try It" = "Try It";
-"Click the box below, hold %@ while you say something, then let go." = "Click the box below, hold %@ while you say something, then let go.";
+"Click the box, hold %@ while you say something, then let go." = "Click the box, hold %@ while you say something, then let go.";
 "Your words will appear here" = "Your words will appear here";
-"You’re trying basic dictation — accuracy gets noticeably better on its own once setup finishes." = "You’re trying basic dictation — accuracy gets noticeably better on its own once setup finishes.";
-"That’s it — you’re set" = "That’s it — you’re set";
+"You’re on basic dictation — accuracy improves on its own once setup finishes." = "You’re on basic dictation — accuracy improves on its own once setup finishes.";
+"That’s all there is to it" = "That’s all there is to it";
 "Aloud lives in your menu bar — the " = "Aloud lives in your menu bar — the ";
 " icon at the top of your screen." = " icon at the top of your screen.";
-"Tip: double-press %@ to keep listening hands-free — Esc finishes. You can turn this off in Settings." = "Tip: double-press %@ to keep listening hands-free — Esc finishes. You can turn this off in Settings.";
+"Tip: double-press %@ to keep listening hands-free. Esc finishes." = "Tip: double-press %@ to keep listening hands-free. Esc finishes.";
 "Done" = "Done";
 "Skip for now" = "Skip for now";
 
@@ -263,3 +265,6 @@
 "Right ⇧" = "Right ⇧";
 "Space" = "Space";
 "key %ld" = "key %ld";
+
+"Polishing…" = "Polishing…";
+"Kept your exact words — Aloud never rewrites here" = "Kept your exact words — Aloud never rewrites here";

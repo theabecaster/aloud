@@ -112,10 +112,11 @@ final class RecordingIndicatorPanel {
         }
     }
 
-    func showTranscribing() {
+    func showTranscribing(label: String? = nil) {
         levelTimer?.invalidate()
         model.mode = .transcribing
         model.isCommand = false
+        model.transcribingLabel = label
         present()
         panel?.ignoresMouseEvents = true
     }
@@ -125,6 +126,7 @@ final class RecordingIndicatorPanel {
         levelTimer?.invalidate()
         model.mode = .transcribing
         model.isCommand = true
+        model.transcribingLabel = nil
         present()
         panel?.ignoresMouseEvents = true
     }
@@ -239,6 +241,8 @@ final class IndicatorModel: ObservableObject {
     @Published var isBasic = false
     @Published var isCommand = false
     @Published var notice: String?
+    // Overrides the "Typing…" caption (e.g. "Polishing…" while a rewrite runs).
+    @Published var transcribingLabel: String?
     var onStop: (() -> Void)?
     var onResetPosition: (() -> Void)?
     var settings: SettingsStore?
@@ -301,7 +305,7 @@ struct IndicatorView: View {
             case .transcribing:
                 ProgressView()
                     .controlSize(.small)
-                Text(model.isCommand ? loc("Working…") : loc("Typing…"))
+                Text(model.transcribingLabel ?? (model.isCommand ? loc("Working…") : loc("Typing…")))
                     .foregroundStyle(.secondary)
             case .hint:
                 Image(systemName: "info.circle")

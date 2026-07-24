@@ -1,4 +1,4 @@
-/* Menüleiste */
+/* Menu bar */
 "Relaunch to Finish Update…" = "Neu starten, um das Update abzuschließen…";
 "Finish Setup…" = "Einrichtung abschließen…";
 "Download Voice Recognition…" = "Spracherkennung laden…";
@@ -14,7 +14,7 @@
 "Check for Updates…" = "Nach Updates suchen…";
 "Quit Aloud" = "Aloud beenden";
 
-/* Statuszeile */
+/* Menu bar status line */
 "Microphone access needed" = "Mikrofonzugriff erforderlich";
 "Accessibility access needed" = "Bedienungshilfen-Zugriff erforderlich";
 "Voice setup needed" = "Spracheinrichtung erforderlich";
@@ -24,11 +24,11 @@
 "Dictation key isn’t working — try reopening Aloud" = "Die Diktiertaste funktioniert nicht – öffnen Sie Aloud erneut";
 "Hold %@ to dictate" = "Zum Diktieren %@ gedrückt halten";
 
-/* Fenster */
+/* Windows */
 "Welcome to Aloud" = "Willkommen bei Aloud";
 "Aloud Settings" = "Aloud-Einstellungen";
 
-/* Update-Hinweise */
+/* Update alerts */
 "Couldn’t check for updates" = "Suche nach Updates fehlgeschlagen";
 "You’re up to date" = "Sie sind auf dem neuesten Stand";
 "Check your internet connection and try again." = "Prüfen Sie Ihre Internetverbindung und versuchen Sie es erneut.";
@@ -43,7 +43,7 @@
 "Open Releases Page" = "Releases-Seite öffnen";
 "Cancel" = "Abbrechen";
 
-/* Gründe für Update-Fehler */
+/* Update failure reasons (embedded in the update alert) */
 "couldn’t create a temporary folder" = "Ein temporärer Ordner konnte nicht erstellt werden";
 "download failed" = "Der Download ist fehlgeschlagen";
 "couldn’t save the download" = "Der Download konnte nicht gesichert werden";
@@ -54,7 +54,7 @@
 "couldn’t stage the installer" = "Das Installationsprogramm konnte nicht vorbereitet werden";
 "couldn’t launch the installer" = "Das Installationsprogramm konnte nicht gestartet werden";
 
-/* Aufnahmeanzeige */
+/* Recording indicator pill */
 "Basic" = "Einfach";
 "Still listening…" = "Aloud hört noch zu…";
 "Stop — or press Esc" = "Stoppen – oder Esc drücken";
@@ -63,7 +63,7 @@
 "Reset Position" = "Position zurücksetzen";
 "Microphone changed — still listening" = "Mikrofon gewechselt – Aloud hört weiter zu";
 
-/* Diktat-Hinweise */
+/* Dictation hints */
 "Voice model is still warming up…" = "Das Sprachmodell wird noch vorbereitet…";
 "Finish setup to start dictating" = "Schließen Sie die Einrichtung ab, um zu diktieren";
 "Couldn’t access the microphone" = "Kein Zugriff auf das Mikrofon möglich";
@@ -73,65 +73,71 @@
 "Couldn’t hear that — try again" = "Nichts zu hören – bitte erneut versuchen";
 "Couldn’t do that — try again" = "Das hat nicht geklappt – bitte erneut versuchen";
 
-/* Deinstallieren */
+/* Uninstall */
 "Uninstall Aloud?" = "Aloud deinstallieren?";
 "This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind." = "Dies entfernt die App, die geladene Spracherkennung sowie alle Einstellungen und den Verlauf von diesem Mac. Es bleibt nichts zurück.";
 "Uninstall" = "Deinstallieren";
 "Uninstall Aloud…" = "Aloud deinstallieren…";
 
-/* Einstellungen — Seitenleiste */
+/* Settings sidebar */
 "General" = "Allgemein";
+"Keys" = "Tasten";
 "Dictation" = "Diktat";
 "Vocabulary" = "Vokabular";
 "Snippets" = "Textbausteine";
-"Modes" = "Modi";
+"App Rules" = "App-Regeln";
 "History" = "Verlauf";
 "About" = "Über";
 
-/* Einstellungen — Allgemein */
+/* Settings — general */
 "Stopped listening so you can change settings" = "Zuhören gestoppt, damit Sie Einstellungen ändern können";
-"Dictation key" = "Diktiertaste";
-"Hold to talk, release to type. Press Esc while holding to cancel. Extra mouse buttons work too." = "Zum Sprechen halten, zum Schreiben loslassen. Esc während des Haltens bricht ab. Zusätzliche Maustasten funktionieren auch.";
-"Hands-free key" = "Freisprechtaste";
-"Remove the hands-free key" = "Freisprechtaste entfernen";
-"Optional. Press once to start listening hands-free, press again to finish." = "Optional. Einmal drücken, um freihändig zuzuhören, erneut drücken zum Beenden.";
-"Command key" = "Befehlstaste";
-"Remove the command key" = "Befehlstaste entfernen";
-"Optional. Hold it and say what you want done — rewrite or translate selected text, or write something new at the cursor." = "Optional. Halten Sie sie gedrückt und sagen Sie, was geschehen soll: ausgewählten Text umschreiben oder übersetzen, oder etwas Neues an der Einfügemarke schreiben.";
-"Double-press the dictation key also works for hands-free; press Esc to finish." = "Doppeltes Drücken der Diktiertaste funktioniert ebenfalls für das Freisprechen; Esc beendet.";
+"Permissions" = "Berechtigungen";
+"Microphone access" = "Mikrofonzugriff";
+"Accessibility access" = "Bedienungshilfen-Zugriff";
+"Allowed" = "Erlaubt";
+"Open Settings" = "Einstellungen öffnen";
+"Without both, Aloud can’t hear you or type for you." = "Ohne beide kann Aloud dich weder hören noch für dich schreiben.";
 "Microphone" = "Mikrofon";
 "System default" = "Systemstandard";
+"Sound when recording starts" = "Ton beim Start der Aufnahme";
 "Open Aloud at login" = "Aloud beim Anmelden öffnen";
+
+/* Settings — keys */
+"Dictation key" = "Diktiertaste";
+"Hold to talk, release to type. Esc while holding cancels. Extra mouse buttons work too." = "Halten zum Sprechen, loslassen zum Schreiben. Esc beim Halten bricht ab. Zusätzliche Maustasten funktionieren auch.";
+"Hands-free mode" = "Freisprechmodus";
+"Hands-free key" = "Freisprechtaste";
+"Remove the hands-free key" = "Freisprechtaste entfernen";
+"Double-press the dictation key — or set a key of its own — to keep listening without holding. Esc finishes and types everything." = "Drücke die Diktattaste zweimal – oder lege eine eigene Taste fest –, um ohne Halten weiterzuhören. Esc beendet und schreibt alles.";
+"Off: the dictation key only listens while you hold it." = "Aus: Die Diktattaste hört nur, solange du sie hältst.";
+"Command key" = "Befehlstaste";
+"Remove the command key" = "Befehlstaste entfernen";
+"Optional. Hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Optional. Halte sie gedrückt und sag, was zu tun ist: markierten Text umschreiben oder übersetzen, oder etwas Neues an der Einfügemarke schreiben.";
 "Press a key…" = "Taste drücken…";
 "None" = "Keine";
 
-/* Einstellungen — Diktat */
+/* Settings — dictation */
 "Basic dictation in use" = "Einfaches Diktat in Verwendung";
 "Setting up full accuracy — %ld%%" = "Volle Genauigkeit wird eingerichtet – %ld %%";
 "Dictation keeps working while this finishes; the switch is automatic." = "Das Diktieren funktioniert währenddessen weiter; der Wechsel erfolgt automatisch.";
 "Setting up full accuracy — almost done" = "Volle Genauigkeit wird eingerichtet – fast fertig";
 "Waiting for internet to finish setting up full accuracy" = "Warten auf Internetverbindung, um die volle Genauigkeit fertig einzurichten";
 "Clean-up" = "Bereinigung";
-"The rewrite engine isn't available right now — Standard clean-up is used instead." = "Die Umschreibefunktion ist gerade nicht verfügbar – stattdessen wird die Bereinigung „Standard“ verwendet.";
-"The exact words you said are always kept in History, whatever the clean-up level." = "Ihre exakten Worte bleiben unabhängig von der Bereinigungsstufe immer im Verlauf erhalten.";
+"The rewrite engine isn’t available right now — Standard clean-up is used instead." = "Die Umschreibefunktion ist gerade nicht verfügbar – stattdessen wird die Bereinigung „Standard“ verwendet.";
+"History always keeps your exact words." = "Der Verlauf behält immer deinen genauen Wortlaut.";
 "Languages" = "Sprachen";
 "Remove this language" = "Diese Sprache entfernen";
 "Add a Language" = "Sprache hinzufügen";
-"Voice recognition understands 25 languages. Listing the ones you dictate in helps when a recording could be read more than one way." = "Die Spracherkennung versteht 25 Sprachen. Die Angabe Ihrer Diktiersprachen hilft, wenn eine Aufnahme mehrdeutig ist.";
-"Hands-free mode" = "Freisprechmodus";
-"Double-press the dictation key to keep listening without holding it — edit, click around, keep talking. Press Esc when you're done and everything is typed." = "Drücken Sie die Diktiertaste zweimal, um ohne Halten weiterzuhören: bearbeiten, klicken, weitersprechen. Drücken Sie Esc, wenn Sie fertig sind, und alles wird geschrieben.";
-"The dictation key only listens while held." = "Die Diktiertaste hört nur zu, solange sie gehalten wird.";
-"“Press enter” command" = "„press enter“-Befehl";
-"End a dictation with “press enter” and Aloud presses Return after typing — handy for chat apps." = "Beenden Sie ein Diktat mit „press enter“, und Aloud drückt nach dem Schreiben den Zeilenschalter – praktisch in Chat-Apps.";
-"Saying “press enter” types the words like anything else." = "„press enter“ wird wie alles andere als Text geschrieben.";
-"Sound when recording starts" = "Ton beim Start der Aufnahme";
+"Listing the languages you dictate in helps when a recording could be read more than one way." = "Die Sprachen anzugeben, in denen du diktierst, hilft, wenn eine Aufnahme mehrdeutig ist.";
+"Say “press enter” to send" = "„press enter“ sagen zum Senden";
+"End a dictation with those words and Aloud presses Return after typing — handy in chat apps." = "Beende ein Diktat mit diesen Worten und Aloud drückt nach dem Schreiben die Eingabetaste – praktisch in Chat-Apps.";
 "Live typing" = "Live-Eingabe";
-"Words appear as you say them and settle as Aloud hears more." = "Wörter erscheinen, während Sie sprechen, und passen sich an, je mehr Aloud hört.";
+"Words appear as you speak and settle as Aloud hears more." = "Wörter erscheinen, während Sie sprechen, und passen sich an, je mehr Aloud hört.";
 "Everything is typed at once when you release the key." = "Alles wird auf einmal geschrieben, wenn Sie die Taste loslassen.";
 "Experimental" = "Experimentell";
-"Experimental features are ones we’re still polishing. They’re good enough to be worth trying — just expect the occasional hiccup. You can turn them off any time." = "Experimentelle Funktionen werden noch verfeinert. Sie sind einen Versuch wert – gelegentliche Aussetzer sind aber möglich. Sie können sie jederzeit deaktivieren.";
+"Experimental features work, but expect the occasional hiccup. You can turn them off any time." = "Experimentelle Funktionen laufen, aber rechne mit gelegentlichen Aussetzern. Du kannst sie jederzeit ausschalten.";
 
-/* Bereinigungsstufen */
+/* Clean-up levels */
 "Off" = "Aus";
 "Light" = "Leicht";
 "Standard" = "Standard";
@@ -141,23 +147,25 @@
 "Also honors “scratch that” corrections and your replacements." = "Berücksichtigt zusätzlich gesprochene Korrekturen wie „scratch that“ sowie Ihre Ersetzungen.";
 "Rewrites your words to be tighter — entirely on this Mac." = "Formuliert Ihre Worte knapper – vollständig auf diesem Mac.";
 
-/* Einstellungen — Vokabular */
-"No Replacements" = "Keine Ersetzungen";
-"Fix words Aloud keeps getting wrong — a name, a product, a term of art. Tell it what it types and what it should be instead, and it's corrected every time." = "Korrigieren Sie Wörter, die Aloud immer wieder falsch schreibt – einen Namen, ein Produkt, einen Fachbegriff. Geben Sie an, was geschrieben wird und was stattdessen stehen soll, und es wird jedes Mal korrigiert.";
-"%ld replacement — add more from History with “Fix…”." = "%ld Ersetzung – weitere über „Korrigieren…“ im Verlauf hinzufügen.";
-"%ld replacements — add more from History with “Fix…”." = "%ld Ersetzungen – weitere über „Korrigieren…“ im Verlauf hinzufügen.";
-"Aloud types…" = "Aloud schreibt…";
-"It should be…" = "Es sollte heißen…";
+/* Settings — list editors (Vocabulary, Snippets, App Rules) */
+"Add one below." = "Füge unten einen hinzu.";
+"Remove" = "Entfernen";
 "Add" = "Hinzufügen";
 
-/* Einstellungen — Textbausteine */
-"No Snippets" = "Keine Textbausteine";
-"Type the same thing a lot? Give it a spoken phrase — say “my email” (or “insert my email”) as a whole dictation and the full text is typed instead." = "Tippen Sie oft dasselbe? Geben Sie ihm eine gesprochene Phrase: Sagen Sie „meine E-Mail“ (oder „insert meine E-Mail“) als ganzes Diktat, und stattdessen wird der vollständige Text geschrieben.";
+/* Settings — vocabulary */
+"Words Aloud keeps getting wrong — a name, a product, a term of art. You can also add these from History with “Fix…”." = "Wörter, die Aloud immer wieder falsch versteht – ein Name, ein Produkt, ein Fachbegriff. Du kannst sie auch im Verlauf mit „Korrigieren…“ hinzufügen.";
+"No Corrections Yet" = "Noch keine Korrekturen";
+"Aloud types…" = "Aloud schreibt…";
+"It should be…" = "Es sollte heißen…";
+
+/* Settings — snippets */
+"Say a short phrase as a whole dictation and Aloud types the long version — say “my email”, get your address." = "Sag einen kurzen Satz als ganzes Diktat und Aloud schreibt die lange Fassung – sag „meine E-Mail“ und deine Adresse steht da.";
+"No Snippets Yet" = "Noch keine Textbausteine";
 "When you say…" = "Wenn Sie sagen…";
 
-/* Einstellungen — Modi */
-"No App Modes" = "Keine App-Modi";
-"Aloud already matches its rewriting to common chat, email, notes, and code apps — and keeps your exact words in terminals. Add an app here to choose yourself: a built-in style, your own instruction, or exactly what you said." = "Aloud passt das Umschreiben bereits an gängige Chat-, E-Mail-, Notiz- und Code-Apps an – und behält in Terminals Ihre exakten Worte. Fügen Sie hier eine App hinzu, um selbst zu wählen: ein integrierter Stil, Ihre eigene Anweisung oder exakt das Gesagte.";
+/* Settings — app rules */
+"Pin how Aloud writes in one app. Without a rule it adapts on its own — chat, email, notes, and code all read differently." = "Lege fest, wie Aloud in einer bestimmten App schreibt. Ohne Regel passt es sich selbst an – Chat, E-Mail, Notizen und Code lesen sich anders.";
+"No App Rules" = "Keine App-Regeln";
 "App" = "App";
 "Behavior" = "Verhalten";
 "Choose an app…" = "App auswählen…";
@@ -169,13 +177,13 @@
 "How should it be written there? e.g. Warm and upbeat." = "Wie soll dort geschrieben werden? Z. B.: warm und locker.";
 "“%@”" = "„%@“";
 
-/* Diktatmodi */
+/* Dictation modes */
 "Messaging" = "Nachrichten";
 "Email" = "E-Mail";
 "Notes" = "Notizen";
 "Code" = "Code";
 
-/* Einstellungen — Verlauf */
+/* Settings — history */
 "words spoken" = "gesprochene Wörter";
 "dictations" = "Diktate";
 "words per minute" = "Wörter pro Minute";
@@ -201,57 +209,51 @@
 "Type “%1$@” instead of “%2$@”" = "„%1$@“ statt „%2$@“ schreiben";
 "Add to Vocabulary" = "Zum Vokabular hinzufügen";
 
-/* Einstellungen — Über */
+/* Settings — about */
 "Version %@" = "Version %@";
 "Dictation that stays on your Mac.\nNo account, no cloud, no telemetry." = "Diktieren, das auf Ihrem Mac bleibt.\nKein Konto, keine Cloud, keine Telemetrie.";
 
-/* Einrichtung */
+/* Onboarding */
 "Back" = "Zurück";
-"Next" = "Weiter";
 "Continue" = "Fortfahren";
-"Speak instead of typing — your words appear wherever your cursor is. Everything happens on your Mac; nothing you say ever leaves it." = "Sprechen statt tippen – Ihre Worte erscheinen dort, wo die Einfügemarke ist. Alles geschieht auf Ihrem Mac; nichts von dem, was Sie sagen, verlässt ihn je.";
+"Step %1$ld of %2$ld" = "Schritt %1$ld von %2$ld";
+"Speak instead of typing. Your words land wherever the cursor is, and nothing you say leaves this Mac." = "Sprich statt zu tippen. Deine Worte landen dort, wo der Cursor steht, und nichts davon verlässt diesen Mac.";
 "Hold" = "Halten Sie";
 "· speak · let go" = "· sprechen · loslassen";
-"That’s your talk key. %@ works great — or click it to pick your own." = "Das ist Ihre Sprechtaste. %@ funktioniert bestens – oder klicken Sie darauf, um eine eigene zu wählen.";
-"Allow the Microphone" = "Mikrofon erlauben";
-"Aloud needs the microphone to hear you while you hold the dictation key. Audio is processed on this Mac and never uploaded." = "Aloud benötigt das Mikrofon, um Sie zu hören, während Sie die Diktiertaste halten. Audio wird auf diesem Mac verarbeitet und nie hochgeladen.";
-"Microphone access is turned off. Turn it on for Aloud in System Settings, then come back — this screen will move on automatically." = "Der Mikrofonzugriff ist deaktiviert. Aktivieren Sie ihn für Aloud in den Systemeinstellungen und kommen Sie zurück – dieser Bildschirm geht automatisch weiter.";
-"Open System Settings" = "Systemeinstellungen öffnen";
-"Allow Microphone" = "Mikrofon erlauben";
-"Let Aloud Type for You" = "Lassen Sie Aloud für Sie schreiben";
-"This lets your talk key work in every app, and lets Aloud type the words where your cursor is. macOS calls this “Accessibility” access." = "Damit funktioniert Ihre Sprechtaste in jeder App, und Aloud kann die Wörter an der Einfügemarke schreiben. macOS nennt dies „Bedienungshilfen“-Zugriff.";
-"In System Settings, turn on the switch next to Aloud under Privacy & Security → Accessibility. This screen will move on automatically once it's on." = "Aktivieren Sie in den Systemeinstellungen den Schalter neben Aloud unter „Datenschutz & Sicherheit“ → „Bedienungshilfen“. Dieser Bildschirm geht automatisch weiter, sobald er aktiviert ist.";
-"Setting Up Your Voice" = "Ihre Stimme wird eingerichtet";
-"Aloud is downloading its voice recognition — this happens once (about 500 MB). After this, dictation works completely offline, forever." = "Aloud lädt seine Spracherkennung – das geschieht nur einmal (rund 500 MB). Danach funktioniert das Diktieren für immer vollständig offline.";
+"Click the key to pick a different one." = "Klick auf die Taste, um eine andere zu wählen.";
+"Let Aloud Hear and Type" = "Aloud hören und schreiben lassen";
+"macOS guards both of these. Aloud needs them to work." = "macOS schützt beides. Aloud braucht beides, um zu funktionieren.";
+"Hears you while you hold the key." = "Hört dich, solange du die Taste hältst.";
+"Allow" = "Erlauben";
+"Accessibility" = "Bedienungshilfen";
+"Types your words, and makes the key work in every app." = "Schreibt deine Worte und lässt die Taste in jeder App funktionieren.";
+"In System Settings, turn on the switch next to Aloud. This screen continues on its own." = "Aktiviere in den Systemeinstellungen den Schalter neben Aloud. Dieser Schritt geht von selbst weiter.";
+"Switch already on? Turn it off and on again — macOS keeps a stale entry after an update." = "Schalter schon an? Schalte ihn aus und wieder ein – macOS behält nach einem Update einen veralteten Eintrag.";
+"Setting Up Voice Recognition" = "Spracherkennung wird eingerichtet";
+"A one-time download, about 500 MB. After this, dictation works offline." = "Ein einmaliger Download von rund 500 MB. Danach funktioniert das Diktieren offline.";
 "No internet connection" = "Keine Internetverbindung";
-"Aloud needs the internet once, for this download. This screen will continue automatically when you're back online." = "Aloud braucht das Internet nur einmal, für diesen Download. Dieser Bildschirm geht automatisch weiter, sobald Sie wieder online sind.";
+"This screen continues on its own once you're back online." = "Dieser Schritt geht von selbst weiter, sobald du wieder online bist.";
 "Download" = "Laden";
 "%ld%% — you can keep using your Mac" = "%ld %% – Sie können Ihren Mac weiter verwenden";
-"Getting things ready… (first time takes a few seconds)" = "Wird vorbereitet… (beim ersten Mal dauert es ein paar Sekunden)";
+"Almost ready…" = "Fast bereit…";
 "Ready" = "Bereit";
 "The download didn’t finish. Check your internet connection and try again." = "Der Download wurde nicht abgeschlossen. Prüfen Sie Ihre Internetverbindung und versuchen Sie es erneut.";
 "Try Again" = "Erneut versuchen";
 "Start Now with Basic Dictation" = "Jetzt mit einfachem Diktat starten";
 "Basic dictation isn’t available right now — please wait for the download." = "Das einfache Diktat ist gerade nicht verfügbar – bitte warten Sie auf den Download.";
-"Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes." = "Das einfache Diktat ist weniger genau. Aloud wechselt von selbst zur vollen Genauigkeit, sobald der Download abgeschlossen ist.";
-"Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes — it resumes when you’re back online." = "Das einfache Diktat ist weniger genau. Aloud wechselt von selbst zur vollen Genauigkeit, sobald der Download abgeschlossen ist – er wird fortgesetzt, sobald Sie wieder online sind.";
-"How Should Words Appear?" = "Wie sollen Wörter erscheinen?";
-"You can change this any time in Settings." = "Sie können dies jederzeit in den Einstellungen ändern.";
-"Live" = "Live";
-"All at once" = "Alles auf einmal";
-"Everything is typed the moment you let go of the key." = "Alles wird in dem Moment geschrieben, in dem Sie die Taste loslassen.";
+"Less accurate. Aloud switches to full accuracy on its own when the download finishes." = "Weniger genau. Aloud wechselt von selbst zur vollen Genauigkeit, wenn der Download fertig ist.";
 "Try It" = "Probieren Sie es aus";
-"Click the box below, hold %@ while you say something, then let go." = "Klicken Sie in das Feld unten, halten Sie %@, während Sie etwas sagen, und lassen Sie dann los.";
+"Click the box, hold %@ while you say something, then let go." = "Klick ins Feld, halte %@ gedrückt, sag etwas und lass wieder los.";
 "Your words will appear here" = "Ihre Worte erscheinen hier";
-"You’re trying basic dictation — accuracy gets noticeably better on its own once setup finishes." = "Sie verwenden gerade das einfache Diktat – die Genauigkeit wird von selbst deutlich besser, sobald die Einrichtung abgeschlossen ist.";
-"That’s it — you’re set" = "Das war’s – Sie sind startklar";
+"You’re on basic dictation — accuracy improves on its own once setup finishes." = "Du nutzt gerade das einfache Diktat – die Genauigkeit verbessert sich von selbst, sobald die Einrichtung fertig ist.";
+"That’s all there is to it" = "Mehr ist es nicht";
 "Aloud lives in your menu bar — the " = "Aloud lebt in Ihrer Menüleiste – das Symbol ";
 " icon at the top of your screen." = " oben auf dem Bildschirm.";
-"Tip: double-press %@ to keep listening hands-free — Esc finishes. You can turn this off in Settings." = "Tipp: Drücken Sie %@ zweimal, um freihändig weiterzuhören – Esc beendet. Sie können dies in den Einstellungen deaktivieren.";
+"Tip: double-press %@ to keep listening hands-free. Esc finishes." = "Tipp: Drücke %@ zweimal, um freihändig weiterzuhören. Esc beendet.";
 "Done" = "Fertig";
 "Skip for now" = "Vorerst überspringen";
 
-/* Tastennamen */
+/* Hotkey names */
 "Mouse %ld" = "Maus %ld";
 "Left ⌘" = "⌘ links";
 "Right ⌘" = "⌘ rechts";
@@ -263,3 +265,6 @@
 "Right ⇧" = "⇧ rechts";
 "Space" = "Leertaste";
 "key %ld" = "Taste %ld";
+
+"Polishing…" = "Wird verfeinert …";
+"Kept your exact words — Aloud never rewrites here" = "Ihre exakten Worte wurden übernommen – Aloud formuliert hier nie um";
