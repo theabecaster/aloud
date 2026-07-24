@@ -201,7 +201,10 @@ final class DictationController: ObservableObject {
         let text = polisher.polish(raw)
         guard settings.polishLevel == .concise, !text.isEmpty,
               let enhancer, enhancer.isAvailable else { return (text, false) }
-        let tone = DictationMode.builtIn(forBundleID: sessionApp.bundleID).toneInstruction
+        // Code apps get the exact polished words — no rewrite, ever.
+        let mode = DictationMode.builtIn(forBundleID: sessionApp.bundleID)
+        guard mode.allowsRewrite else { return (text, false) }
+        let tone = mode.toneInstruction
         let rewritten: String? = await withTaskGroup(of: String?.self) { group in
             group.addTask { try? await enhancer.enhance(text, extraInstructions: tone) }
             group.addTask {
@@ -266,10 +269,11 @@ final class DictationController: ObservableObject {
             indicator.isBasic = usingFallback
             // Load the rewrite model while the user is still talking so the
             // commit path never pays its cold start — warmed with the session
-            // app's tone so the session actually gets used at commit.
+            // app's tone so the session actually gets used at commit. Apps
+            // whose mode skips the rewrite never pay for a warm-up either.
             if settings.polishLevel == .concise {
                 let mode = DictationMode.builtIn(forBundleID: sessionApp.bundleID)
-                enhancer?.prewarm(extraInstructions: mode.toneInstruction)
+                if mode.allowsRewrite { enhancer?.prewarm(extraInstructions: mode.toneInstruction) }
             }
             indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 })
             if settings.liveTyping { startLiveTyping() }

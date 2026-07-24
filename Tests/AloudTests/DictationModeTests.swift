@@ -57,6 +57,26 @@ final class DictationModeTests: XCTestCase {
         XCTAssertNotEqual(DictationMode.email.toneInstruction, DictationMode.notes.toneInstruction)
     }
 
+    // MARK: verbatim safety for code apps
+
+    func testCodeIsTheOnlyCategoryThatSkipsTheRewrite() {
+        XCTAssertFalse(DictationMode.code.allowsRewrite)
+        for mode in DictationMode.allCases where mode != .code {
+            XCTAssertTrue(mode.allowsRewrite, "\(mode) should allow the rewrite")
+        }
+    }
+
+    func testTerminalsAndEditorsResolveToNoRewrite() {
+        for id in ["com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty",
+                   "dev.warp.Warp-Stable", "com.microsoft.VSCode",
+                   "com.todesktop.230313mzl4w4u92", "com.apple.dt.Xcode",
+                   "com.jetbrains.WebStorm"] {
+            XCTAssertFalse(DictationMode.builtIn(forBundleID: id).allowsRewrite,
+                           "\(id) must never be creatively rewritten")
+        }
+        XCTAssertTrue(DictationMode.builtIn(forBundleID: "com.example.someapp").allowsRewrite)
+    }
+
     func testInstructionCombining() {
         XCTAssertEqual(EnhancerInstructions.combine("base", extra: nil), "base")
         XCTAssertEqual(EnhancerInstructions.combine("base", extra: "  "), "base")

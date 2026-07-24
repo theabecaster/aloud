@@ -19,6 +19,12 @@ enum DictationMode: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    // Whether the Concise rewrite may run at all. Dictation into a terminal
+    // or editor becomes commands, code, and commit messages — creatively
+    // rewording those is never safe, so code apps get deterministic polish
+    // only, whatever the clean-up level says.
+    var allowsRewrite: Bool { self != .code }
+
     // Appended to the rewrite engine's instructions when the Concise level
     // runs. Short and factual on purpose — they steer tone, nothing else.
     var toneInstruction: String? {
