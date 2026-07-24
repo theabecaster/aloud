@@ -61,6 +61,19 @@ final class TextInjector {
         }
     }
 
+    // A synthetic Return, for the "press enter" voice command. Same marker as
+    // every other event we post so our own monitors ignore it.
+    static func postReturn() {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let key = CGKeyCode(kVK_Return)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { return }
+        down.setIntegerValueField(.eventSourceUserData, value: SyntheticEvent.marker)
+        up.setIntegerValueField(.eventSourceUserData, value: SyntheticEvent.marker)
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+
     private static func postCmdV() {
         let source = CGEventSource(stateID: .combinedSessionState)
         let vKey = CGKeyCode(kVK_ANSI_V)

@@ -161,6 +161,19 @@ final class HotkeyEngineTests: XCTestCase {
         XCTAssertEqual(engine.handle(type: .otherMouseDown, keyCode: 3, flags: [], time: 0), .none)
     }
 
+    func testTrailingPressEnterStripped() {
+        XCTAssertEqual(TrailingCommand.stripPressEnter("Sounds good, press enter"), "Sounds good")
+        XCTAssertEqual(TrailingCommand.stripPressEnter("Ship it and press enter."), "Ship it")
+        XCTAssertEqual(TrailingCommand.stripPressEnter("Done, then press return"), "Done")
+        XCTAssertEqual(TrailingCommand.stripPressEnter("Press Enter"), "")
+    }
+
+    func testMidSentencePressEnterIgnored() {
+        XCTAssertNil(TrailingCommand.stripPressEnter("You press enter to submit the form"))
+        XCTAssertNil(TrailingCommand.stripPressEnter("The presenter was great"))
+        XCTAssertNil(TrailingCommand.stripPressEnter("Just some normal text"))
+    }
+
     func testAudioBackupRoundTrip() {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("aloud-test-\(UUID().uuidString).wav")

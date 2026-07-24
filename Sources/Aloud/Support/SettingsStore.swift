@@ -29,6 +29,7 @@ final class SettingsStore: ObservableObject {
         statsDictations = defaults.object(forKey: Keys.statsDictations) as? Int ?? 0
         liveTyping = defaults.object(forKey: Keys.liveTyping) as? Bool ?? true
         handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
+        pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
     }
 
     private static func resolveDefaults() -> UserDefaults {
@@ -53,6 +54,7 @@ final class SettingsStore: ObservableObject {
         static let statsDictations = "statsDictations"
         static let liveTyping = "liveTyping"
         static let handsFree = "handsFree"
+        static let pressEnterCommand = "pressEnterCommand"
     }
 
     @Published var hotkey: Hotkey {
@@ -109,6 +111,12 @@ final class SettingsStore: ObservableObject {
     // Double-press the dictation key → keep listening until Esc. On by default.
     @Published var handsFree: Bool {
         didSet { defaults.set(handsFree, forKey: Keys.handsFree) }
+    }
+    // Ending a dictation with "press enter" sends Return after the text.
+    // Off by default: dictating *about* pressing enter must never submit
+    // someone's chat message unasked.
+    @Published var pressEnterCommand: Bool {
+        didSet { defaults.set(pressEnterCommand, forKey: Keys.pressEnterCommand) }
     }
 
     // Lifetime dictation totals (words spoken, seconds of speech, sessions) —

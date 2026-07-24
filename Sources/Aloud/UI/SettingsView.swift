@@ -307,6 +307,15 @@ struct DictationSettings: View {
             }
 
             SwiftUI.Section {
+                Toggle("“Press enter” command", isOn: $settings.pressEnterCommand)
+                Text(settings.pressEnterCommand
+                     ? "End a dictation with “press enter” and Aloud presses Return after typing — handy for chat apps."
+                     : "Saying “press enter” types the words like anything else.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            SwiftUI.Section {
                 Toggle("Sound when recording starts", isOn: $settings.soundCues)
             }
 

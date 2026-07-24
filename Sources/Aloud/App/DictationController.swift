@@ -308,7 +308,12 @@ final class DictationController: ObservableObject {
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let polisher = TextPolisher(level: settings.polishLevel,
                                             replacements: settings.replacements)
-                let text = polisher.polish(raw)
+                var text = polisher.polish(raw)
+                var sendReturn = false
+                if settings.pressEnterCommand, let stripped = TrailingCommand.stripPressEnter(text) {
+                    text = stripped
+                    sendReturn = true
+                }
                 if !text.isEmpty {
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
@@ -322,6 +327,7 @@ final class DictationController: ObservableObject {
                 } else {
                     liveTyper.eraseAll()
                 }
+                if sendReturn { TextInjector.postReturn() }
                 endLiveTyping()
                 indicator.hide()
                 phase = .idle
@@ -361,9 +367,17 @@ final class DictationController: ObservableObject {
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let polisher = TextPolisher(level: settings.polishLevel,
                                             replacements: settings.replacements)
-                let text = polisher.polish(raw)
+                var text = polisher.polish(raw)
+                var sendReturn = false
+                if settings.pressEnterCommand, let stripped = TrailingCommand.stripPressEnter(text) {
+                    text = stripped
+                    sendReturn = true
+                }
                 if !text.isEmpty {
-                    injector.inject(text)
+                    // Return goes out only after the paste has been serviced.
+                    injector.inject(text) {
+                        if sendReturn { TextInjector.postReturn() }
+                    }
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
@@ -371,6 +385,8 @@ final class DictationController: ObservableObject {
                     settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
                                              seconds: result.audioDuration)
                     clearAudioBackup()
+                } else if sendReturn {
+                    TextInjector.postReturn()
                 }
                 indicator.hide()
                 phase = .idle
