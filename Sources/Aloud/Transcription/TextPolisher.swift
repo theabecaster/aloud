@@ -10,8 +10,11 @@ import Foundation
 //   .light  — filler words removed, whitespace/punctuation tidied
 //   .standard (default) — light + spoken self-corrections ("scratch that")
 //                          + the user's personal replacements
+//   .concise — standard first, then an on-device rewrite tightens the wording
+//              (only offered on Macs whose system provides the rewrite engine;
+//              the exact words are still kept in History)
 enum PolishLevel: String, Codable, CaseIterable, Identifiable {
-    case off, light, standard
+    case off, light, standard, concise
     var id: String { rawValue }
 
     var displayName: String {
@@ -19,6 +22,7 @@ enum PolishLevel: String, Codable, CaseIterable, Identifiable {
         case .off: return "Off"
         case .light: return "Light"
         case .standard: return "Standard"
+        case .concise: return "Concise"
         }
     }
 
@@ -27,7 +31,13 @@ enum PolishLevel: String, Codable, CaseIterable, Identifiable {
         case .off: return "Exactly what you said, word for word."
         case .light: return "Removes “um” and “uh”, tidies spacing."
         case .standard: return "Also honors “scratch that” corrections and your replacements."
+        case .concise: return "Rewrites your words to be tighter — entirely on this Mac."
         }
+    }
+
+    // The rule-based level that runs before (or instead of) the rewrite.
+    var deterministicLevel: PolishLevel {
+        self == .concise ? .standard : self
     }
 }
 

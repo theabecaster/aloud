@@ -45,6 +45,25 @@ final class DictationController: ObservableObject {
     // A failed dictation's audio is on disk and can be retried (menu item).
     @Published private(set) var retryAvailable = AudioBackup.exists
 
+    // On-device rewrite engine behind the Concise level; nil where the OS
+    // doesn't provide one (feature hidden, not broken).
+    private let enhancer = EnhancerFactory.make()
+    var enhancerAvailable: Bool { enhancer?.isAvailable ?? false }
+
+    // Clean-up levels the pickers should offer. Concise appears only where
+    // the rewrite engine exists (or is already the saved choice, so the
+    // picker never shows a selection it doesn't contain).
+    var availableLevels: [PolishLevel] {
+        PolishLevel.allCases.filter {
+            $0 != .concise || enhancerAvailable || settings.polishLevel == .concise
+        }
+    }
+
+    // The last injected dictation, kept so "Type Exact Words Instead" can
+    // swap an AI-tightened result back to the verbatim transcript.
+    @Published private(set) var undoEnhancementAvailable = false
+    private var lastEnhanced: (typed: String, verbatim: String)?
+
     private var cancellables: Set<AnyCancellable> = []
 
     init(settings: SettingsStore = .shared,
@@ -64,6 +83,7 @@ final class DictationController: ObservableObject {
             self?.hotkeyManager.endHandsFree()
         }
         indicator.settings = settings
+        indicator.levelsProvider = { [weak self] in self?.availableLevels ?? PolishLevel.allCases }
         recorder.onDeviceChange = { [weak self] in
             self?.indicator.showNotice("Microphone changed — still listening")
         }
@@ -172,6 +192,51 @@ final class DictationController: ObservableObject {
         }
     }
 
+    // Deterministic polish first; the Concise rewrite only ever tightens that
+    // result, and any failure or slow response falls back to it unchanged.
+    private func finishText(from raw: String) async -> (text: String, enhanced: Bool) {
+        let polisher = TextPolisher(level: settings.polishLevel.deterministicLevel,
+                                    replacements: settings.replacements)
+        let text = polisher.polish(raw)
+        guard settings.polishLevel == .concise, !text.isEmpty,
+              let enhancer, enhancer.isAvailable else { return (text, false) }
+        let rewritten: String? = await withTaskGroup(of: String?.self) { group in
+            group.addTask { try? await enhancer.enhance(text) }
+            group.addTask {
+                // Budget, not a target: past this the polished text ships as-is.
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        guard let rewritten, rewritten != text else { return (text, false) }
+        return (rewritten, true)
+    }
+
+    // Remember (or forget) the just-typed dictation for "Type Exact Words
+    // Instead". Only an actually-rewritten, still-at-the-cursor result
+    // qualifies — a sent message (press enter) is out of reach.
+    private func recordUndoState(typed: String, verbatim: String, enhanced: Bool, sent: Bool) {
+        if enhanced, !sent, typed != verbatim {
+            lastEnhanced = (typed: typed, verbatim: verbatim)
+            undoEnhancementAvailable = true
+        } else {
+            lastEnhanced = nil
+            undoEnhancementAvailable = false
+        }
+    }
+
+    // Swap the AI-tightened text just typed for the exact words spoken.
+    func undoLastEnhancement() {
+        guard let last = lastEnhanced else { return }
+        LiveTyper.replaceTrailing(last.typed, with: last.verbatim)
+        lastTranscription = last.verbatim
+        lastEnhanced = nil
+        undoEnhancementAvailable = false
+    }
+
     private func playCue(_ name: String) {
         guard settings.soundCues else { return }
         if let sound = NSSound(named: NSSound.Name(name)) {
@@ -197,6 +262,9 @@ final class DictationController: ObservableObject {
             playCue("Tink")
             refreshTranscriberState()   // pick up a background engine switch
             indicator.isBasic = usingFallback
+            // Load the rewrite model while the user is still talking so the
+            // commit path never pays its cold start.
+            if settings.polishLevel == .concise { enhancer?.prewarm() }
             indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 })
             if settings.liveTyping { startLiveTyping() }
         } catch {
@@ -306,9 +374,7 @@ final class DictationController: ObservableObject {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                let polisher = TextPolisher(level: settings.polishLevel,
-                                            replacements: settings.replacements)
-                var text = polisher.polish(raw)
+                var (text, enhanced) = await finishText(from: raw)
                 var sendReturn = false
                 if settings.pressEnterCommand, let stripped = TrailingCommand.stripPressEnter(text) {
                     text = stripped
@@ -317,6 +383,7 @@ final class DictationController: ObservableObject {
                 if !text.isEmpty {
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
+                    recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: sendReturn)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
@@ -365,9 +432,7 @@ final class DictationController: ObservableObject {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                let polisher = TextPolisher(level: settings.polishLevel,
-                                            replacements: settings.replacements)
-                var text = polisher.polish(raw)
+                var (text, enhanced) = await finishText(from: raw)
                 var sendReturn = false
                 if settings.pressEnterCommand, let stripped = TrailingCommand.stripPressEnter(text) {
                     text = stripped
@@ -378,6 +443,7 @@ final class DictationController: ObservableObject {
                     injector.inject(text) {
                         if sendReturn { TextInjector.postReturn() }
                     }
+                    recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: sendReturn)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
@@ -427,11 +493,10 @@ final class DictationController: ObservableObject {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                let polisher = TextPolisher(level: settings.polishLevel,
-                                            replacements: settings.replacements)
-                let text = polisher.polish(raw)
+                let (text, enhanced) = await finishText(from: raw)
                 if !text.isEmpty {
                     injector.inject(text)
+                    recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: false)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)

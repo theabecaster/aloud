@@ -36,6 +36,11 @@ final class RecordingIndicatorPanel {
         set { model.settings = newValue }
     }
 
+    var levelsProvider: (() -> [PolishLevel])? {
+        get { model.levelsProvider }
+        set { model.levelsProvider = newValue }
+    }
+
     // True while we set the frame ourselves, so the didMove observer only
     // records user drags.
     private var isRepositioning = false
@@ -223,6 +228,9 @@ final class IndicatorModel: ObservableObject {
     var onStop: (() -> Void)?
     var onResetPosition: (() -> Void)?
     var settings: SettingsStore?
+    // Which clean-up levels the quick menu offers (Concise only where the
+    // rewrite engine exists) — supplied by the controller.
+    var levelsProvider: (() -> [PolishLevel])?
 }
 
 struct IndicatorView: View {
@@ -315,7 +323,7 @@ struct IndicatorView: View {
             Picker("Clean-up", selection: Binding(
                 get: { settings.polishLevel },
                 set: { settings.polishLevel = $0 })) {
-                ForEach(PolishLevel.allCases) { level in
+                ForEach(model.levelsProvider?() ?? PolishLevel.allCases) { level in
                     Text(level.displayName).tag(level)
                 }
             }

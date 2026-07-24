@@ -283,7 +283,7 @@ struct DictationSettings: View {
 
             SwiftUI.Section {
                 Picker("Clean-up", selection: $settings.polishLevel) {
-                    ForEach(PolishLevel.allCases) { level in
+                    ForEach(controller.availableLevels) { level in
                         Text(level.displayName).tag(level)
                     }
                 }
@@ -291,6 +291,12 @@ struct DictationSettings: View {
                 Text(settings.polishLevel.explanation)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                if settings.polishLevel == .concise, !controller.enhancerAvailable {
+                    Label("The rewrite engine isn't available right now — Standard clean-up is used instead.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             } footer: {
                 Text("The exact words you said are always kept in History, whatever the clean-up level.")
                     .font(.footnote)

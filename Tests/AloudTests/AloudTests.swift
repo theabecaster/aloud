@@ -161,6 +161,23 @@ final class HotkeyEngineTests: XCTestCase {
         XCTAssertEqual(engine.handle(type: .otherMouseDown, keyCode: 3, flags: [], time: 0), .none)
     }
 
+    func testEnhancerOutputValidation() {
+        let original = "We should move the launch back a week because testing is not done."
+        // Good rewrite passes through trimmed.
+        XCTAssertEqual(EnhancerOutputCheck.validate("  Move the launch back a week.  ", original: original),
+                       "Move the launch back a week.")
+        // The observed failure modes are all rejected.
+        XCTAssertNil(EnhancerOutputCheck.validate("", original: original))
+        XCTAssertNil(EnhancerOutputCheck.validate("```swift\nfunc x() {}\n```", original: original))
+        XCTAssertNil(EnhancerOutputCheck.validate(String(repeating: "padding ", count: 60), original: original))
+    }
+
+    func testConciseFallsBackToStandardRules() {
+        XCTAssertEqual(PolishLevel.concise.deterministicLevel, .standard)
+        XCTAssertEqual(PolishLevel.standard.deterministicLevel, .standard)
+        XCTAssertEqual(PolishLevel.off.deterministicLevel, .off)
+    }
+
     func testHistorySearchMatching() {
         let entry = HistoryEntry(text: "Review the pull request",
                                  rawText: "review the the pull request",

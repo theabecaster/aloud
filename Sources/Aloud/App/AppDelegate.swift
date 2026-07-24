@@ -176,6 +176,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        if controller.undoEnhancementAvailable {
+            menu.addItem(withTitle: "Type Exact Words Instead",
+                         action: #selector(undoEnhancement), keyEquivalent: "").target = self
+        }
         if controller.retryAvailable {
             menu.addItem(withTitle: "Retry Last Dictation",
                          action: #selector(retryLastDictation), keyEquivalent: "").target = self
@@ -276,6 +280,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func downloadModel() {
         Task { await controller.prepareModel() }
+    }
+
+    @objc private func undoEnhancement() {
+        controller.undoLastEnhancement()
     }
 
     @objc private func retryLastDictation() {

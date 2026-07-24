@@ -13,6 +13,24 @@ enum CLI {
             return 0
         case "--doctor":
             return doctor()
+        case "--enhance":
+            // Headless probe of the on-device rewrite: text in, rewrite out.
+            // Exit 2 when the engine isn't available on this machine.
+            guard args.count >= 2 else {
+                FileHandle.standardError.write(Data("usage: Aloud --enhance <text>\n".utf8))
+                return 64
+            }
+            guard let enhancer = EnhancerFactory.make(), enhancer.isAvailable else {
+                FileHandle.standardError.write(Data("enhancer unavailable on this machine\n".utf8))
+                return 2
+            }
+            do {
+                print(try await enhancer.enhance(args[1]))
+                return 0
+            } catch {
+                FileHandle.standardError.write(Data("enhance failed: \(error)\n".utf8))
+                return 1
+            }
         case "--selftest":
             return selfTest()
         case "--transcribe":
