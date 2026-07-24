@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let controller = DictationController()
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private let scratchpad = ScratchpadPanel()
     private var pendingUpdate: Updater.LatestRelease?
     private var phaseObservation: AnyCancellable?
     private var downloadObservation: AnyCancellable?
@@ -184,6 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(withTitle: "Copy Last Dictation",
                          action: #selector(copyLastDictation), keyEquivalent: "").target = self
         }
+        let scratchItem = NSMenuItem(title: "Scratchpad",
+                                     action: #selector(toggleScratchpad), keyEquivalent: "")
+        scratchItem.target = self
+        scratchItem.state = scratchpad.isVisible ? .on : .off
+        menu.addItem(scratchItem)
         menu.addItem(withTitle: "Settings…",
                      action: #selector(openSettings), keyEquivalent: ",").target = self
 
@@ -285,6 +291,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func copyLastDictation() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(controller.lastTranscription, forType: .string)
+    }
+
+    @objc private func toggleScratchpad() {
+        scratchpad.toggle()
     }
 
     @objc private func openSettings() {
