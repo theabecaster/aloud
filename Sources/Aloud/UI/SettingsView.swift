@@ -417,11 +417,7 @@ struct HistorySettings: View {
     private var filtered: [HistoryEntry] {
         let query = searchText.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return history.entries }
-        return history.entries.filter { entry in
-            entry.text.localizedCaseInsensitiveContains(query)
-                || (entry.rawText?.localizedCaseInsensitiveContains(query) ?? false)
-                || (entry.appName?.localizedCaseInsensitiveContains(query) ?? false)
-        }
+        return history.entries.filter { $0.matches(query) }
     }
 
     private var averageWPM: Int {

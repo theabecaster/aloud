@@ -22,6 +22,16 @@ struct HistoryEntry: Codable, Identifiable, Equatable {
     }
 }
 
+extension HistoryEntry {
+    // History-tab search: matches the typed text, the raw transcript, or the
+    // app the dictation landed in.
+    func matches(_ query: String) -> Bool {
+        text.localizedCaseInsensitiveContains(query)
+            || (rawText?.localizedCaseInsensitiveContains(query) ?? false)
+            || (appName?.localizedCaseInsensitiveContains(query) ?? false)
+    }
+}
+
 final class HistoryStore: ObservableObject {
     static let shared = HistoryStore()
 

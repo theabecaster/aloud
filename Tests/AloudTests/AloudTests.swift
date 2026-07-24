@@ -161,6 +161,16 @@ final class HotkeyEngineTests: XCTestCase {
         XCTAssertEqual(engine.handle(type: .otherMouseDown, keyCode: 3, flags: [], time: 0), .none)
     }
 
+    func testHistorySearchMatching() {
+        let entry = HistoryEntry(text: "Review the pull request",
+                                 rawText: "review the the pull request",
+                                 duration: 3, appName: "Slack", appBundleID: "com.tinyspeck.slackmacgap")
+        XCTAssertTrue(entry.matches("PULL"))
+        XCTAssertTrue(entry.matches("the the"))   // raw transcript is searchable
+        XCTAssertTrue(entry.matches("slack"))     // so is the app name
+        XCTAssertFalse(entry.matches("zoom"))
+    }
+
     func testTrailingPressEnterStripped() {
         XCTAssertEqual(TrailingCommand.stripPressEnter("Sounds good, press enter"), "Sounds good")
         XCTAssertEqual(TrailingCommand.stripPressEnter("Ship it and press enter."), "Ship it")
