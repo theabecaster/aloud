@@ -96,7 +96,7 @@ final class DictationController: ObservableObject {
         indicator.settings = settings
         indicator.levelsProvider = { [weak self] in self?.availableLevels ?? PolishLevel.allCases }
         recorder.onDeviceChange = { [weak self] in
-            self?.indicator.showNotice("Microphone changed — still listening")
+            self?.indicator.showNotice(loc("Microphone changed — still listening"))
         }
         settings.$handsFree
             .sink { [weak self] enabled in self?.hotkeyManager.handsFree = enabled }
@@ -292,8 +292,8 @@ final class DictationController: ObservableObject {
         guard transcriber.state == .ready else {
             // Not ready yet — flash the indicator with a hint instead of failing silently.
             indicator.showHint(transcriber.modelIsDownloaded
-                               ? "Voice model is still warming up…"
-                               : "Finish setup to start dictating")
+                               ? loc("Voice model is still warming up…")
+                               : loc("Finish setup to start dictating"))
             return
         }
         let front = NSWorkspace.shared.frontmostApplication
@@ -319,7 +319,7 @@ final class DictationController: ObservableObject {
             if settings.liveTyping { startLiveTyping() }
         } catch {
             phase = .error(error.localizedDescription)
-            indicator.showHint("Couldn’t access the microphone")
+            indicator.showHint(loc("Couldn’t access the microphone"))
         }
     }
 
@@ -460,7 +460,7 @@ final class DictationController: ObservableObject {
                 keepAudioBackup(samples)
                 endLiveTyping()
                 playCue("Basso")
-                indicator.showHint("Couldn’t finish that dictation")
+                indicator.showHint(loc("Couldn’t finish that dictation"))
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 if case .error = phase { phase = .idle }
@@ -519,7 +519,7 @@ final class DictationController: ObservableObject {
             } catch {
                 keepAudioBackup(samples)
                 playCue("Basso")
-                indicator.showHint("Couldn’t transcribe that — try again")
+                indicator.showHint(loc("Couldn’t transcribe that — try again"))
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 if case .error = phase { phase = .idle }
@@ -535,13 +535,13 @@ final class DictationController: ObservableObject {
     private func beginCommandRecording() {
         guard phase == .idle || phase.isError else { return }
         guard commandsAvailable else {
-            indicator.showHint("Commands aren’t available on this Mac")
+            indicator.showHint(loc("Commands aren’t available on this Mac"))
             return
         }
         guard transcriber.state == .ready else {
             indicator.showHint(transcriber.modelIsDownloaded
-                               ? "Voice model is still warming up…"
-                               : "Finish setup to start dictating")
+                               ? loc("Voice model is still warming up…")
+                               : loc("Finish setup to start dictating"))
             return
         }
         let front = NSWorkspace.shared.frontmostApplication
@@ -556,7 +556,7 @@ final class DictationController: ObservableObject {
                            command: true)
         } catch {
             phase = .error(error.localizedDescription)
-            indicator.showHint("Couldn’t access the microphone")
+            indicator.showHint(loc("Couldn’t access the microphone"))
         }
     }
 
@@ -584,7 +584,7 @@ final class DictationController: ObservableObject {
                 phase = .idle
             } catch {
                 playCue("Basso")
-                indicator.showHint("Couldn’t hear that — try again")
+                indicator.showHint(loc("Couldn’t hear that — try again"))
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 if case .error = phase { phase = .idle }
@@ -609,7 +609,7 @@ final class DictationController: ObservableObject {
     private func performCommand(_ spoken: String) async {
         guard let interpreter = commandInterpreter, interpreter.isAvailable else {
             playCue("Basso")
-            indicator.showHint("Couldn’t do that — try again")
+            indicator.showHint(loc("Couldn’t do that — try again"))
             return
         }
         // Selection read at commit: the pill never takes focus, so the focused
@@ -630,7 +630,7 @@ final class DictationController: ObservableObject {
         }
         guard let result, !result.isEmpty else {
             playCue("Basso")
-            indicator.showHint("Couldn’t do that — try again")
+            indicator.showHint(loc("Couldn’t do that — try again"))
             return
         }
         injector.inject(result)
@@ -684,7 +684,7 @@ final class DictationController: ObservableObject {
                 phase = .idle
             } catch {
                 playCue("Basso")
-                indicator.showHint("Couldn’t transcribe that — try again")
+                indicator.showHint(loc("Couldn’t transcribe that — try again"))
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 if case .error = phase { phase = .idle }

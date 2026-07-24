@@ -21,19 +21,19 @@ enum PolishLevel: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .off: return "Off"
-        case .light: return "Light"
-        case .standard: return "Standard"
-        case .concise: return "Concise"
+        case .off: return loc("Off")
+        case .light: return loc("Light")
+        case .standard: return loc("Standard")
+        case .concise: return loc("Concise")
         }
     }
 
     var explanation: String {
         switch self {
-        case .off: return "Exactly what you said, word for word."
-        case .light: return "Removes “um” and “uh”, tidies spacing, capitalizes names."
-        case .standard: return "Also honors “scratch that” corrections and your replacements."
-        case .concise: return "Rewrites your words to be tighter — entirely on this Mac."
+        case .off: return loc("Exactly what you said, word for word.")
+        case .light: return loc("Removes “um” and “uh”, tidies spacing, capitalizes names.")
+        case .standard: return loc("Also honors “scratch that” corrections and your replacements.")
+        case .concise: return loc("Rewrites your words to be tighter — entirely on this Mac.")
         }
     }
 

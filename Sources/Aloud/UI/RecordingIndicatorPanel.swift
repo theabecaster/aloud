@@ -265,7 +265,7 @@ struct IndicatorView: View {
                 // Reduced-accuracy session: same tag style as onboarding
                 // badges, present in held and hands-free pills alike.
                 if model.isBasic {
-                    Text("Basic")
+                    Text(loc("Basic"))
                         .font(.system(size: 9, weight: .semibold))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1.5)
@@ -277,7 +277,7 @@ struct IndicatorView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 } else if model.stillListening {
-                    Text("Still listening…")
+                    Text(loc("Still listening…"))
                         .foregroundStyle(.orange)
                         .frame(width: 90)
                 } else {
@@ -296,12 +296,12 @@ struct IndicatorView: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Stop — or press Esc")
+                    .help(loc("Stop — or press Esc"))
                 }
             case .transcribing:
                 ProgressView()
                     .controlSize(.small)
-                Text(model.isCommand ? "Working…" : "Typing…")
+                Text(model.isCommand ? loc("Working…") : loc("Typing…"))
                     .foregroundStyle(.secondary)
             case .hint:
                 Image(systemName: "info.circle")
@@ -329,15 +329,15 @@ struct IndicatorView: View {
     @ViewBuilder
     private var quickMenu: some View {
         if let settings = model.settings {
-            Picker("Microphone", selection: Binding(
+            Picker(loc("Microphone"), selection: Binding(
                 get: { settings.microphoneUID },
                 set: { settings.microphoneUID = $0 })) {
-                Text("System default").tag(nil as String?)
+                Text(loc("System default")).tag(nil as String?)
                 ForEach(AudioDevices.inputDevices()) { d in
                     Text(d.name).tag(d.uid as String?)
                 }
             }
-            Picker("Clean-up", selection: Binding(
+            Picker(loc("Clean-up"), selection: Binding(
                 get: { settings.polishLevel },
                 set: { settings.polishLevel = $0 })) {
                 ForEach(model.levelsProvider?() ?? PolishLevel.allCases) { level in
@@ -345,7 +345,7 @@ struct IndicatorView: View {
                 }
             }
             Divider()
-            Button("Reset Position") { model.onResetPosition?() }
+            Button(loc("Reset Position")) { model.onResetPosition?() }
         }
     }
 }

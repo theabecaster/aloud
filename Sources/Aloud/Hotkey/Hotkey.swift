@@ -46,7 +46,7 @@ struct Hotkey: Codable, Equatable {
     }
 
     var displayName: String {
-        if isMouseButton { return "Mouse \(keyCode + 1)" }
+        if isMouseButton { return loc("Mouse %ld", Int(keyCode) + 1) }
         let mods = CGEventFlags(rawValue: modifiers)
         var parts: [String] = []
         if mods.contains(.maskControl) { parts.append("⌃") }
@@ -59,23 +59,23 @@ struct Hotkey: Codable, Equatable {
 
     static func keyName(for keyCode: UInt16) -> String {
         switch Int(keyCode) {
-        case kVK_Command: return "Left ⌘"
-        case kVK_RightCommand: return "Right ⌘"
-        case kVK_Option: return "Left ⌥"
-        case kVK_RightOption: return "Right ⌥"
-        case kVK_Control: return "Left ⌃"
-        case kVK_RightControl: return "Right ⌃"
-        case kVK_Shift: return "Left ⇧"
-        case kVK_RightShift: return "Right ⇧"
+        case kVK_Command: return loc("Left ⌘")
+        case kVK_RightCommand: return loc("Right ⌘")
+        case kVK_Option: return loc("Left ⌥")
+        case kVK_RightOption: return loc("Right ⌥")
+        case kVK_Control: return loc("Left ⌃")
+        case kVK_RightControl: return loc("Right ⌃")
+        case kVK_Shift: return loc("Left ⇧")
+        case kVK_RightShift: return loc("Right ⇧")
         case kVK_Function: return "fn"
-        case kVK_Space: return "Space"
+        case kVK_Space: return loc("Space")
         // F-key virtual keycodes are not contiguous (kVK_F1 = 0x7A > kVK_F20 = 0x5A),
         // so a range pattern over them would trap at runtime.
         case let code where fKeyNames[code] != nil: return fKeyNames[code]!
         default:
             // Translate via the current keyboard layout.
             if let s = Hotkey.characters(for: keyCode), !s.isEmpty { return s.uppercased() }
-            return "key \(keyCode)"
+            return loc("key %ld", Int(keyCode))
         }
     }
 

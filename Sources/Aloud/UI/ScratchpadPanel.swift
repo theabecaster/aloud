@@ -54,7 +54,7 @@ final class ScratchpadPanel {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 260),
                             styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
                             backing: .buffered, defer: true)
-        panel.title = "Scratchpad"
+        panel.title = loc("Scratchpad")
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.level = .floating
