@@ -24,6 +24,9 @@ final class SettingsStore: ObservableObject {
         soundCues = defaults.object(forKey: Keys.soundCues) as? Bool ?? true
         indicatorPosition = (defaults.data(forKey: Keys.indicatorPosition))
             .flatMap { try? JSONDecoder().decode(CGPoint.self, from: $0) }
+        statsWords = defaults.object(forKey: Keys.statsWords) as? Int ?? 0
+        statsSeconds = defaults.object(forKey: Keys.statsSeconds) as? Double ?? 0
+        statsDictations = defaults.object(forKey: Keys.statsDictations) as? Int ?? 0
         liveTyping = defaults.object(forKey: Keys.liveTyping) as? Bool ?? true
         handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
     }
@@ -45,6 +48,9 @@ final class SettingsStore: ObservableObject {
         static let replacements = "replacements"
         static let soundCues = "soundCues"
         static let indicatorPosition = "indicatorPosition"
+        static let statsWords = "statsWords"
+        static let statsSeconds = "statsSeconds"
+        static let statsDictations = "statsDictations"
         static let liveTyping = "liveTyping"
         static let handsFree = "handsFree"
     }
@@ -103,6 +109,25 @@ final class SettingsStore: ObservableObject {
     // Double-press the dictation key → keep listening until Esc. On by default.
     @Published var handsFree: Bool {
         didSet { defaults.set(handsFree, forKey: Keys.handsFree) }
+    }
+
+    // Lifetime dictation totals (words spoken, seconds of speech, sessions) —
+    // history is capped, so these accumulate separately. Local only, like
+    // everything else.
+    @Published var statsWords: Int {
+        didSet { defaults.set(statsWords, forKey: Keys.statsWords) }
+    }
+    @Published var statsSeconds: Double {
+        didSet { defaults.set(statsSeconds, forKey: Keys.statsSeconds) }
+    }
+    @Published var statsDictations: Int {
+        didSet { defaults.set(statsDictations, forKey: Keys.statsDictations) }
+    }
+
+    func recordDictation(words: Int, seconds: TimeInterval) {
+        statsWords += words
+        statsSeconds += seconds
+        statsDictations += 1
     }
 
     private static func loadHotkey(from defaults: UserDefaults) -> Hotkey? {

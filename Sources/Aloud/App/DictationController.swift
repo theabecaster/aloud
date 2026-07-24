@@ -316,6 +316,8 @@ final class DictationController: ObservableObject {
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
                     lastTranscription = text
+                    settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
+                                             seconds: result.audioDuration)
                     clearAudioBackup()
                 } else {
                     liveTyper.eraseAll()
@@ -366,6 +368,8 @@ final class DictationController: ObservableObject {
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
                     lastTranscription = text
+                    settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
+                                             seconds: result.audioDuration)
                     clearAudioBackup()
                 }
                 indicator.hide()
@@ -416,6 +420,8 @@ final class DictationController: ObservableObject {
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
                     lastTranscription = text
+                    settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
+                                             seconds: result.audioDuration)
                 }
                 clearAudioBackup()
                 indicator.hide()

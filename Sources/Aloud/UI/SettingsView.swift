@@ -415,8 +415,25 @@ struct HistorySettings: View {
         }
     }
 
+    private var averageWPM: Int {
+        guard settings.statsSeconds > 1 else { return 0 }
+        return Int((Double(settings.statsWords) / (settings.statsSeconds / 60)).rounded())
+    }
+
     var body: some View {
         VStack(spacing: 0) {
+            if settings.statsDictations > 0 {
+                HStack {
+                    StatBlock(value: "\(settings.statsWords)", label: "words spoken")
+                    Divider().frame(height: 28)
+                    StatBlock(value: "\(settings.statsDictations)", label: "dictations")
+                    Divider().frame(height: 28)
+                    StatBlock(value: "\(averageWPM)", label: "words per minute")
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                Divider()
+            }
             if history.entries.isEmpty {
                 ContentUnavailableView("No Dictations Yet",
                                        systemImage: "quote.bubble",
@@ -465,6 +482,23 @@ struct HistorySettings: View {
                 .padding(12)
             }
         }
+    }
+}
+
+// One lifetime total, System Settings-toned: big number, quiet caption.
+struct StatBlock: View {
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text(value)
+                .font(.title3.weight(.semibold).monospacedDigit())
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
