@@ -192,6 +192,28 @@ final class HotkeyEngineTests: XCTestCase {
         XCTAssertLessThan(DictationController.contextHint(from: snap)!.count, 450)
     }
 
+    func testRoleFlippedRequestsAreRejected() {
+        let request = "Hey can you send me the report when you get a chance"
+        XCTAssertNil(EnhancerOutputCheck.validate("Sure, I'll send it when I get a chance.", original: request))
+        XCTAssertNil(EnhancerOutputCheck.validate("I'll send it over shortly.", original: request))
+        // The request kept as a request passes.
+        XCTAssertNotNil(EnhancerOutputCheck.validate("Hey, can you send me the report when you get a chance?",
+                                                     original: request))
+        // First-person statements aren't requests — "I'll" outputs are fine.
+        XCTAssertNotNil(EnhancerOutputCheck.validate("I'll send the invoice tomorrow.",
+                                                     original: "um I'll send the invoice tomorrow"))
+    }
+
+    func testConciseKeepsSpokenCorrectionsForTheRewrite() {
+        var p = TextPolisher(level: .standard, replacements: [])
+        p.spokenCorrections = false
+        // "no wait" survives for the rewrite engine to resolve with full context…
+        XCTAssertTrue(p.polish("meet at 2 no wait 3").contains("no wait"))
+        // …while the default deterministic path still applies it.
+        XCTAssertFalse(TextPolisher(level: .standard, replacements: [])
+            .polish("meet at 2 no wait 3").contains("no wait"))
+    }
+
     func testConciseFallsBackToStandardRules() {
         XCTAssertEqual(PolishLevel.concise.deterministicLevel, .standard)
         XCTAssertEqual(PolishLevel.standard.deterministicLevel, .standard)

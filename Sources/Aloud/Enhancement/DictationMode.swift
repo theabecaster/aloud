@@ -23,7 +23,11 @@ enum DictationMode: String, Codable, CaseIterable, Identifiable, Sendable {
     // or editor becomes commands, code, and commit messages — creatively
     // rewording those is never safe, so code apps get deterministic polish
     // only, whatever the clean-up level says.
-    var allowsRewrite: Bool { self != .code }
+    // Built-in categories never disable the rewrite — the Concise level
+    // behaves the same everywhere unless the user says otherwise with an
+    // "exact words" rule in Settings → Modes. Code apps get a conservative
+    // tone instead of a silent opt-out (which read as "the feature is broken").
+    var allowsRewrite: Bool { true }
 
     // Appended to the rewrite engine's instructions when the Concise level
     // runs. Short and factual on purpose — they steer tone, nothing else.
@@ -32,7 +36,8 @@ enum DictationMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .messaging: return "The text is a chat message: keep it casual and short. Keep questions as questions."
         case .email: return "Use a professional, clear tone with full sentences. Keep the speaker's questions and requests aimed at the reader. Still no greetings or sign-offs."
         case .notes: return "The text is a note: tighten it like normal, keep the key details, and use a short list when it enumerates items or steps."
-        case .code, .general: return nil
+        case .code: return "The text goes into a terminal or code editor: keep the wording as spoken apart from fillers, preserve identifiers, commands, and technical terms exactly, and never reformat into lists."
+        case .general: return nil
         }
     }
 

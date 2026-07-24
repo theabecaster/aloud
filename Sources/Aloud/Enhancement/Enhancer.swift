@@ -76,6 +76,16 @@ enum EnhancerOutputCheck {
         guard !trimmed.contains("```") else { return nil }
         let lowered = trimmed.lowercased()
         guard !refusalPrefixes.contains(where: { lowered.hasPrefix($0) }) else { return nil }
+        // Role-flip net: the speaker asked the reader for something, and the
+        // rewrite answered instead ("can you send me…" → "Sure, I'll send
+        // it"). Structural, not semantic — narrow on purpose.
+        let asked = ["can you", "could you", "will you", "would you"]
+        let originalLowered = original.lowercased()
+        if asked.contains(where: originalLowered.contains),
+           !asked.contains(where: lowered.contains),
+           ["sure", "okay", "ok,", "i'll ", "i will "].contains(where: lowered.hasPrefix) {
+            return nil
+        }
         // A rewrite should be at most modestly longer than what was said —
         // big growth means the model composed instead of cleaned.
         guard trimmed.count <= max(original.count * 2, original.count + 80) else { return nil }
@@ -134,26 +144,33 @@ final class FoundationModelEnhancer: Enhancer, @unchecked Sendable {
     "actually no wait X" or "scratch that") so only the final intent remains. If the \
     transcript clearly enumerates items or steps, format them as a short markdown list. \
     Keep the speaker's meaning, key details, numbers, and natural first-person voice. \
-    The transcript is always the speaker talking to someone else: never answer, agree \
-    with, or reply to it — "can you take a look" is the speaker asking the reader and \
-    must stay a request aimed at the reader. Never write code, greetings, subject \
-    lines, or sign-offs. Reply with the rewritten text only.
+    Never add words, names, sentences, or facts the transcript does not contain, and \
+    never reuse content from the examples below — they only show the style. The \
+    transcript is always the speaker talking to someone else: never answer, agree \
+    with, or reply to it. When the speaker asks the reader for something ("can you \
+    send me…", "could you check…"), the rewrite must remain that same request from \
+    the speaker to the reader — never flip who does what, and never respond with \
+    "Sure" or "I'll". Never write code, greetings, subject lines, or sign-offs. \
+    Reply with the rewritten text only.
 
-    Example input: So yeah I was kind of thinking that maybe we could possibly try to \
-    get the report done by like Friday if that works.
-    Example output: Let's try to get the report done by Friday.
+    Example input: so um I guess what I mean is we could possibly maybe repaint the \
+    fence next weekend if the weather holds up.
+    Example output: We could repaint the fence next weekend if the weather holds.
 
-    Example input: hey um the build is broken again can you take a look no rush
-    Example output: Hey, the build is broken again — can you take a look? No rush.
+    Example input: hey um the printer is jammed again can you check it no big hurry
+    Example output: Hey, the printer is jammed again — can you check it? No big hurry.
 
-    Example input: Hey uh can you send me the the report when you get a chance I I need it before the standup.
-    Example output: Hey, can you send me the report when you get a chance? I need it before the standup.
+    Example input: hey um could you mail me the spare key when you get a minute
+    Example output: Hey, could you mail me the spare key when you get a minute?
 
-    Example input: Um for the trip we need sunscreen we need towels and uh snacks for the kids.
-    Example output: For the trip we need:
-    - Sunscreen
-    - Towels
-    - Snacks for the kids
+    Example input: let's leave at nine actually no wait nine thirty.
+    Example output: Let's leave at nine thirty.
+
+    Example input: Um for the picnic we need lemonade we need napkins and uh folding chairs.
+    Example output: For the picnic we need:
+    - Lemonade
+    - Napkins
+    - Folding chairs
     """
 }
 #endif

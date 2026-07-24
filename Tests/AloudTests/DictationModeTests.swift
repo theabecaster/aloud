@@ -51,30 +51,29 @@ final class DictationModeTests: XCTestCase {
         XCTAssertNotNil(DictationMode.email.toneInstruction)
         XCTAssertNotNil(DictationMode.notes.toneInstruction)
         XCTAssertNil(DictationMode.general.toneInstruction)
-        XCTAssertNil(DictationMode.code.toneInstruction)
+        XCTAssertNotNil(DictationMode.code.toneInstruction)
         // Each tone is its own instruction, not a shared string.
         XCTAssertNotEqual(DictationMode.messaging.toneInstruction, DictationMode.email.toneInstruction)
         XCTAssertNotEqual(DictationMode.email.toneInstruction, DictationMode.notes.toneInstruction)
     }
 
-    // MARK: verbatim safety for code apps
+    // MARK: consistent behavior across apps
 
-    func testCodeIsTheOnlyCategoryThatSkipsTheRewrite() {
-        XCTAssertFalse(DictationMode.code.allowsRewrite)
-        for mode in DictationMode.allCases where mode != .code {
+    // Built-in categories only steer tone; none of them silently disables the
+    // rewrite (that read as "the feature is broken"). Only a user's own
+    // "exact words" rule may do that.
+    func testNoBuiltInCategoryDisablesTheRewrite() {
+        for mode in DictationMode.allCases {
             XCTAssertTrue(mode.allowsRewrite, "\(mode) should allow the rewrite")
         }
     }
 
-    func testTerminalsAndEditorsResolveToNoRewrite() {
-        for id in ["com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty",
-                   "dev.warp.Warp-Stable", "com.microsoft.VSCode",
-                   "com.todesktop.230313mzl4w4u92", "com.apple.dt.Xcode",
-                   "com.jetbrains.WebStorm"] {
-            XCTAssertFalse(DictationMode.builtIn(forBundleID: id).allowsRewrite,
-                           "\(id) must never be creatively rewritten")
+    func testTerminalsGetTheConservativeCodeTone() {
+        for id in ["com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty"] {
+            let mode = DictationMode.builtIn(forBundleID: id)
+            XCTAssertTrue(mode.allowsRewrite)
+            XCTAssertNotNil(mode.toneInstruction, "\(id) should carry the code tone")
         }
-        XCTAssertTrue(DictationMode.builtIn(forBundleID: "com.example.someapp").allowsRewrite)
     }
 
     func testInstructionCombining() {
@@ -91,7 +90,8 @@ final class DictationModeTests: XCTestCase {
         XCTAssertTrue(slack.allowsRewrite)
         XCTAssertEqual(slack.extraInstructions, DictationMode.messaging.toneInstruction)
         let terminal = ModeResolver.decision(forBundleID: "com.apple.Terminal", rules: [])
-        XCTAssertEqual(terminal, ModeDecision(allowsRewrite: false, extraInstructions: nil))
+        XCTAssertEqual(terminal, ModeDecision(allowsRewrite: true,
+                                              extraInstructions: DictationMode.code.toneInstruction))
         let unknown = ModeResolver.decision(forBundleID: "com.example.someapp", rules: [])
         XCTAssertEqual(unknown, ModeDecision(allowsRewrite: true, extraInstructions: nil))
     }
@@ -112,10 +112,12 @@ final class DictationModeTests: XCTestCase {
         let decision = ModeResolver.decision(forBundleID: "com.tinyspeck.slackmacgap", rules: rules)
         XCTAssertTrue(decision.allowsRewrite)
         XCTAssertEqual(decision.extraInstructions, DictationMode.email.toneInstruction)
-        // A category override to code inherits its verbatim safety.
+        // A category override to code carries the conservative code tone.
         let toCode = [AppModeRule(appName: nil, bundleID: "com.example.someapp",
                                   behavior: .category(.code))]
-        XCTAssertFalse(ModeResolver.decision(forBundleID: "com.example.someapp", rules: toCode).allowsRewrite)
+        let codeDecision = ModeResolver.decision(forBundleID: "com.example.someapp", rules: toCode)
+        XCTAssertTrue(codeDecision.allowsRewrite)
+        XCTAssertEqual(codeDecision.extraInstructions, DictationMode.code.toneInstruction)
     }
 
     func testCustomInstructionRuleCarriesTheInstruction() {

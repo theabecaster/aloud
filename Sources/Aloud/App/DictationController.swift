@@ -216,32 +216,33 @@ final class DictationController: ObservableObject {
     // Deterministic polish first; the Concise rewrite only ever tightens that
     // result, and any failure or slow response falls back to it unchanged.
     // The session app decides the rewrite's tone (see DictationMode).
-    // Apps already told once this launch that their text stays verbatim —
-    // the notice teaches, it shouldn't nag.
-    private var verbatimNoticeShown: Set<String> = []
+    // Two polishes of the same transcript: what the rewrite gets to see
+    // (spoken corrections left intact for it to resolve) and what ships if
+    // the rewrite doesn't run (corrections applied the deterministic way).
+    private func polishedVariants(from raw: String) -> (rewriteInput: String, fallback: String) {
+        var polisher = TextPolisher(level: settings.polishLevel.deterministicLevel,
+                                    replacements: settings.replacements)
+        let fallback = polisher.polish(raw)
+        guard settings.polishLevel == .concise else { return (fallback, fallback) }
+        polisher.spokenCorrections = false
+        return (polisher.polish(raw), fallback)
+    }
 
     private func finishText(from raw: String) async -> (text: String, enhanced: Bool) {
-        let polisher = TextPolisher(level: settings.polishLevel.deterministicLevel,
-                                    replacements: settings.replacements)
-        let text = polisher.polish(raw)
-        guard let rewritten = await rewriteIfAllowed(text) else { return (text, false) }
+        let (input, fallback) = polishedVariants(from: raw)
+        guard let rewritten = await rewriteIfAllowed(input) else { return (fallback, false) }
         return (rewritten, true)
     }
 
     // The Concise rewrite, when the level, engine, and app mode all allow it.
-    // nil = ship the polished text (and, the first time an app's mode blocks
-    // the rewrite, say so — silence here read as "the feature is broken").
+    // nil = ship the polished text. The only mode that blocks it is a user's
+    // own "exact words" rule — behavior is otherwise identical in every app.
     private func rewriteIfAllowed(_ polished: String) async -> String? {
         guard settings.polishLevel == .concise, !polished.isEmpty,
               let enhancer, enhancer.isAvailable else { return nil }
         let decision = ModeResolver.decision(forBundleID: sessionApp.bundleID,
                                              rules: settings.appModes)
-        guard decision.allowsRewrite else {
-            if let id = sessionApp.bundleID, verbatimNoticeShown.insert(id).inserted {
-                indicator.showHint(loc("Kept your exact words — Aloud never rewrites here"))
-            }
-            return nil
-        }
+        guard decision.allowsRewrite else { return nil }
         let extra = [decision.extraInstructions, Self.contextHint(from: sessionContext)]
             .compactMap { $0 }
             .joined(separator: "\n")
@@ -454,9 +455,8 @@ final class DictationController: ObservableObject {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                let polisher = TextPolisher(level: settings.polishLevel.deterministicLevel,
-                                            replacements: settings.replacements)
-                var text = polisher.polish(raw)
+                let (rewriteInput, fallback) = polishedVariants(from: raw)
+                var text = fallback
                 var enhanced = false
                 // The rewrite only runs while the screen is still ours: once
                 // the user clicks or types, the preview belongs to them —
@@ -464,7 +464,7 @@ final class DictationController: ObservableObject {
                 // (and half-apply after a rebase). Screen wins; History still
                 // gets what was typed.
                 if liveTyper.anchorCount == 0, lastUserKeystroke == nil {
-                    if let rewritten = await rewriteIfAllowed(text),
+                    if let rewritten = await rewriteIfAllowed(rewriteInput),
                        liveTyper.anchorCount == 0, lastUserKeystroke == nil {
                         text = rewritten
                         enhanced = true

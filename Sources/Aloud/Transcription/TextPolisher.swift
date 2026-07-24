@@ -54,6 +54,12 @@ struct Replacement: Codable, Equatable, Identifiable {
 struct TextPolisher {
     var level: PolishLevel
     var replacements: [Replacement]
+    // The Concise rewrite handles "actually no wait" itself — and does it
+    // better, because it sees the speaker's whole phrasing. Pre-deleting the
+    // span here would hand the model two contradictory sentences with the
+    // intent stripped out. Off only for the rewrite's input; the fallback
+    // text keeps the deterministic behavior.
+    var spokenCorrections = true
 
     // Fillers stripped in .light and above. Deliberately short: only sounds
     // that carry no meaning in any context. ("like"/"you know" can be real
@@ -72,7 +78,7 @@ struct TextPolisher {
         text = Self.stripFillers(text)
 
         if level == .standard {
-            text = Self.applyCorrections(text)
+            if spokenCorrections { text = Self.applyCorrections(text) }
             text = Self.applyReplacements(text, replacements)
         }
 
