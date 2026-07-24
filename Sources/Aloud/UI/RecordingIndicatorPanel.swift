@@ -29,6 +29,18 @@ final class RecordingIndicatorPanel {
         set { model.onStop = newValue }
     }
 
+    // Settings drive the quick menu (mic, clean-up) and remember where the
+    // user dragged the pill.
+    var settings: SettingsStore? {
+        get { model.settings }
+        set { model.settings = newValue }
+    }
+
+    // True while we set the frame ourselves, so the didMove observer only
+    // records user drags.
+    private var isRepositioning = false
+    private var moveObserver: NSObjectProtocol?
+
     // Basic dictation (fallback engine) in use: the pill carries a small tag
     // so it's always visible when a session runs at reduced accuracy.
     var isBasic: Bool {
@@ -42,7 +54,10 @@ final class RecordingIndicatorPanel {
         model.isLocked = false
         model.stillListening = false
         present()
-        panel?.ignoresMouseEvents = true
+        // While recording the pill takes mouse input so it can be dragged to
+        // a better spot and right-clicked for the quick menu. The transient
+        // states below stay click-through.
+        panel?.ignoresMouseEvents = false
         levelTimer?.invalidate()
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             let level = levelProvider()
@@ -77,6 +92,16 @@ final class RecordingIndicatorPanel {
             CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown),
             CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved))
         model.stillListening = inputIdle > Self.inputIdleGrace
+    }
+
+    // Brief note inside a live recording pill (e.g. mic switched) — the meter
+    // comes right back; unlike showHint this never leaves recording mode.
+    func showNotice(_ text: String) {
+        guard model.mode == .recording else { return }
+        model.notice = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
+            if self?.model.notice == text { self?.model.notice = nil }
+        }
     }
 
     func showTranscribing() {
@@ -136,18 +161,49 @@ final class RecordingIndicatorPanel {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
+        panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        model.onResetPosition = { [weak self] in
+            guard let self else { return }
+            self.settings?.indicatorPosition = nil
+            if let panel = self.panel { self.position(panel) }
+        }
         panel.contentView = NSHostingView(rootView: IndicatorView(model: model))
+        moveObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.recordUserMove() }
+        }
         self.panel = panel
         return panel
+    }
+
+    // A drag ended somewhere new — remember it as fractions of the screen's
+    // visible frame so the spot survives resolution and screen changes.
+    private func recordUserMove() {
+        guard !isRepositioning, let panel, panel.isVisible,
+              let screen = panel.screen ?? NSScreen.main else { return }
+        let f = screen.visibleFrame
+        let denomX = max(f.width - panel.frame.width, 1)
+        let denomY = max(f.height - panel.frame.height, 1)
+        settings?.indicatorPosition = CGPoint(x: (panel.frame.minX - f.minX) / denomX,
+                                              y: (panel.frame.minY - f.minY) / denomY)
     }
 
     private func position(_ panel: NSPanel) {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
             ?? NSScreen.main
         guard let screen else { return }
+        isRepositioning = true
+        defer { isRepositioning = false }
         panel.setContentSize(NSSize(width: 280, height: 44))
         let f = screen.visibleFrame
+        if let saved = settings?.indicatorPosition {
+            let fx = min(max(saved.x, 0), 1)
+            let fy = min(max(saved.y, 0), 1)
+            panel.setFrameOrigin(NSPoint(x: f.minX + fx * (f.width - panel.frame.width),
+                                         y: f.minY + fy * (f.height - panel.frame.height)))
+            return
+        }
         let x = f.midX - panel.frame.width / 2
         let y = f.minY + 96
         panel.setFrameOrigin(NSPoint(x: x, y: y))
@@ -163,7 +219,10 @@ final class IndicatorModel: ObservableObject {
     @Published var isLocked = false
     @Published var stillListening = false
     @Published var isBasic = false
+    @Published var notice: String?
     var onStop: (() -> Void)?
+    var onResetPosition: (() -> Void)?
+    var settings: SettingsStore?
 }
 
 struct IndicatorView: View {
@@ -188,7 +247,11 @@ struct IndicatorView: View {
                         .foregroundStyle(.orange)
                         .overlay(Capsule().strokeBorder(Color.orange.opacity(0.5), lineWidth: 0.5))
                 }
-                if model.stillListening {
+                if let notice = model.notice {
+                    Text(notice)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if model.stillListening {
                     Text("Still listening…")
                         .foregroundStyle(.orange)
                         .frame(width: 90)
@@ -232,6 +295,33 @@ struct IndicatorView: View {
         .animation(.spring(duration: 0.25), value: model.mode == .recording)
         .animation(.spring(duration: 0.25), value: model.isLocked)
         .animation(.spring(duration: 0.25), value: model.stillListening)
+        .animation(.spring(duration: 0.25), value: model.notice)
+        .contextMenu { quickMenu }
+    }
+
+    // Right-click quick menu: the settings people flip mid-dictation, without
+    // a trip to the Settings window. Drag the pill itself to move it.
+    @ViewBuilder
+    private var quickMenu: some View {
+        if let settings = model.settings {
+            Picker("Microphone", selection: Binding(
+                get: { settings.microphoneUID },
+                set: { settings.microphoneUID = $0 })) {
+                Text("System default").tag(nil as String?)
+                ForEach(AudioDevices.inputDevices()) { d in
+                    Text(d.name).tag(d.uid as String?)
+                }
+            }
+            Picker("Clean-up", selection: Binding(
+                get: { settings.polishLevel },
+                set: { settings.polishLevel = $0 })) {
+                ForEach(PolishLevel.allCases) { level in
+                    Text(level.displayName).tag(level)
+                }
+            }
+            Divider()
+            Button("Reset Position") { model.onResetPosition?() }
+        }
     }
 }
 

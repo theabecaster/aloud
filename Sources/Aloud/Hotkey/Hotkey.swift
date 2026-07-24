@@ -7,6 +7,23 @@ struct Hotkey: Codable, Equatable {
     var keyCode: UInt16
     var modifiers: UInt64        // CGEventFlags rawValue for non-modifier keys; 0 for lone modifiers
     var isModifierKey: Bool      // true → track via flagsChanged (e.g. right ⌘)
+    var isMouseButton: Bool      // true → keyCode is a mouse button number (3rd button and up)
+
+    init(keyCode: UInt16, modifiers: UInt64, isModifierKey: Bool, isMouseButton: Bool = false) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        self.isModifierKey = isModifierKey
+        self.isMouseButton = isMouseButton
+    }
+
+    // isMouseButton arrived after 1.3 shipped — decode older persisted hotkeys.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        keyCode = try c.decode(UInt16.self, forKey: .keyCode)
+        modifiers = try c.decode(UInt64.self, forKey: .modifiers)
+        isModifierKey = try c.decode(Bool.self, forKey: .isModifierKey)
+        isMouseButton = try c.decodeIfPresent(Bool.self, forKey: .isMouseButton) ?? false
+    }
 
     // Default: hold left Option. Fn is system-reserved (dictation/emoji),
     // F-keys collide with media keys, and ⌘/⌃ are navigation modifiers — held
@@ -29,6 +46,7 @@ struct Hotkey: Codable, Equatable {
     }
 
     var displayName: String {
+        if isMouseButton { return "Mouse \(keyCode + 1)" }
         let mods = CGEventFlags(rawValue: modifiers)
         var parts: [String] = []
         if mods.contains(.maskControl) { parts.append("⌃") }

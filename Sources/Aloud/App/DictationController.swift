@@ -38,6 +38,13 @@ final class DictationController: ObservableObject {
     // Test-observable last result (used by the "Try it" onboarding step too).
     @Published private(set) var lastTranscription: String = ""
 
+    // The app focused when the session started — where the text will land.
+    // Captured at begin (not commit): hands-free users wander mid-session.
+    private var sessionApp: (name: String?, bundleID: String?) = (nil, nil)
+
+    // A failed dictation's audio is on disk and can be retried (menu item).
+    @Published private(set) var retryAvailable = AudioBackup.exists
+
     private var cancellables: Set<AnyCancellable> = []
 
     init(settings: SettingsStore = .shared,
@@ -56,8 +63,16 @@ final class DictationController: ObservableObject {
         indicator.onStopHandsFree = { [weak self] in
             self?.hotkeyManager.endHandsFree()
         }
+        indicator.settings = settings
+        recorder.onDeviceChange = { [weak self] in
+            self?.indicator.showNotice("Microphone changed — still listening")
+        }
         settings.$handsFree
             .sink { [weak self] enabled in self?.hotkeyManager.handsFree = enabled }
+            .store(in: &cancellables)
+        hotkeyManager.handsFreeHotkey = settings.handsFreeHotkey
+        settings.$handsFreeHotkey
+            .sink { [weak self] hk in self?.hotkeyManager.handsFreeHotkey = hk }
             .store(in: &cancellables)
     }
 
@@ -174,6 +189,8 @@ final class DictationController: ObservableObject {
                                : "Finish setup to start dictating")
             return
         }
+        let front = NSWorkspace.shared.frontmostApplication
+        sessionApp = (front?.localizedName, front?.bundleIdentifier)
         do {
             try recorder.start(deviceUID: settings.microphoneUID)
             phase = .recording
@@ -208,13 +225,21 @@ final class DictationController: ObservableObject {
         // screen be, keep dictating at the new cursor position. Aloud's own
         // synthetic keystrokes are stamped and ignored; Esc and a non-modifier
         // hotkey are session control, not editing.
-        let hotkeyCode = settings.hotkey.keyCode
+        let hotkey = settings.hotkey
+        let handsFreeKey = settings.handsFreeHotkey
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
             let isKeystroke = event.type == .keyDown
             if isKeystroke {
                 if event.cgEvent?.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.marker { return }
-                if event.keyCode == UInt16(kVK_Escape) || event.keyCode == hotkeyCode { return }
+                if event.keyCode == UInt16(kVK_Escape) || event.keyCode == hotkey.keyCode { return }
+                if let hk = handsFreeKey, !hk.isMouseButton, event.keyCode == hk.keyCode { return }
+            }
+            // A press of a mouse-button hotkey is session control, not a cursor
+            // move — rebasing on it would re-type the whole dictation at commit.
+            if event.type == .otherMouseDown {
+                if hotkey.isMouseButton, event.buttonNumber == Int(hotkey.keyCode) { return }
+                if let hk = handsFreeKey, hk.isMouseButton, event.buttonNumber == Int(hk.keyCode) { return }
             }
             Task { @MainActor in
                 guard let self else { return }
@@ -283,22 +308,33 @@ final class DictationController: ObservableObject {
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let polisher = TextPolisher(level: settings.polishLevel,
                                             replacements: settings.replacements)
-                let text = polisher.polish(raw)
+                var text = polisher.polish(raw)
+                var sendReturn = false
+                if settings.pressEnterCommand, let stripped = TrailingCommand.stripPressEnter(text) {
+                    text = stripped
+                    sendReturn = true
+                }
                 if !text.isEmpty {
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
-                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration),
+                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
+                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
                     lastTranscription = text
+                    settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
+                                             seconds: result.audioDuration)
+                    clearAudioBackup()
                 } else {
                     liveTyper.eraseAll()
                 }
+                if sendReturn { TextInjector.postReturn() }
                 endLiveTyping()
                 indicator.hide()
                 phase = .idle
             } catch {
                 // Keep whatever was already typed — deleting words the user
                 // watched appear would be worse than a rough tail.
+                keepAudioBackup(samples)
                 endLiveTyping()
                 playCue("Basso")
                 indicator.showHint("Couldn’t finish that dictation")
@@ -331,13 +367,79 @@ final class DictationController: ObservableObject {
                 let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let polisher = TextPolisher(level: settings.polishLevel,
                                             replacements: settings.replacements)
+                var text = polisher.polish(raw)
+                var sendReturn = false
+                if settings.pressEnterCommand, let stripped = TrailingCommand.stripPressEnter(text) {
+                    text = stripped
+                    sendReturn = true
+                }
+                if !text.isEmpty {
+                    // Return goes out only after the paste has been serviced.
+                    injector.inject(text) {
+                        if sendReturn { TextInjector.postReturn() }
+                    }
+                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
+                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID),
+                                   limit: settings.historyLimit)
+                    lastTranscription = text
+                    settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
+                                             seconds: result.audioDuration)
+                    clearAudioBackup()
+                } else if sendReturn {
+                    TextInjector.postReturn()
+                }
+                indicator.hide()
+                phase = .idle
+            } catch {
+                keepAudioBackup(samples)
+                playCue("Basso")
+                indicator.showHint("Couldn’t transcribe that — try again")
+                phase = .error(error.localizedDescription)
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if case .error = phase { phase = .idle }
+            }
+        }
+    }
+
+    // MARK: failed-dictation retry
+
+    private func keepAudioBackup(_ samples: [Float]) {
+        AudioBackup.save(samples: samples)
+        retryAvailable = AudioBackup.exists
+    }
+
+    private func clearAudioBackup() {
+        guard retryAvailable else { return }
+        AudioBackup.clear()
+        retryAvailable = false
+    }
+
+    // Re-run the saved audio of the last failed dictation; text lands in
+    // whatever app is focused now.
+    func retryLastDictation() {
+        guard phase == .idle || phase.isError, retryAvailable,
+              let samples = AudioBackup.load() else { return }
+        let front = NSWorkspace.shared.frontmostApplication
+        sessionApp = (front?.localizedName, front?.bundleIdentifier)
+        indicator.showTranscribing()
+        phase = .transcribing
+        Task {
+            do {
+                let result = try await transcriber.transcribe(samples: samples)
+                let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let polisher = TextPolisher(level: settings.polishLevel,
+                                            replacements: settings.replacements)
                 let text = polisher.polish(raw)
                 if !text.isEmpty {
                     injector.inject(text)
-                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration),
+                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
+                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
                     lastTranscription = text
+                    settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
+                                             seconds: result.audioDuration)
                 }
+                clearAudioBackup()
                 indicator.hide()
                 phase = .idle
             } catch {

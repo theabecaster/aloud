@@ -35,7 +35,7 @@ struct SettingsView: View {
             case .general: GeneralSettings(controller: controller)
             case .dictation: DictationSettings(controller: controller)
             case .vocabulary: VocabularySettings(settings: controller.settings)
-            case .history: HistorySettings(history: controller.history)
+            case .history: HistorySettings(history: controller.history, settings: controller.settings)
             case .about: AboutSettings()
             }
         }
@@ -79,12 +79,34 @@ struct GeneralSettings: View {
                         controller.updateHotkey(new)
                     }
                 }
-                Text("Hold to talk, release to type. Press Esc while holding to cancel.")
+                Text("Hold to talk, release to type. Press Esc while holding to cancel. Extra mouse buttons work too.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                if settings.handsFree {
+                    LabeledContent("Hands-free key") {
+                        HStack(spacing: 6) {
+                            OptionalHotkeyRecorderView(hotkey: settings.handsFreeHotkey) { new in
+                                settings.handsFreeHotkey = new
+                            }
+                            if settings.handsFreeHotkey != nil {
+                                Button {
+                                    settings.handsFreeHotkey = nil
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Remove the hands-free key")
+                            }
+                        }
+                    }
+                    Text("Optional. Press once to start listening hands-free, press again to finish.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             } footer: {
                 if settings.handsFree {
-                    Text("Double-press the key to keep listening hands-free; press Esc to finish.")
+                    Text("Double-press the dictation key also works for hands-free; press Esc to finish.")
                         .font(.footnote)
                         .foregroundStyle(.tertiary)
                 }
@@ -145,6 +167,28 @@ struct HotkeyRecorderView: View {
     }
 }
 
+// Same recorder for an optional slot — shows "None" until a key is set.
+struct OptionalHotkeyRecorderView: View {
+    var hotkey: Hotkey?
+    var onChange: (Hotkey) -> Void
+    @State private var recording = false
+
+    var body: some View {
+        Button {
+            recording.toggle()
+            if recording { KeyCaptureWindow.begin { captured in
+                recording = false
+                if let captured { onChange(captured) }
+            } }
+        } label: {
+            Text(recording ? "Press a key…" : (hotkey?.displayName ?? "None"))
+                .frame(minWidth: 110)
+        }
+        .buttonStyle(.bordered)
+        .tint(recording ? .accentColor : nil)
+    }
+}
+
 // Captures the next key or lone-modifier press via a local event monitor.
 @MainActor
 enum KeyCaptureWindow {
@@ -153,7 +197,14 @@ enum KeyCaptureWindow {
     static func begin(completion: @escaping (Hotkey?) -> Void) {
         end()
         var lastFlags = NSEvent.modifierFlags
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .otherMouseDown]) { event in
+            if event.type == .otherMouseDown {
+                // Extra mouse buttons (3rd and up) can be push-to-talk keys.
+                end()
+                completion(Hotkey(keyCode: UInt16(clamping: event.buttonNumber),
+                                  modifiers: 0, isModifierKey: false, isMouseButton: true))
+                return nil
+            }
             if event.type == .keyDown {
                 if event.keyCode == 53 { // Esc cancels recording
                     end(); completion(nil); return nil
@@ -256,6 +307,15 @@ struct DictationSettings: View {
             }
 
             SwiftUI.Section {
+                Toggle("“Press enter” command", isOn: $settings.pressEnterCommand)
+                Text(settings.pressEnterCommand
+                     ? "End a dictation with “press enter” and Aloud presses Return after typing — handy for chat apps."
+                     : "Saying “press enter” types the words like anything else.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            SwiftUI.Section {
                 Toggle("Sound when recording starts", isOn: $settings.soundCues)
             }
 
@@ -351,26 +411,99 @@ struct VocabularySettings: View {
 
 struct HistorySettings: View {
     @ObservedObject var history: HistoryStore
+    @ObservedObject var settings: SettingsStore
+    @State private var searchText = ""
+
+    private var filtered: [HistoryEntry] {
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return history.entries }
+        return history.entries.filter { $0.matches(query) }
+    }
+
+    private var averageWPM: Int {
+        guard settings.statsSeconds > 1 else { return 0 }
+        return Int((Double(settings.statsWords) / (settings.statsSeconds / 60)).rounded())
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            if settings.statsDictations > 0 {
+                HStack {
+                    StatBlock(value: "\(settings.statsWords)", label: "words spoken")
+                    Divider().frame(height: 28)
+                    StatBlock(value: "\(settings.statsDictations)", label: "dictations")
+                    Divider().frame(height: 28)
+                    StatBlock(value: "\(averageWPM)", label: "words per minute")
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                Divider()
+            }
             if history.entries.isEmpty {
                 ContentUnavailableView("No Dictations Yet",
                                        systemImage: "quote.bubble",
                                        description: Text("Recent dictations appear here. They stay on this Mac."))
             } else {
-                List(history.entries) { entry in
-                    HistoryRow(entry: entry)
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search dictations", text: $searchText)
+                        .textFieldStyle(.plain)
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                Divider()
+                if filtered.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                } else {
+                    List(filtered) { entry in
+                        HistoryRow(entry: entry)
+                    }
+                    .scrollContentBackground(.hidden)
+                }
                 Divider()
                 HStack {
+                    Picker("Keep", selection: $settings.historyLimit) {
+                        ForEach([25, 50, 100, 200], id: \.self) { n in
+                            Text("\(n) dictations").tag(n)
+                        }
+                    }
+                    .fixedSize()
+                    .onChange(of: settings.historyLimit) { _, limit in
+                        history.trim(to: limit)
+                    }
                     Spacer()
                     Button("Clear History") { history.clear() }
                 }
                 .padding(12)
             }
         }
+    }
+}
+
+// One lifetime total, System Settings-toned: big number, quiet caption.
+struct StatBlock: View {
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text(value)
+                .font(.title3.weight(.semibold).monospacedDigit())
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -384,6 +517,10 @@ struct HistoryRow: View {
                 .lineLimit(3)
             HStack(spacing: 8) {
                 Text(entry.date, style: .relative)
+                if let app = entry.appName {
+                    Text("·").foregroundStyle(.tertiary)
+                    Text(app)
+                }
                 if entry.rawText != nil {
                     Button(showRaw ? "Hide original" : "Show original") {
                         withAnimation(.spring(duration: 0.25)) { showRaw.toggle() }

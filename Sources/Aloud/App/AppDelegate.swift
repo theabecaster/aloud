@@ -176,6 +176,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        if controller.retryAvailable {
+            menu.addItem(withTitle: "Retry Last Dictation",
+                         action: #selector(retryLastDictation), keyEquivalent: "").target = self
+        }
         if !controller.lastTranscription.isEmpty {
             menu.addItem(withTitle: "Copy Last Dictation",
                          action: #selector(copyLastDictation), keyEquivalent: "").target = self
@@ -272,6 +276,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func downloadModel() {
         Task { await controller.prepareModel() }
+    }
+
+    @objc private func retryLastDictation() {
+        controller.retryLastDictation()
     }
 
     @objc private func copyLastDictation() {

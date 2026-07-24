@@ -138,6 +138,71 @@ final class HotkeyEngineTests: XCTestCase {
         let decoded = try JSONDecoder().decode(Hotkey.self, from: JSONEncoder().encode(hk))
         XCTAssertEqual(decoded, hk)
     }
+
+    func testHotkeyDecodesLegacyPayloadWithoutMouseField() throws {
+        // Persisted before isMouseButton existed — must decode, not reset to default.
+        let legacy = Data(#"{"keyCode":58,"modifiers":0,"isModifierKey":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(Hotkey.self, from: legacy)
+        XCTAssertEqual(decoded, .default)
+        XCTAssertFalse(decoded.isMouseButton)
+    }
+
+    func testMouseButtonHotkeyHoldCommit() {
+        var engine = HotkeyEngine(hotkey: Hotkey(keyCode: 3, modifiers: 0,
+                                                 isModifierKey: false, isMouseButton: true))
+        XCTAssertEqual(engine.handle(type: .otherMouseDown, keyCode: 3, flags: [], time: 0), .begin)
+        XCTAssertEqual(engine.handle(type: .otherMouseUp, keyCode: 3, flags: [], time: 0.5), .commit)
+        // A keyboard key with the same code must not trigger a mouse hotkey.
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 3, flags: [], time: 1.0), .none)
+    }
+
+    func testMouseButtonIgnoredForKeyboardHotkey() {
+        var engine = HotkeyEngine(hotkey: Hotkey(keyCode: 3, modifiers: 0, isModifierKey: false))
+        XCTAssertEqual(engine.handle(type: .otherMouseDown, keyCode: 3, flags: [], time: 0), .none)
+    }
+
+    func testHistorySearchMatching() {
+        let entry = HistoryEntry(text: "Review the pull request",
+                                 rawText: "review the the pull request",
+                                 duration: 3, appName: "Slack", appBundleID: "com.tinyspeck.slackmacgap")
+        XCTAssertTrue(entry.matches("PULL"))
+        XCTAssertTrue(entry.matches("the the"))   // raw transcript is searchable
+        XCTAssertTrue(entry.matches("slack"))     // so is the app name
+        XCTAssertFalse(entry.matches("zoom"))
+    }
+
+    func testTrailingPressEnterStripped() {
+        XCTAssertEqual(TrailingCommand.stripPressEnter("Sounds good, press enter"), "Sounds good")
+        XCTAssertEqual(TrailingCommand.stripPressEnter("Ship it and press enter."), "Ship it")
+        XCTAssertEqual(TrailingCommand.stripPressEnter("Done, then press return"), "Done")
+        XCTAssertEqual(TrailingCommand.stripPressEnter("Press Enter"), "")
+    }
+
+    func testMidSentencePressEnterIgnored() {
+        XCTAssertNil(TrailingCommand.stripPressEnter("You press enter to submit the form"))
+        XCTAssertNil(TrailingCommand.stripPressEnter("The presenter was great"))
+        XCTAssertNil(TrailingCommand.stripPressEnter("Just some normal text"))
+    }
+
+    func testAudioBackupRoundTrip() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aloud-test-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let samples: [Float] = (0..<8000).map { sin(Float($0) * 0.01) }
+        AudioBackup.save(samples: samples, to: url)
+        let loaded = AudioBackup.load(from: url)
+        XCTAssertEqual(loaded?.count, samples.count)
+        XCTAssertEqual(loaded?[1234] ?? -1, samples[1234], accuracy: 0.0001)
+    }
+
+    func testForceLockBehavesLikeHandsFreeSession() {
+        var engine = HotkeyEngine(hotkey: .default)
+        engine.forceLock()
+        XCTAssertTrue(engine.isLocked)
+        // Esc finishes and commits, exactly like a double-tap lock.
+        XCTAssertEqual(engine.handle(type: .keyDown, keyCode: 53, flags: [], time: 1.0), .commit)
+        XCTAssertFalse(engine.isLocked)
+    }
 }
 
 final class UpdaterTests: XCTestCase {

@@ -1,0 +1,149 @@
+{
+ "loadMs": 9085.371017456055,
+ "results": [
+  {
+   "id": "cleanup-1",
+   "task": "cleanup",
+   "transcript": "Um so I was thinking we could uh maybe push the meeting to Thursday because um the deck isn't ready yet.",
+   "output": "actually push the meeting to Thursday",
+   "totalMs": 73.23598861694336,
+   "promptMs": 59.025,
+   "predictedMs": 12.983,
+   "promptTps": 2100.804743752647,
+   "genTps": 616.1904028344758,
+   "genTokens": 8
+  },
+  {
+   "id": "cleanup-2",
+   "task": "cleanup",
+   "transcript": "Hey uh can you send me the the report when you get a chance. I I need it before the standup.",
+   "output": "actually send the report",
+   "totalMs": 24.2917537689209,
+   "promptMs": 14.473,
+   "predictedMs": 8.765,
+   "promptTps": 8636.771920127134,
+   "genTps": 684.5407872219052,
+   "genTokens": 6
+  },
+  {
+   "id": "cleanup-3-profanity",
+   "task": "cleanup",
+   "transcript": "This damn build keeps failing um I think it's the the signing step again.",
+   "output": "actually the signing step",
+   "totalMs": 24.860858917236328,
+   "promptMs": 14.469,
+   "predictedMs": 9.433,
+   "promptTps": 8086.253369272237,
+   "genTps": 636.064878617619,
+   "genTokens": 6
+  },
+  {
+   "id": "fidelity-1",
+   "task": "cleanup",
+   "transcript": "The results were 427.62 for Q3, and honestly I think that's fine.",
+   "output": "427.62",
+   "totalMs": 21.000385284423828,
+   "promptMs": 14.579,
+   "predictedMs": 5.472,
+   "promptTps": 8231.017216544344,
+   "genTps": 730.9941520467836,
+   "genTokens": 4
+  },
+  {
+   "id": "correct-1",
+   "task": "cleanup",
+   "transcript": "Let's meet at 2 PM actually no wait let's do 3 PM at the coffee shop on Main Street.",
+   "output": "actually meet at 3 PM at the coffee shop on Main Street.",
+   "totalMs": 41.31293296813965,
+   "promptMs": 14.215,
+   "predictedMs": 26.096,
+   "promptTps": 8793.527963418925,
+   "genTps": 613.1207847946046,
+   "genTokens": 16
+  },
+  {
+   "id": "correct-2",
+   "task": "cleanup",
+   "transcript": "Send the invoice to John no scratch that send it to accounting and CC John.",
+   "output": "send the invoice to john no scratch that send to accounting cc john",
+   "totalMs": 43.238162994384766,
+   "promptMs": 13.966,
+   "predictedMs": 28.213,
+   "promptTps": 8449.090648718317,
+   "genTps": 602.5591039591677,
+   "genTokens": 17
+  },
+  {
+   "id": "concise-1",
+   "task": "concise",
+   "transcript": "So basically what I'm trying to say is that I think we should probably consider maybe moving the launch date back by about a week or so because the testing isn't quite done yet and I don't want us to ship something that's broken.",
+   "output": "We should wait a week or so and check the testing before deciding.",
+   "totalMs": 39.36481475830078,
+   "promptMs": 14.069,
+   "predictedMs": 24.139,
+   "promptTps": 7818.6082877247845,
+   "genTps": 621.4010522391152,
+   "genTokens": 15
+  },
+  {
+   "id": "concise-2",
+   "task": "concise",
+   "transcript": "Okay so um for the onboarding flow I was playing around with it yesterday and I noticed that when you get to the second screen the one with the permissions there's like a really long pause before anything happens and I feel like users are going to think the app is frozen so maybe we should add some kind of loading indicator there or you know just make it faster somehow.",
+   "output": "Add a loading indicator at the second screen to reduce perceived wait time.",
+   "totalMs": 48.47216606140137,
+   "promptMs": 22.646,
+   "predictedMs": 24.593,
+   "promptTps": 6005.475580676499,
+   "genTps": 609.9296547798153,
+   "genTokens": 15
+  },
+  {
+   "id": "list-1",
+   "task": "list",
+   "transcript": "For the trip we need sunscreen, we need towels, we need snacks for the kids, and also don't forget the charger.",
+   "output": "ONLY THE FOLLOW-UP ITEMS",
+   "totalMs": 31.91089630126953,
+   "promptMs": 13.554,
+   "predictedMs": 17.192,
+   "promptTps": 7230.337907628744,
+   "genTps": 639.8324802233598,
+   "genTokens": 11
+  },
+  {
+   "id": "list-2",
+   "task": "list",
+   "transcript": "Three things for tomorrow. First review the pull request. Second email the client about the renewal. And third book the flight to Austin.",
+   "output": "- Review pull request\n- Email client about renewal\n- Book flight to Austin",
+   "totalMs": 44.241905212402344,
+   "promptMs": 13.21,
+   "predictedMs": 30.057,
+   "promptTps": 7342.922028766086,
+   "genTps": 598.8621618924044,
+   "genTokens": 18
+  },
+  {
+   "id": "code-1",
+   "task": "code",
+   "transcript": "Add a function called get user by ID that takes a user ID string and returns an optional user model, then call it from the fetch profile method.",
+   "output": "getUserByID",
+   "totalMs": 22.990703582763672,
+   "promptMs": 14.838,
+   "predictedMs": 7.102,
+   "promptTps": 7682.976142337243,
+   "genTps": 704.0270346381301,
+   "genTokens": 5
+  },
+  {
+   "id": "tone-1",
+   "task": "formal",
+   "transcript": "Hey just wanted to check if you got my last email about the contract. Lemme know when you can.",
+   "output": "Subject: Contract Update\n\nDear [Recipient's Name],\n\nI hope this message finds you well. I wanted to follow up on the contract details you provided. Could you please share any updates or additional information at your earliest convenience?\n\nBest regards,  \n[Your Name]",
+   "totalMs": 115.17715454101562,
+   "promptMs": 13.341,
+   "predictedMs": 100.727,
+   "promptTps": 5621.767483696875,
+   "genTps": 585.7416581452838,
+   "genTokens": 59
+  }
+ ]
+}

@@ -7,13 +7,28 @@ struct HistoryEntry: Codable, Identifiable, Equatable {
     let text: String             // what was typed (after clean-up)
     let rawText: String?         // exact model output, when it differs
     let duration: TimeInterval   // spoken audio seconds
+    let appName: String?         // app the text was typed into, when known
+    let appBundleID: String?
 
-    init(text: String, rawText: String? = nil, duration: TimeInterval, date: Date = Date()) {
+    init(text: String, rawText: String? = nil, duration: TimeInterval, date: Date = Date(),
+         appName: String? = nil, appBundleID: String? = nil) {
         self.id = UUID()
         self.date = date
         self.text = text
         self.rawText = (rawText == text) ? nil : rawText
         self.duration = duration
+        self.appName = appName
+        self.appBundleID = appBundleID
+    }
+}
+
+extension HistoryEntry {
+    // History-tab search: matches the typed text, the raw transcript, or the
+    // app the dictation landed in.
+    func matches(_ query: String) -> Bool {
+        text.localizedCaseInsensitiveContains(query)
+            || (rawText?.localizedCaseInsensitiveContains(query) ?? false)
+            || (appName?.localizedCaseInsensitiveContains(query) ?? false)
     }
 }
 
@@ -48,6 +63,13 @@ final class HistoryStore: ObservableObject {
 
     func clear() {
         entries = []
+        persist()
+    }
+
+    // Apply a lowered keep-limit immediately instead of on the next append.
+    func trim(to limit: Int) {
+        guard entries.count > limit else { return }
+        entries.removeLast(entries.count - limit)
         persist()
     }
 
