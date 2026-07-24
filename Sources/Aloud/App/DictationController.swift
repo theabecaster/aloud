@@ -38,8 +38,6 @@ final class DictationController: ObservableObject {
     // Test-observable last result (used by the "Try it" onboarding step too).
     @Published private(set) var lastTranscription: String = ""
 
-    var micLevel: Float { recorder.currentLevel }
-
     private var cancellables: Set<AnyCancellable> = []
 
     init(settings: SettingsStore = .shared,
@@ -70,10 +68,6 @@ final class DictationController: ObservableObject {
     func startListening() -> Bool {
         hotkeyManager.hotkey = settings.hotkey
         return hotkeyManager.start()
-    }
-
-    func stopListening() {
-        hotkeyManager.stop()
     }
 
     var isListening: Bool { hotkeyManager.isActive }

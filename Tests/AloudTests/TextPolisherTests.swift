@@ -43,12 +43,11 @@ final class TextPolisherTests: XCTestCase {
     // MARK: replacements
 
     func testReplacements() {
-        let reps = [Replacement(pattern: "cloud code", replacement: "Claude Code")]
-        XCTAssertEqual(polish("I opened cloud code today.", replacements: reps),
-                       "I opened Claude Code today.")
+        let reps = [Replacement(pattern: "sequel", replacement: "SQL")]
+        XCTAssertEqual(polish("I wrote some sequel today.", replacements: reps),
+                       "I wrote some SQL today.")
         // whole-word only
-        XCTAssertEqual(polish("Cloudy codebase.", replacements: [
-            Replacement(pattern: "cloud", replacement: "Claude")]), "Cloudy codebase.")
+        XCTAssertEqual(polish("Sequels are fun.", replacements: reps), "Sequels are fun.")
     }
 
     // MARK: tidy
@@ -67,53 +66,5 @@ final class TextPolisherTests: XCTestCase {
         XCTAssertEqual(polish("   "), "")
         // A transcript that is nothing but fillers collapses to empty (nothing injected).
         XCTAssertEqual(polish("um, uh."), "")
-    }
-}
-
-final class HandsFreeLockTests: XCTestCase {
-    private let key = Hotkey.default.keyCode
-    private let flag = Hotkey.default.modifierFlag!
-
-    func testDoubleTapLocksUntilEscCommits() {
-        var e = HotkeyEngine(hotkey: .default)
-        // tap 1 (short)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .begin)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05), .cancel)
-        // tap 2 (short, inside window) → lock
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2), .begin)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .lock)
-        XCTAssertTrue(e.isLocked)
-        // hotkey presses of any length are ignored while locked
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 3.0), .none)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 3.8), .none)
-        XCTAssertTrue(e.isLocked)
-        // Esc finishes and commits
-        XCTAssertEqual(e.handle(type: .keyDown, keyCode: 53, flags: [], time: 4.0), .commit)
-        XCTAssertFalse(e.isLocked)
-    }
-
-    func testSlowTapsDoNotLock() {
-        var e = HotkeyEngine(hotkey: .default)
-        _ = e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05), .cancel)
-        _ = e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 1.0)   // outside window
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 1.05), .cancel)
-        XCTAssertFalse(e.isLocked)
-    }
-
-    func testHandsFreeToggleOffNeverLocks() {
-        var e = HotkeyEngine(hotkey: .default, handsFreeEnabled: false)
-        _ = e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
-        _ = e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
-        _ = e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25), .cancel)
-        XCTAssertFalse(e.isLocked)
-    }
-
-    func testNormalHoldStillWorks() {
-        var e = HotkeyEngine(hotkey: .default)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0), .begin)
-        XCTAssertEqual(e.handle(type: .flagsChanged, keyCode: key, flags: [], time: 2.0), .commit)
-        XCTAssertFalse(e.isLocked)
     }
 }

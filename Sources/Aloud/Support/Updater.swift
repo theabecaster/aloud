@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 // In-app updater: GitHub release feed → download the notarized zip → verify the
