@@ -318,7 +318,8 @@ final class DictationController: ObservableObject {
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
-                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID),
+                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID,
+                                                languageCode: LanguageDetection.code(for: raw)),
                                    limit: settings.historyLimit)
                     lastTranscription = text
                     settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
@@ -379,7 +380,8 @@ final class DictationController: ObservableObject {
                         if sendReturn { TextInjector.postReturn() }
                     }
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
-                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID),
+                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID,
+                                                languageCode: LanguageDetection.code(for: raw)),
                                    limit: settings.historyLimit)
                     lastTranscription = text
                     settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
@@ -433,7 +435,8 @@ final class DictationController: ObservableObject {
                 if !text.isEmpty {
                     injector.inject(text)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
-                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID),
+                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID,
+                                                languageCode: LanguageDetection.code(for: raw)),
                                    limit: settings.historyLimit)
                     lastTranscription = text
                     settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
