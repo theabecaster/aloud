@@ -35,7 +35,7 @@ struct SettingsView: View {
             case .general: GeneralSettings(controller: controller)
             case .dictation: DictationSettings(controller: controller)
             case .vocabulary: VocabularySettings(settings: controller.settings)
-            case .history: HistorySettings(history: controller.history)
+            case .history: HistorySettings(history: controller.history, settings: controller.settings)
             case .about: AboutSettings()
             }
         }
@@ -402,6 +402,18 @@ struct VocabularySettings: View {
 
 struct HistorySettings: View {
     @ObservedObject var history: HistoryStore
+    @ObservedObject var settings: SettingsStore
+    @State private var searchText = ""
+
+    private var filtered: [HistoryEntry] {
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return history.entries }
+        return history.entries.filter { entry in
+            entry.text.localizedCaseInsensitiveContains(query)
+                || (entry.rawText?.localizedCaseInsensitiveContains(query) ?? false)
+                || (entry.appName?.localizedCaseInsensitiveContains(query) ?? false)
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -410,12 +422,43 @@ struct HistorySettings: View {
                                        systemImage: "quote.bubble",
                                        description: Text("Recent dictations appear here. They stay on this Mac."))
             } else {
-                List(history.entries) { entry in
-                    HistoryRow(entry: entry)
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search dictations", text: $searchText)
+                        .textFieldStyle(.plain)
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                Divider()
+                if filtered.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                } else {
+                    List(filtered) { entry in
+                        HistoryRow(entry: entry)
+                    }
+                    .scrollContentBackground(.hidden)
+                }
                 Divider()
                 HStack {
+                    Picker("Keep", selection: $settings.historyLimit) {
+                        ForEach([25, 50, 100, 200], id: \.self) { n in
+                            Text("\(n) dictations").tag(n)
+                        }
+                    }
+                    .fixedSize()
+                    .onChange(of: settings.historyLimit) { _, limit in
+                        history.trim(to: limit)
+                    }
                     Spacer()
                     Button("Clear History") { history.clear() }
                 }

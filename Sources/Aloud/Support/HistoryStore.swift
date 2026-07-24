@@ -56,6 +56,13 @@ final class HistoryStore: ObservableObject {
         persist()
     }
 
+    // Apply a lowered keep-limit immediately instead of on the next append.
+    func trim(to limit: Int) {
+        guard entries.count > limit else { return }
+        entries.removeLast(entries.count - limit)
+        persist()
+    }
+
     private func persist() {
         let snapshot = entries
         let url = fileURL
