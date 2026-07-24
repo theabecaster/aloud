@@ -170,6 +170,26 @@ final class HotkeyEngineTests: XCTestCase {
         XCTAssertNil(EnhancerOutputCheck.validate("", original: original))
         XCTAssertNil(EnhancerOutputCheck.validate("```swift\nfunc x() {}\n```", original: original))
         XCTAssertNil(EnhancerOutputCheck.validate(String(repeating: "padding ", count: 60), original: original))
+        XCTAssertNil(EnhancerOutputCheck.validate("I cannot rewrite the text as requested.", original: original))
+        XCTAssertNil(EnhancerOutputCheck.validate("I'm sorry, but I can't help with that.", original: original))
+        // A transcript that merely starts with "I can't" in the speaker's own
+        // voice is longer than a refusal and must survive — prefix match only
+        // rejects, it never rewrites, so the fallback keeps the polished text.
+        XCTAssertNotNil(EnhancerOutputCheck.validate("It cannot ship this week.", original: original))
+    }
+
+    @MainActor
+    func testContextHintBuiltFromFieldText() {
+        XCTAssertNil(DictationController.contextHint(from: nil))
+        XCTAssertNil(DictationController.contextHint(from: FocusSnapshot(appName: "X", appBundleID: "x")))
+        var snap = FocusSnapshot(appName: "Mail", appBundleID: "com.apple.mail")
+        snap.fieldText = "Hi Chellie — following up on the Smyth contract."
+        let hint = DictationController.contextHint(from: snap)
+        XCTAssertNotNil(hint)
+        XCTAssertTrue(hint!.contains("Chellie"))
+        // Long fields keep only the tail near the cursor.
+        snap.fieldText = String(repeating: "a", count: 1000) + " Chellie"
+        XCTAssertLessThan(DictationController.contextHint(from: snap)!.count, 450)
     }
 
     func testConciseFallsBackToStandardRules() {

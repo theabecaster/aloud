@@ -63,10 +63,19 @@ enum EnhancerError: Error {
 // The failure modes are real, observed ones: writing a whole program instead
 // of cleaning a sentence, inventing an email template, returning nothing.
 enum EnhancerOutputCheck {
+    // A refusal is not a rewrite — typing "I cannot rewrite this text" into
+    // someone's chat box would be worse than any transcript.
+    private static let refusalPrefixes = [
+        "i cannot", "i can't", "i can not", "i'm sorry", "i am sorry",
+        "i'm unable", "i am unable", "sorry,", "as an ai",
+    ]
+
     static func validate(_ output: String, original: String) -> String? {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard !trimmed.contains("```") else { return nil }
+        let lowered = trimmed.lowercased()
+        guard !refusalPrefixes.contains(where: { lowered.hasPrefix($0) }) else { return nil }
         // A rewrite should be at most modestly longer than what was said —
         // big growth means the model composed instead of cleaned.
         guard trimmed.count <= max(original.count * 2, original.count + 80) else { return nil }
