@@ -260,6 +260,13 @@ struct DictationSettings: View {
         _settings = ObservedObject(wrappedValue: controller.settings)
     }
 
+    // Languages not yet declared, offered alphabetically by their shown name.
+    private var addableLanguages: [String] {
+        DictationLanguages.supported
+            .filter { !settings.declaredLanguages.contains($0) }
+            .sorted { DictationLanguages.displayName($0) < DictationLanguages.displayName($1) }
+    }
+
     var body: some View {
         Form {
             // Only present while a session would run at reduced accuracy —
@@ -305,6 +312,42 @@ struct DictationSettings: View {
                 }
             } footer: {
                 Text("The exact words you said are always kept in History, whatever the clean-up level.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            }
+
+            SwiftUI.Section {
+                ForEach(settings.declaredLanguages, id: \.self) { code in
+                    HStack {
+                        Text(DictationLanguages.displayName(code))
+                        Spacer()
+                        if settings.declaredLanguages.count > 1 {
+                            Button {
+                                settings.declaredLanguages.removeAll { $0 == code }
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Remove this language")
+                        }
+                    }
+                }
+                if !addableLanguages.isEmpty {
+                    Menu {
+                        ForEach(addableLanguages, id: \.self) { code in
+                            Button(DictationLanguages.displayName(code)) {
+                                settings.declaredLanguages.append(code)
+                            }
+                        }
+                    } label: {
+                        Label("Add a Language", systemImage: "plus")
+                    }
+                }
+            } header: {
+                Text("Languages")
+            } footer: {
+                Text("Voice recognition understands 25 languages. Listing the ones you dictate in helps when a recording could be read more than one way.")
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
             }

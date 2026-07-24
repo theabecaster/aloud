@@ -256,6 +256,31 @@ final class HistoryStoreTests: XCTestCase {
     }
 }
 
+final class LanguageDetectionTests: XCTestCase {
+    func testDetectsClearLanguages() {
+        XCTAssertEqual(LanguageDetection.code(
+            for: "Please send the quarterly report to the whole team before Friday."), "en")
+        XCTAssertEqual(LanguageDetection.code(
+            for: "Por favor envía el informe trimestral a todo el equipo antes del viernes."), "es")
+    }
+
+    func testShortTextNeverGuessed() {
+        XCTAssertNil(LanguageDetection.code(for: "ok"))
+        XCTAssertNil(LanguageDetection.code(for: "   "))
+    }
+
+    func testHistoryEntryDecodesLegacyPayloadWithoutLanguage() throws {
+        // Persisted before languageCode existed — must decode, not be set aside.
+        let legacy = Data("""
+        {"id":"E621E1F8-C36C-495A-93FC-0C247A3E6E5F","date":700000000,
+         "text":"hello there","duration":1.5}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(HistoryEntry.self, from: legacy)
+        XCTAssertEqual(decoded.text, "hello there")
+        XCTAssertNil(decoded.languageCode)
+    }
+}
+
 final class SettingsStoreTests: XCTestCase {
     func testRoundTrip() {
         let suite = "aloud-tests-\(UUID().uuidString)"
