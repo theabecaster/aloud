@@ -121,6 +121,8 @@ enum CLI {
                 result = try await interpreter.rewrite(selection ?? "", instruction: intent.instruction)
             case .generate:
                 result = try await interpreter.generate(intent.instruction)
+            case .translate(let language):
+                result = try await interpreter.translate(selection ?? "", to: language)
             }
             print(result)
             return 0
@@ -437,6 +439,14 @@ enum CLI {
                "command: generated output trimmed")
         expect(CommandOutputCheck.validateGenerated("```code```") == nil,
                "command: code fences rejected")
+        let translateIntent = CommandIntent(action: .translate, instruction: "translate to Spanish",
+                                            language: "Spanish")
+        expect(translateIntent.route(hasSelection: true) == .translate("Spanish"),
+               "command: translate routes with a selection")
+        expect(LanguageResolver.language(named: "Spanish")?.languageCode?.identifier == "es",
+               "command: language name resolves to code")
+        expect(LanguageResolver.language(named: "not a language") == nil,
+               "command: unknown language resolves to nil")
 
         var keyEngine = HotkeyEngine(hotkey: Hotkey(keyCode: 96, modifiers: 0, isModifierKey: false))
         expect(keyEngine.handle(type: .keyDown, keyCode: 96, flags: [], time: 0) == .begin,

@@ -281,6 +281,26 @@ final class CommandIntentTests: XCTestCase {
         XCTAssertEqual(generate.route(hasSelection: false), .generate)
     }
 
+    func testTranslateRouting() {
+        let translate = CommandIntent(action: .translate, instruction: "translate this to Spanish",
+                                      language: "Spanish")
+        XCTAssertEqual(translate.route(hasSelection: true), .translate("Spanish"))
+        XCTAssertEqual(translate.route(hasSelection: false), .generate)
+        // No parsed target language → an ordinary rewrite; the instruction
+        // still carries the intent.
+        let vague = CommandIntent(action: .translate, instruction: "put this in French")
+        XCTAssertEqual(vague.route(hasSelection: true), .rewrite)
+    }
+
+    func testLanguageResolver() {
+        XCTAssertEqual(LanguageResolver.language(named: "Spanish")?.languageCode?.identifier, "es")
+        XCTAssertEqual(LanguageResolver.language(named: " german ")?.languageCode?.identifier, "de")
+        XCTAssertEqual(LanguageResolver.language(named: "JAPANESE")?.languageCode?.identifier, "ja")
+        // (Not "Klingon" — ICU genuinely knows it as tlh.)
+        XCTAssertNil(LanguageResolver.language(named: "Wingdings"))
+        XCTAssertNil(LanguageResolver.language(named: ""))
+    }
+
     func testGeneratedOutputValidation() {
         XCTAssertEqual(CommandOutputCheck.validateGenerated("  Thanks for the update!  "),
                        "Thanks for the update!")

@@ -16,22 +16,31 @@ struct CommandIntent: Equatable {
     enum Action: String {
         case rewrite    // transform existing text (fix, rephrase, shorten…)
         case generate   // write new text from scratch
+        case translate  // put text into another language
     }
     var action: Action
     var instruction: String
+    // Target language for translate, as an English name ("Spanish"); nil for
+    // everything else.
+    var language: String? = nil
 }
 
 extension CommandIntent {
     enum Route: Equatable {
-        case rewrite    // apply the instruction to the selection
-        case generate   // write at the cursor from the instruction alone
+        case rewrite              // apply the instruction to the selection
+        case generate             // write at the cursor from the instruction alone
+        case translate(String)    // put the selection into this language
     }
 
     // Pure routing so it's testable without a model: with a selection every
     // command edits it (pasting replaces the selection); without one,
-    // everything writes at the cursor.
+    // everything writes at the cursor. A translate without a parsed target
+    // language degrades to a plain rewrite — the instruction still says
+    // what to do.
     func route(hasSelection: Bool) -> Route {
-        hasSelection ? .rewrite : .generate
+        guard hasSelection else { return .generate }
+        if action == .translate, let language { return .translate(language) }
+        return .rewrite
     }
 }
 
@@ -55,7 +64,19 @@ extension CommandInterpreter {
             return try await rewrite(selection ?? "", instruction: intent.instruction)
         case .generate:
             return try await generate(intent.instruction)
+        case .translate(let language):
+            return try await translate(selection ?? "", to: language)
         }
+    }
+
+    // System Translation framework when the language pair is installed, the
+    // model's rewrite path otherwise — the caller never has to care which.
+    func translate(_ text: String, to languageName: String) async throws -> String {
+        if let target = LanguageResolver.language(named: languageName),
+           let translated = await SystemTranslator.translate(text, to: target) {
+            return translated
+        }
+        return try await rewrite(text, instruction: "Translate the text into \(languageName).")
     }
 }
 
@@ -105,15 +126,18 @@ import FoundationModels
 private enum SpokenAction: String {
     case rewrite
     case generate
+    case translate
 }
 
 @available(macOS 26.0, *)
 @Generable
 private struct ParsedCommand {
-    @Guide(description: "rewrite when the user wants existing text changed, fixed, rephrased, shortened, or reformatted; generate when they want new text written")
+    @Guide(description: "rewrite when the user wants existing text changed, fixed, rephrased, shortened, or reformatted; translate when they want it in another language; generate when they want new text written")
     var action: SpokenAction
     @Guide(description: "The user's instruction, restated cleanly without filler words")
     var instruction: String
+    @Guide(description: "For translate only: the target language name in English, like Spanish. Empty for everything else.")
+    var targetLanguage: String
 }
 
 @available(macOS 26.0, *)
@@ -147,8 +171,10 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
         let response = try await session.respond(to: spoken, generating: ParsedCommand.self,
                                                  options: GenerationOptions(temperature: 0.1))
         let instruction = response.content.instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        let language = response.content.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
         return CommandIntent(action: CommandIntent.Action(rawValue: response.content.action.rawValue) ?? .rewrite,
-                             instruction: instruction.isEmpty ? spoken : instruction)
+                             instruction: instruction.isEmpty ? spoken : instruction,
+                             language: language.isEmpty ? nil : language)
     }
 
     func rewrite(_ text: String, instruction: String) async throws -> String {
@@ -180,9 +206,11 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
 
     static let parseInstructions = """
     You classify a spoken command about text. Decide whether the user wants \
-    existing text transformed (rewrite) or brand-new text written (generate), and \
-    restate their instruction as a short imperative, keeping their words where \
-    possible. Do not carry out the instruction — only classify and restate it.
+    existing text transformed (rewrite), put into another language (translate), \
+    or brand-new text written (generate), and restate their instruction as a \
+    short imperative, keeping their words where possible. For translate, name \
+    the target language in English. Do not carry out the instruction — only \
+    classify and restate it.
     """
 
     // "Reply with the edited text only" is load-bearing, exactly as it is for

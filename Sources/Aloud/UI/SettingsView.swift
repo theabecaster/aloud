@@ -124,7 +124,7 @@ struct GeneralSettings: View {
                             }
                         }
                     }
-                    Text("Optional. Hold it and say what you want done — rewrite selected text, or write something new at the cursor.")
+                    Text("Optional. Hold it and say what you want done — rewrite or translate selected text, or write something new at the cursor.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
