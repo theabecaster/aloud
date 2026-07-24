@@ -13,6 +13,7 @@ struct SettingsView: View {
         case history = "History"
         case about = "About"
         var id: String { rawValue }
+        var title: String { loc(rawValue) }
         var symbol: String {
             switch self {
             case .general: return "gearshape"
@@ -31,7 +32,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             List(Section.allCases, selection: $section) { s in
-                Label(s.rawValue, systemImage: s.symbol).tag(s)
+                Label(s.title, systemImage: s.symbol).tag(s)
             }
             .navigationSplitViewColumnWidth(min: 150, ideal: 160, max: 180)
         } detail: {
@@ -48,7 +49,7 @@ struct SettingsView: View {
         .frame(width: 620, height: 420)
         .overlay(alignment: .top) {
             if controller.showSettingsStopBanner {
-                Label("Stopped listening so you can change settings", systemImage: "mic.slash")
+                Label(loc("Stopped listening so you can change settings"), systemImage: "mic.slash")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 14)
@@ -80,16 +81,16 @@ struct GeneralSettings: View {
     var body: some View {
         Form {
             SwiftUI.Section {
-                LabeledContent("Dictation key") {
+                LabeledContent(loc("Dictation key")) {
                     HotkeyRecorderView(hotkey: settings.hotkey) { new in
                         controller.updateHotkey(new)
                     }
                 }
-                Text("Hold to talk, release to type. Press Esc while holding to cancel. Extra mouse buttons work too.")
+                Text(loc("Hold to talk, release to type. Press Esc while holding to cancel. Extra mouse buttons work too."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 if settings.handsFree {
-                    LabeledContent("Hands-free key") {
+                    LabeledContent(loc("Hands-free key")) {
                         HStack(spacing: 6) {
                             OptionalHotkeyRecorderView(hotkey: settings.handsFreeHotkey) { new in
                                 settings.handsFreeHotkey = new
@@ -102,18 +103,18 @@ struct GeneralSettings: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 .buttonStyle(.plain)
-                                .help("Remove the hands-free key")
+                                .help(loc("Remove the hands-free key"))
                             }
                         }
                     }
-                    Text("Optional. Press once to start listening hands-free, press again to finish.")
+                    Text(loc("Optional. Press once to start listening hands-free, press again to finish."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 // Only on Macs with the on-device engine — elsewhere the row
                 // would record a key that can never do anything.
                 if controller.commandsAvailable {
-                    LabeledContent("Command key") {
+                    LabeledContent(loc("Command key")) {
                         HStack(spacing: 6) {
                             OptionalHotkeyRecorderView(hotkey: settings.commandHotkey) { new in
                                 settings.commandHotkey = new
@@ -126,25 +127,25 @@ struct GeneralSettings: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 .buttonStyle(.plain)
-                                .help("Remove the command key")
+                                .help(loc("Remove the command key"))
                             }
                         }
                     }
-                    Text("Optional. Hold it and say what you want done — rewrite or translate selected text, or write something new at the cursor.")
+                    Text(loc("Optional. Hold it and say what you want done — rewrite or translate selected text, or write something new at the cursor."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
             } footer: {
                 if settings.handsFree {
-                    Text("Double-press the dictation key also works for hands-free; press Esc to finish.")
+                    Text(loc("Double-press the dictation key also works for hands-free; press Esc to finish."))
                         .font(.footnote)
                         .foregroundStyle(.tertiary)
                 }
             }
 
             SwiftUI.Section {
-                Picker("Microphone", selection: micSelection) {
-                    Text("System default").tag(nil as String?)
+                Picker(loc("Microphone"), selection: micSelection) {
+                    Text(loc("System default")).tag(nil as String?)
                     ForEach(devices) { d in
                         Text(d.name).tag(d.uid as String?)
                     }
@@ -152,7 +153,7 @@ struct GeneralSettings: View {
             }
 
             SwiftUI.Section {
-                Toggle("Open Aloud at login", isOn: $launchAtLogin)
+                Toggle(loc("Open Aloud at login"), isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
                         if LoginItem.setEnabled(on) {
                             settings.launchAtLogin = on
@@ -189,7 +190,7 @@ struct HotkeyRecorderView: View {
                 if let captured { onChange(captured) }
             } }
         } label: {
-            Text(recording ? "Press a key…" : hotkey.displayName)
+            Text(recording ? loc("Press a key…") : hotkey.displayName)
                 .frame(minWidth: 110)
         }
         .buttonStyle(.bordered)
@@ -211,7 +212,7 @@ struct OptionalHotkeyRecorderView: View {
                 if let captured { onChange(captured) }
             } }
         } label: {
-            Text(recording ? "Press a key…" : (hotkey?.displayName ?? "None"))
+            Text(recording ? loc("Press a key…") : (hotkey?.displayName ?? loc("None")))
                 .frame(minWidth: 110)
         }
         .buttonStyle(.bordered)
@@ -300,26 +301,26 @@ struct DictationSettings: View {
                     switch controller.upgradeState {
                     case .downloading(let progress):
                         ProgressView(value: progress) {
-                            Text("Setting up full accuracy — \(Int(progress * 100))%")
+                            Text(loc("Setting up full accuracy — %ld%%", Int(progress * 100)))
                         }
-                        Text("Dictation keeps working while this finishes; the switch is automatic.")
+                        Text(loc("Dictation keeps working while this finishes; the switch is automatic."))
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     case .loading:
                         ProgressView {
-                            Text("Setting up full accuracy — almost done")
+                            Text(loc("Setting up full accuracy — almost done"))
                         }
                     default:
-                        Label("Waiting for internet to finish setting up full accuracy", systemImage: "wifi.slash")
+                        Label(loc("Waiting for internet to finish setting up full accuracy"), systemImage: "wifi.slash")
                             .foregroundStyle(.secondary)
                     }
                 } header: {
-                    Text("Basic dictation in use")
+                    Text(loc("Basic dictation in use"))
                 }
             }
 
             SwiftUI.Section {
-                Picker("Clean-up", selection: $settings.polishLevel) {
+                Picker(loc("Clean-up"), selection: $settings.polishLevel) {
                     ForEach(controller.availableLevels) { level in
                         Text(level.displayName).tag(level)
                     }
@@ -329,13 +330,13 @@ struct DictationSettings: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 if settings.polishLevel == .concise, !controller.enhancerAvailable {
-                    Label("The rewrite engine isn't available right now — Standard clean-up is used instead.",
+                    Label(loc("The rewrite engine isn't available right now — Standard clean-up is used instead."),
                           systemImage: "exclamationmark.triangle")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
             } footer: {
-                Text("The exact words you said are always kept in History, whatever the clean-up level.")
+                Text(loc("The exact words you said are always kept in History, whatever the clean-up level."))
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
             }
@@ -353,7 +354,7 @@ struct DictationSettings: View {
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
-                            .help("Remove this language")
+                            .help(loc("Remove this language"))
                         }
                     }
                 }
@@ -365,49 +366,49 @@ struct DictationSettings: View {
                             }
                         }
                     } label: {
-                        Label("Add a Language", systemImage: "plus")
+                        Label(loc("Add a Language"), systemImage: "plus")
                     }
                 }
             } header: {
-                Text("Languages")
+                Text(loc("Languages"))
             } footer: {
-                Text("Voice recognition understands 25 languages. Listing the ones you dictate in helps when a recording could be read more than one way.")
+                Text(loc("Voice recognition understands 25 languages. Listing the ones you dictate in helps when a recording could be read more than one way."))
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
             }
 
             SwiftUI.Section {
-                Toggle("Hands-free mode", isOn: $settings.handsFree)
+                Toggle(loc("Hands-free mode"), isOn: $settings.handsFree)
                 Text(settings.handsFree
-                     ? "Double-press the dictation key to keep listening without holding it — edit, click around, keep talking. Press Esc when you're done and everything is typed."
-                     : "The dictation key only listens while held.")
+                     ? loc("Double-press the dictation key to keep listening without holding it — edit, click around, keep talking. Press Esc when you're done and everything is typed.")
+                     : loc("The dictation key only listens while held."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
             SwiftUI.Section {
-                Toggle("“Press enter” command", isOn: $settings.pressEnterCommand)
+                Toggle(loc("“Press enter” command"), isOn: $settings.pressEnterCommand)
                 Text(settings.pressEnterCommand
-                     ? "End a dictation with “press enter” and Aloud presses Return after typing — handy for chat apps."
-                     : "Saying “press enter” types the words like anything else.")
+                     ? loc("End a dictation with “press enter” and Aloud presses Return after typing — handy for chat apps.")
+                     : loc("Saying “press enter” types the words like anything else."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
             SwiftUI.Section {
-                Toggle("Sound when recording starts", isOn: $settings.soundCues)
+                Toggle(loc("Sound when recording starts"), isOn: $settings.soundCues)
             }
 
             SwiftUI.Section {
-                Toggle("Live typing", isOn: $settings.liveTyping)
+                Toggle(loc("Live typing"), isOn: $settings.liveTyping)
                 Text(settings.liveTyping
-                     ? "Words appear as you say them and settle as Aloud hears more."
-                     : "Everything is typed at once when you release the key.")
+                     ? loc("Words appear as you say them and settle as Aloud hears more.")
+                     : loc("Everything is typed at once when you release the key."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } header: {
                 HStack(spacing: 5) {
-                    Text("Experimental")
+                    Text(loc("Experimental"))
                     Button {
                         showExperimentalInfo.toggle()
                     } label: {
@@ -416,7 +417,7 @@ struct DictationSettings: View {
                     }
                     .buttonStyle(.plain)
                     .popover(isPresented: $showExperimentalInfo, arrowEdge: .bottom) {
-                        Text("Experimental features are ones we’re still polishing. They’re good enough to be worth trying — just expect the occasional hiccup. You can turn them off any time.")
+                        Text(loc("Experimental features are ones we’re still polishing. They’re good enough to be worth trying — just expect the occasional hiccup. You can turn them off any time."))
                             .font(.callout)
                             .frame(width: 250)
                             .padding(14)
@@ -439,9 +440,9 @@ struct VocabularySettings: View {
         VStack(spacing: 0) {
             if settings.replacements.isEmpty {
                 ContentUnavailableView(
-                    "No Replacements",
+                    loc("No Replacements"),
                     systemImage: "character.book.closed",
-                    description: Text("Fix words Aloud keeps getting wrong — a name, a product, a term of art. Tell it what it types and what it should be instead, and it's corrected every time."))
+                    description: Text(loc("Fix words Aloud keeps getting wrong — a name, a product, a term of art. Tell it what it types and what it should be instead, and it's corrected every time.")))
                     .frame(maxHeight: .infinity)
             } else {
                 List {
@@ -464,7 +465,7 @@ struct VocabularySettings: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
-                Text("\(settings.replacements.count) \(settings.replacements.count == 1 ? "replacement" : "replacements") — add more from History with “Fix…”.")
+                Text(loc(settings.replacements.count == 1 ? "%ld replacement — add more from History with “Fix…”." : "%ld replacements — add more from History with “Fix…”.", settings.replacements.count))
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -473,11 +474,11 @@ struct VocabularySettings: View {
             }
             Divider()
             HStack(spacing: 8) {
-                TextField("Aloud types…", text: $newPattern)
+                TextField(loc("Aloud types…"), text: $newPattern)
                     .textFieldStyle(.roundedBorder)
-                TextField("It should be…", text: $newReplacement)
+                TextField(loc("It should be…"), text: $newReplacement)
                     .textFieldStyle(.roundedBorder)
-                Button("Add") {
+                Button(loc("Add")) {
                     let p = newPattern.trimmingCharacters(in: .whitespaces)
                     let r = newReplacement.trimmingCharacters(in: .whitespaces)
                     guard !p.isEmpty, !r.isEmpty else { return }
@@ -503,9 +504,9 @@ struct SnippetsSettings: View {
         VStack(spacing: 0) {
             if settings.snippets.isEmpty {
                 ContentUnavailableView(
-                    "No Snippets",
+                    loc("No Snippets"),
                     systemImage: "text.insert",
-                    description: Text("Type the same thing a lot? Give it a spoken phrase — say “my email” (or “insert my email”) as a whole dictation and the full text is typed instead."))
+                    description: Text(loc("Type the same thing a lot? Give it a spoken phrase — say “my email” (or “insert my email”) as a whole dictation and the full text is typed instead.")))
                     .frame(maxHeight: .infinity)
             } else {
                 List {
@@ -533,11 +534,11 @@ struct SnippetsSettings: View {
             }
             Divider()
             HStack(spacing: 8) {
-                TextField("When you say…", text: $newTrigger)
+                TextField(loc("When you say…"), text: $newTrigger)
                     .textFieldStyle(.roundedBorder)
-                TextField("Aloud types…", text: $newExpansion)
+                TextField(loc("Aloud types…"), text: $newExpansion)
                     .textFieldStyle(.roundedBorder)
-                Button("Add") {
+                Button(loc("Add")) {
                     let t = newTrigger.trimmingCharacters(in: .whitespaces)
                     let e = newExpansion.trimmingCharacters(in: .whitespaces)
                     guard !t.isEmpty, !e.isEmpty else { return }
@@ -580,9 +581,9 @@ struct ModesSettings: View {
         VStack(spacing: 0) {
             if settings.appModes.isEmpty {
                 ContentUnavailableView(
-                    "No App Modes",
+                    loc("No App Modes"),
                     systemImage: "macwindow",
-                    description: Text("Aloud already matches its rewriting to common chat, email, notes, and code apps — and keeps your exact words in terminals. Add an app here to choose yourself: a built-in style, your own instruction, or exactly what you said."))
+                    description: Text(loc("Aloud already matches its rewriting to common chat, email, notes, and code apps — and keeps your exact words in terminals. Add an app here to choose yourself: a built-in style, your own instruction, or exactly what you said.")))
                     .frame(maxHeight: .infinity)
             } else {
                 List {
@@ -613,35 +614,35 @@ struct ModesSettings: View {
             Divider()
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Picker("App", selection: $appSelection) {
-                        Text("Choose an app…").tag("")
+                    Picker(loc("App"), selection: $appSelection) {
+                        Text(loc("Choose an app…")).tag("")
                         ForEach(runningApps, id: \.bundleID) { app in
                             Text(app.name).tag(app.bundleID)
                         }
                         Divider()
-                        Text("Other app…").tag(Self.otherAppTag)
+                        Text(loc("Other app…")).tag(Self.otherAppTag)
                     }
                     .labelsHidden()
                     .frame(maxWidth: 220)
-                    Picker("Behavior", selection: $behaviorPick) {
-                        Text("Exact words").tag(BehaviorPick.verbatim)
+                    Picker(loc("Behavior"), selection: $behaviorPick) {
+                        Text(loc("Exact words")).tag(BehaviorPick.verbatim)
                         Divider()
                         ForEach(DictationMode.allCases) { mode in
-                            Text("\(mode.displayName) style").tag(BehaviorPick.category(mode))
+                            Text(loc("%@ style", mode.displayName)).tag(BehaviorPick.category(mode))
                         }
                         Divider()
-                        Text("Custom instruction…").tag(BehaviorPick.custom)
+                        Text(loc("Custom instruction…")).tag(BehaviorPick.custom)
                     }
                     .labelsHidden()
-                    Button("Add") { addRule() }
+                    Button(loc("Add")) { addRule() }
                         .disabled(!canAdd)
                 }
                 if appSelection == Self.otherAppTag {
-                    TextField("Bundle ID, e.g. com.example.app", text: $otherBundleID)
+                    TextField(loc("Bundle ID, e.g. com.example.app"), text: $otherBundleID)
                         .textFieldStyle(.roundedBorder)
                 }
                 if behaviorPick == .custom {
-                    TextField("How should it be written there? e.g. Warm and upbeat.",
+                    TextField(loc("How should it be written there? e.g. Warm and upbeat."),
                               text: $customInstruction)
                         .textFieldStyle(.roundedBorder)
                 }
@@ -718,25 +719,25 @@ struct HistorySettings: View {
         VStack(spacing: 0) {
             if settings.statsDictations > 0 {
                 HStack {
-                    StatBlock(value: "\(settings.statsWords)", label: "words spoken")
+                    StatBlock(value: "\(settings.statsWords)", label: loc("words spoken"))
                     Divider().frame(height: 28)
-                    StatBlock(value: "\(settings.statsDictations)", label: "dictations")
+                    StatBlock(value: "\(settings.statsDictations)", label: loc("dictations"))
                     Divider().frame(height: 28)
-                    StatBlock(value: "\(averageWPM)", label: "words per minute")
+                    StatBlock(value: "\(averageWPM)", label: loc("words per minute"))
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
                 Divider()
             }
             if history.entries.isEmpty {
-                ContentUnavailableView("No Dictations Yet",
+                ContentUnavailableView(loc("No Dictations Yet"),
                                        systemImage: "quote.bubble",
-                                       description: Text("Recent dictations appear here. They stay on this Mac."))
+                                       description: Text(loc("Recent dictations appear here. They stay on this Mac.")))
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                    TextField("Search dictations", text: $searchText)
+                    TextField(loc("Search dictations"), text: $searchText)
                         .textFieldStyle(.plain)
                     if !searchText.isEmpty {
                         Button {
@@ -761,9 +762,9 @@ struct HistorySettings: View {
                 }
                 Divider()
                 HStack {
-                    Picker("Keep", selection: $settings.historyLimit) {
+                    Picker(loc("Keep"), selection: $settings.historyLimit) {
                         ForEach([25, 50, 100, 200], id: \.self) { n in
-                            Text("\(n) dictations").tag(n)
+                            Text(loc("%ld dictations", n)).tag(n)
                         }
                     }
                     .fixedSize()
@@ -771,7 +772,7 @@ struct HistorySettings: View {
                         history.trim(to: limit)
                     }
                     Spacer()
-                    Button("Clear History") { history.clear() }
+                    Button(loc("Clear History")) { history.clear() }
                 }
                 .padding(12)
             }
@@ -813,16 +814,16 @@ struct HistoryRow: View {
                     Text(app)
                 }
                 if entry.rawText != nil {
-                    Button(showRaw ? "Hide original" : "Show original") {
+                    Button(showRaw ? loc("Hide original") : loc("Show original")) {
                         withAnimation(.spring(duration: 0.25)) { showRaw.toggle() }
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.accentColor)
                 }
-                Button("Fix…") { showFix = true }
+                Button(loc("Fix…")) { showFix = true }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.accentColor)
-                    .help("Correct this dictation and teach Aloud the right words")
+                    .help(loc("Correct this dictation and teach Aloud the right words"))
                     .popover(isPresented: $showFix, arrowEdge: .bottom) {
                         FixDictationView(entry: entry, settings: settings)
                     }
@@ -840,17 +841,17 @@ struct HistoryRow: View {
         }
         .padding(.vertical, 2)
         .contextMenu {
-            Button("Copy") {
+            Button(loc("Copy")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(entry.text, forType: .string)
             }
             if let raw = entry.rawText {
-                Button("Copy Original") {
+                Button(loc("Copy Original")) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(raw, forType: .string)
                 }
             }
-            Button("Fix…") { showFix = true }
+            Button(loc("Fix…")) { showFix = true }
         }
     }
 }
@@ -885,24 +886,24 @@ private struct FixDictationView: View {
 
     // Stage one: edit the typed text.
     @ViewBuilder private var editor: some View {
-        Text("Fix This Dictation")
+        Text(loc("Fix This Dictation"))
             .font(.headline)
-        Text("Correct the text below and Aloud learns the words it got wrong.")
+        Text(loc("Correct the text below and Aloud learns the words it got wrong."))
             .font(.callout)
             .foregroundStyle(.secondary)
-        TextField("Corrected text", text: $corrected, axis: .vertical)
+        TextField(loc("Corrected text"), text: $corrected, axis: .vertical)
             .textFieldStyle(.roundedBorder)
             .lineLimit(3...8)
             .onChange(of: corrected) { _, _ in noFixFound = false }
         if noFixFound {
-            Label("No repeatable fix found", systemImage: "info.circle")
+            Label(loc("No repeatable fix found"), systemImage: "info.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
         HStack {
             Spacer()
-            Button("Cancel") { dismiss() }
-            Button("Save") { findCandidates() }
+            Button(loc("Cancel")) { dismiss() }
+            Button(loc("Save")) { findCandidates() }
                 .keyboardShortcut(.defaultAction)
                 .disabled(corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                           || corrected == entry.text)
@@ -911,21 +912,21 @@ private struct FixDictationView: View {
 
     // Stage two: confirm which fixes become standing replacements.
     @ViewBuilder private var review: some View {
-        Text("Always Fix These?")
+        Text(loc("Always Fix These?"))
             .font(.headline)
-        Text("Checked fixes are applied to every future dictation. Change them any time in Vocabulary.")
+        Text(loc("Checked fixes are applied to every future dictation. Change them any time in Vocabulary."))
             .font(.callout)
             .foregroundStyle(.secondary)
         ForEach(candidates.indices, id: \.self) { i in
             Toggle(isOn: acceptedBinding(i)) {
-                Text("Type “\(candidates[i].to)” instead of “\(candidates[i].from)”")
+                Text(loc("Type “%1$@” instead of “%2$@”", candidates[i].to, candidates[i].from))
             }
             .toggleStyle(.checkbox)
         }
         HStack {
             Spacer()
-            Button("Cancel") { dismiss() }
-            Button("Add to Vocabulary") {
+            Button(loc("Cancel")) { dismiss() }
+            Button(loc("Add to Vocabulary")) {
                 addAccepted()
                 dismiss()
             }
@@ -978,15 +979,15 @@ struct AboutSettings: View {
                 .foregroundStyle(Color.accentColor)
             Text("Aloud")
                 .font(.title2.weight(.semibold))
-            Text("Version \(Updater.currentVersion())")
+            Text(loc("Version %@", Updater.currentVersion()))
                 .foregroundStyle(.secondary)
-            Text("Dictation that stays on your Mac.\nNo account, no cloud, no telemetry.")
+            Text(loc("Dictation that stays on your Mac.\nNo account, no cloud, no telemetry."))
                 .multilineTextAlignment(.center)
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Link("getaloud.work", destination: URL(string: "https://getaloud.work")!)
                 .font(.callout)
-            Button("Uninstall Aloud…", role: .destructive) {
+            Button(loc("Uninstall Aloud…"), role: .destructive) {
                 Uninstaller.confirmAndRun()
             }
             .buttonStyle(.plain)

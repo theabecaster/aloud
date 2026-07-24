@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Aloud",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     dependencies: [
         // Pinned below 0.16 deliberately: 0.15.x is a pure-source dependency
@@ -15,6 +16,7 @@ let package = Package(
             name: "Aloud",
             dependencies: [.product(name: "FluidAudio", package: "FluidAudio")],
             path: "Sources/Aloud",
+            resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(

@@ -149,27 +149,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(status)
 
         if bundleWasReplacedOnDisk {
-            menu.addItem(withTitle: "Relaunch to Finish Update…",
+            menu.addItem(withTitle: loc("Relaunch to Finish Update…"),
                          action: #selector(relaunchFromDisk), keyEquivalent: "").target = self
         }
 
         if !Permissions.allGranted || !controller.settings.onboardingComplete {
-            menu.addItem(withTitle: "Finish Setup…",
+            menu.addItem(withTitle: loc("Finish Setup…"),
                          action: #selector(openOnboarding), keyEquivalent: "").target = self
         } else if case .modelMissing = controller.upgradeState {
-            menu.addItem(withTitle: "Download Voice Recognition…",
+            menu.addItem(withTitle: loc("Download Voice Recognition…"),
                          action: #selector(downloadModel), keyEquivalent: "").target = self
         } else if case .failed = controller.upgradeState {
-            menu.addItem(withTitle: "Retry Voice Download…",
+            menu.addItem(withTitle: loc("Retry Voice Download…"),
                          action: #selector(downloadModel), keyEquivalent: "").target = self
         } else if controller.usingFallback {
             // Dictation already works (basic); the accuracy upgrade is still
             // landing in the background. Informational only.
             let title: String
             if case .downloading(let p) = controller.upgradeState {
-                title = "Improving accuracy… \(Int(p * 100))%"
+                title = loc("Improving accuracy… %ld%%", Int(p * 100))
             } else {
-                title = "Improving accuracy…"
+                title = loc("Improving accuracy…")
             }
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             item.isEnabled = false
@@ -178,54 +178,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         if controller.undoEnhancementAvailable {
-            menu.addItem(withTitle: "Type Exact Words Instead",
+            menu.addItem(withTitle: loc("Type Exact Words Instead"),
                          action: #selector(undoEnhancement), keyEquivalent: "").target = self
         }
         if controller.retryAvailable {
-            menu.addItem(withTitle: "Retry Last Dictation",
+            menu.addItem(withTitle: loc("Retry Last Dictation"),
                          action: #selector(retryLastDictation), keyEquivalent: "").target = self
         }
         if !controller.lastTranscription.isEmpty {
-            menu.addItem(withTitle: "Copy Last Dictation",
+            menu.addItem(withTitle: loc("Copy Last Dictation"),
                          action: #selector(copyLastDictation), keyEquivalent: "").target = self
         }
-        let scratchItem = NSMenuItem(title: "Scratchpad",
+        let scratchItem = NSMenuItem(title: loc("Scratchpad"),
                                      action: #selector(toggleScratchpad), keyEquivalent: "")
         scratchItem.target = self
         scratchItem.state = scratchpad.isVisible ? .on : .off
         menu.addItem(scratchItem)
-        menu.addItem(withTitle: "Settings…",
+        menu.addItem(withTitle: loc("Settings…"),
                      action: #selector(openSettings), keyEquivalent: ",").target = self
 
         if let update = pendingUpdate {
             menu.addItem(.separator())
-            let item = NSMenuItem(title: "Update Available (\(update.tag))…",
+            let item = NSMenuItem(title: loc("Update Available (%@)…", update.tag),
                                   action: #selector(applyUpdate), keyEquivalent: "")
             item.target = self
             menu.addItem(item)
         } else {
-            menu.addItem(withTitle: "Check for Updates…",
+            menu.addItem(withTitle: loc("Check for Updates…"),
                          action: #selector(checkForUpdates), keyEquivalent: "").target = self
         }
 
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Aloud",
+        menu.addItem(withTitle: loc("Quit Aloud"),
                      action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
     private func statusLine() -> String {
-        if Permissions.microphone != .granted { return "Microphone access needed" }
-        if Permissions.accessibility != .granted { return "Accessibility access needed" }
+        if Permissions.microphone != .granted { return loc("Microphone access needed") }
+        if Permissions.accessibility != .granted { return loc("Accessibility access needed") }
         switch controller.transcriberState {
-        case .modelMissing: return "Voice setup needed"
-        case .downloading(let p): return "Downloading voice recognition… \(Int(p * 100))%"
-        case .loading: return "Warming up…"
-        case .failed: return "Voice download didn’t finish"
+        case .modelMissing: return loc("Voice setup needed")
+        case .downloading(let p): return loc("Downloading voice recognition… %ld%%", Int(p * 100))
+        case .loading: return loc("Warming up…")
+        case .failed: return loc("Voice download didn’t finish")
         case .ready:
             if controller.settings.onboardingComplete, !controller.isListening {
-                return "Dictation key isn’t working — try reopening Aloud"
+                return loc("Dictation key isn’t working — try reopening Aloud")
             }
-            return "Hold \(controller.settings.hotkey.displayName) to dictate"
+            return loc("Hold %@ to dictate", controller.settings.hotkey.displayName)
         }
     }
 
@@ -259,7 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             _ = controller.startListening()
         }
         let window = NSWindow(contentViewController: NSHostingController(rootView: view))
-        window.title = "Welcome to Aloud"
+        window.title = loc("Welcome to Aloud")
         window.styleMask = [.titled, .closable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
@@ -310,7 +310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let settingsWindow { present(settingsWindow); return }
         let window = NSWindow(contentViewController:
             NSHostingController(rootView: SettingsView(controller: controller)))
-        window.title = "Aloud Settings"
+        window.title = loc("Aloud Settings")
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
@@ -339,11 +339,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.applyUpdate()
                 } else {
                     let alert = NSAlert()
-                    alert.messageText = latest == nil ? "Couldn’t check for updates"
-                                                      : "You’re up to date"
+                    alert.messageText = latest == nil ? loc("Couldn’t check for updates")
+                                                      : loc("You’re up to date")
                     alert.informativeText = latest == nil
-                        ? "Check your internet connection and try again."
-                        : "Aloud \(Updater.currentVersion()) is the latest version."
+                        ? loc("Check your internet connection and try again.")
+                        : loc("Aloud %@ is the latest version.", Updater.currentVersion())
                     alert.runModal()
                 }
             }
@@ -352,7 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func releaseNotesLink(_ url: URL) -> NSView {
         let link = NSMutableAttributedString(
-            string: "View release notes",
+            string: loc("View release notes"),
             attributes: [.link: url, .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)])
         let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 220, height: 16))
         view.textStorage?.setAttributedString(link)
@@ -366,11 +366,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func applyUpdate() {
         guard let update = pendingUpdate else { return }
         let alert = NSAlert()
-        alert.messageText = "Update to Aloud \(update.tag)?"
-        alert.informativeText = "Aloud will update and reopen. Takes a few seconds."
+        alert.messageText = loc("Update to Aloud %@?", update.tag)
+        alert.informativeText = loc("Aloud will update and reopen. Takes a few seconds.")
         alert.accessoryView = releaseNotesLink(update.pageURL)
-        alert.addButton(withTitle: "Update and Relaunch")
-        alert.addButton(withTitle: "Later")
+        alert.addButton(withTitle: loc("Update and Relaunch"))
+        alert.addButton(withTitle: loc("Later"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         guard let dest = Updater.updatableBundlePath() else {
@@ -385,10 +385,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     NSApp.terminate(nil)
                 case .failed(let reason):
                     let alert = NSAlert()
-                    alert.messageText = "Update didn’t finish"
-                    alert.informativeText = "\(reason). You can download it from the releases page instead."
-                    alert.addButton(withTitle: "Open Releases Page")
-                    alert.addButton(withTitle: "Cancel")
+                    alert.messageText = loc("Update didn’t finish")
+                    alert.informativeText = loc("%@. You can download it from the releases page instead.", reason)
+                    alert.addButton(withTitle: loc("Open Releases Page"))
+                    alert.addButton(withTitle: loc("Cancel"))
                     if alert.runModal() == .alertFirstButtonReturn {
                         NSWorkspace.shared.open(Updater.releasesPage)
                     }

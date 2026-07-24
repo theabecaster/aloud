@@ -11,11 +11,11 @@ enum DictationMode: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var displayName: String {
         switch self {
-        case .messaging: return "Messaging"
-        case .email: return "Email"
-        case .notes: return "Notes"
-        case .code: return "Code"
-        case .general: return "General"
+        case .messaging: return loc("Messaging")
+        case .email: return loc("Email")
+        case .notes: return loc("Notes")
+        case .code: return loc("Code")
+        case .general: return loc("General")
         }
     }
 

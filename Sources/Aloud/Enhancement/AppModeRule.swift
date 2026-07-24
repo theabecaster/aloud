@@ -21,8 +21,8 @@ struct AppModeRule: Codable, Equatable, Identifiable, Sendable {
     var summary: String {
         switch behavior {
         case .category(let mode): return mode.displayName
-        case .custom(let instruction): return "“\(instruction)”"
-        case .verbatim: return "Exact words"
+        case .custom(let instruction): return loc("“%@”", instruction)
+        case .verbatim: return loc("Exact words")
         }
     }
 }

@@ -7,10 +7,10 @@ import AppKit
 enum Uninstaller {
     static func confirmAndRun() {
         let alert = NSAlert()
-        alert.messageText = "Uninstall Aloud?"
-        alert.informativeText = "This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind."
-        alert.addButton(withTitle: "Uninstall")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = loc("Uninstall Aloud?")
+        alert.informativeText = loc("This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind.")
+        alert.addButton(withTitle: loc("Uninstall"))
+        alert.addButton(withTitle: loc("Cancel"))
         alert.buttons.first?.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         run()

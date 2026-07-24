@@ -17,6 +17,18 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Aloud "$APP/Contents/MacOS/Aloud"
 
+# Localization: the SPM resource bundle carries the per-language string
+# tables (Sources/Aloud/Resources/<lang>.lproj). Bundle.module looks in
+# Contents/Resources when running inside an .app, so the bundle must be
+# staged there or every string falls back to its key.
+cp -R .build/release/Aloud_Aloud.bundle "$APP/Contents/Resources/"
+
+# Localized permission-prompt strings: <lang>.lproj/InfoPlist.strings in
+# Contents/Resources override Info.plist usage descriptions per language.
+if [ -d Resources/InfoPlist ]; then
+  cp -R Resources/InfoPlist/. "$APP/Contents/Resources/"
+fi
+
 # App icon (generated + committed; regenerate with scripts/make-icon.sh).
 if [ -f Resources/AppIcon.icns ]; then
   cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
@@ -28,6 +40,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key><string>Aloud</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleAllowMixedLocalizations</key><true/>
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>es</string>
+    <string>de</string>
+    <string>fr</string>
+    <string>pt-BR</string>
+  </array>
   <key>CFBundleDisplayName</key><string>Aloud</string>
   <key>CFBundleIdentifier</key><string>com.abrahamgonzalez.aloud</string>
   <key>CFBundleExecutable</key><string>Aloud</string>
@@ -47,6 +69,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Hard gate: every language shipped in the source tree must have made it
+# into the staged app, or that language silently falls back to English.
+for lproj in Sources/Aloud/Resources/*.lproj; do
+  lang="$(basename "$lproj" .lproj)"
+  if [ ! -f "$APP/Contents/Resources/Aloud_Aloud.bundle/$lang.lproj/Localizable.strings" ]; then
+    echo "error: $lang localization missing from $APP" >&2
+    exit 1
+  fi
+done
 
 # Sign. The SPM linker leaves an inconsistent partial signature on the inner
 # binary; without a proper re-sign a quarantined download reports "damaged".

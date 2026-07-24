@@ -111,27 +111,27 @@ enum Updater {
         let tmp = fm.temporaryDirectory.appendingPathComponent("aloud-update-\(getpid())")
         try? fm.removeItem(at: tmp)
         do { try fm.createDirectory(at: tmp, withIntermediateDirectories: true) }
-        catch { return .failed("couldn’t create a temporary folder") }
+        catch { return .failed(loc("couldn’t create a temporary folder")) }
 
         let zipPath = tmp.appendingPathComponent(updateAsset)
-        guard let zipData = httpGet(release.zipURL, timeout: 300) else { return .failed("download failed") }
-        do { try zipData.write(to: zipPath) } catch { return .failed("couldn’t save the download") }
+        guard let zipData = httpGet(release.zipURL, timeout: 300) else { return .failed(loc("download failed")) }
+        do { try zipData.write(to: zipPath) } catch { return .failed(loc("couldn’t save the download")) }
 
         if runTool("/usr/bin/ditto", ["-x", "-k", zipPath.path, tmp.path]) != 0 {
-            return .failed("couldn’t unpack the download")
+            return .failed(loc("couldn’t unpack the download"))
         }
         let newApp = tmp.appendingPathComponent("Aloud.app")
-        guard fm.fileExists(atPath: newApp.path) else { return .failed("the download was incomplete") }
+        guard fm.fileExists(atPath: newApp.path) else { return .failed(loc("the download was incomplete")) }
 
         // Integrity gates: the seal must verify AND the signer must be our team.
         if runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", newApp.path]) != 0 {
-            return .failed("the download failed signature verification")
+            return .failed(loc("the download failed signature verification"))
         }
         if runTool("/usr/bin/codesign",
                    ["--verify", "--deep", "--strict",
                     "-R=anchor apple generic and certificate leaf[subject.OU] = \"R2PVQ496X7\"",
                     newApp.path]) != 0 {
-            return .failed("the download isn’t signed by the Aloud developer")
+            return .failed(loc("the download isn’t signed by the Aloud developer"))
         }
 
         let script = """
@@ -150,7 +150,7 @@ enum Updater {
         """
         let scriptURL = tmp.appendingPathComponent("apply.sh")
         do { try script.write(to: scriptURL, atomically: true, encoding: .utf8) }
-        catch { return .failed("couldn’t stage the installer") }
+        catch { return .failed(loc("couldn’t stage the installer")) }
 
         let helper = Process()
         helper.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -158,7 +158,7 @@ enum Updater {
         helper.standardInput = FileHandle.nullDevice
         helper.standardOutput = FileHandle.nullDevice
         helper.standardError = FileHandle.nullDevice
-        do { try helper.run() } catch { return .failed("couldn’t launch the installer") }
+        do { try helper.run() } catch { return .failed(loc("couldn’t launch the installer")) }
         return .relaunching
     }
 
