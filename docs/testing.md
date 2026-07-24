@@ -32,7 +32,7 @@ Accuracy regression harness for the on-device model. `bash eval/run-eval.sh`:
 
 1. Fixtures: `eval/fixtures/manifest.json` maps audio → reference transcripts. Audio is synthesized deterministically with macOS `say` voices at various rates (generated on demand, gitignored) plus any real recordings added by hand.
 2. Runs `Aloud --transcribe` over each fixture.
-3. Scores WER/CER per fixture (`eval/wer.swift`), writes `eval/results/report.json`.
+3. Scores WER per fixture (computed inline in `run-eval.sh`), writes `eval/results/report.json`.
 4. Gate: fails if average WER exceeds the threshold in `eval/thresholds.json` or any fixture regresses > its per-file bound.
 
 When to run: PRs that touch `Sources/Aloud/Transcription/**` or bump the FluidAudio pin (CI path filter), plus a nightly scheduled run. Model (~an over-a-GB download) is cached between CI runs via `actions/cache`.
