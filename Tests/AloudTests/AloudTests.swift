@@ -161,6 +161,17 @@ final class HotkeyEngineTests: XCTestCase {
         XCTAssertEqual(engine.handle(type: .otherMouseDown, keyCode: 3, flags: [], time: 0), .none)
     }
 
+    func testAudioBackupRoundTrip() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aloud-test-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let samples: [Float] = (0..<8000).map { sin(Float($0) * 0.01) }
+        AudioBackup.save(samples: samples, to: url)
+        let loaded = AudioBackup.load(from: url)
+        XCTAssertEqual(loaded?.count, samples.count)
+        XCTAssertEqual(loaded?[1234] ?? -1, samples[1234], accuracy: 0.0001)
+    }
+
     func testForceLockBehavesLikeHandsFreeSession() {
         var engine = HotkeyEngine(hotkey: .default)
         engine.forceLock()

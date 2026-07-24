@@ -42,6 +42,9 @@ final class DictationController: ObservableObject {
     // Captured at begin (not commit): hands-free users wander mid-session.
     private var sessionApp: (name: String?, bundleID: String?) = (nil, nil)
 
+    // A failed dictation's audio is on disk and can be retried (menu item).
+    @Published private(set) var retryAvailable = AudioBackup.exists
+
     private var cancellables: Set<AnyCancellable> = []
 
     init(settings: SettingsStore = .shared,
@@ -310,6 +313,7 @@ final class DictationController: ObservableObject {
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
                     lastTranscription = text
+                    clearAudioBackup()
                 } else {
                     liveTyper.eraseAll()
                 }
@@ -319,6 +323,7 @@ final class DictationController: ObservableObject {
             } catch {
                 // Keep whatever was already typed — deleting words the user
                 // watched appear would be worse than a rough tail.
+                keepAudioBackup(samples)
                 endLiveTyping()
                 playCue("Basso")
                 indicator.showHint("Couldn’t finish that dictation")
@@ -358,7 +363,58 @@ final class DictationController: ObservableObject {
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID),
                                    limit: settings.historyLimit)
                     lastTranscription = text
+                    clearAudioBackup()
                 }
+                indicator.hide()
+                phase = .idle
+            } catch {
+                keepAudioBackup(samples)
+                playCue("Basso")
+                indicator.showHint("Couldn’t transcribe that — try again")
+                phase = .error(error.localizedDescription)
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if case .error = phase { phase = .idle }
+            }
+        }
+    }
+
+    // MARK: failed-dictation retry
+
+    private func keepAudioBackup(_ samples: [Float]) {
+        AudioBackup.save(samples: samples)
+        retryAvailable = AudioBackup.exists
+    }
+
+    private func clearAudioBackup() {
+        guard retryAvailable else { return }
+        AudioBackup.clear()
+        retryAvailable = false
+    }
+
+    // Re-run the saved audio of the last failed dictation; text lands in
+    // whatever app is focused now.
+    func retryLastDictation() {
+        guard phase == .idle || phase.isError, retryAvailable,
+              let samples = AudioBackup.load() else { return }
+        let front = NSWorkspace.shared.frontmostApplication
+        sessionApp = (front?.localizedName, front?.bundleIdentifier)
+        indicator.showTranscribing()
+        phase = .transcribing
+        Task {
+            do {
+                let result = try await transcriber.transcribe(samples: samples)
+                let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let polisher = TextPolisher(level: settings.polishLevel,
+                                            replacements: settings.replacements)
+                let text = polisher.polish(raw)
+                if !text.isEmpty {
+                    injector.inject(text)
+                    history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
+                                                appName: sessionApp.name, appBundleID: sessionApp.bundleID),
+                                   limit: settings.historyLimit)
+                    lastTranscription = text
+                }
+                clearAudioBackup()
                 indicator.hide()
                 phase = .idle
             } catch {
