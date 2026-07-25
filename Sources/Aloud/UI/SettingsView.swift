@@ -1,3 +1,4 @@
+import Carbon.HIToolbox
 import SwiftUI
 
 // One calm window, System Settings-style sidebar. Eight panes in three
@@ -244,7 +245,7 @@ struct KeysSettings: View {
                 }
             } footer: {
                 footnote(for: .dictation,
-                         loc("Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too.",
+                         loc("Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier.",
                              settings.hotkey.displayName))
             }
 
@@ -311,22 +312,35 @@ struct KeysSettings: View {
         }
     }
 
-    private func holder(of hotkey: Hotkey) -> KeySlot? {
-        if settings.hotkey == hotkey { return .dictation }
-        if settings.handsFreeHotkey == hotkey { return .handsFree }
-        if controller.commandsAvailable, settings.commandHotkey == hotkey { return .command }
+    // The slot whose key overlaps the candidate — the same combo, or one
+    // contained in the other (pressing ⌃⌥⌘ passes through ⌃⌥ on the way
+    // down, so the two can never coexist). Partial overlap is fine: ⌘⇧ and
+    // ⌘Space share ⌘ and never collide.
+    private func conflict(with hotkey: Hotkey, excluding slot: KeySlot) -> (slot: KeySlot, owner: Hotkey)? {
+        if slot != .dictation, settings.hotkey.overlaps(hotkey) { return (.dictation, settings.hotkey) }
+        if slot != .handsFree, let hf = settings.handsFreeHotkey, hf.overlaps(hotkey) { return (.handsFree, hf) }
+        if slot != .command, controller.commandsAvailable,
+           let cmd = settings.commandHotkey, cmd.overlaps(hotkey) { return (.command, cmd) }
         return nil
     }
 
     private func assign(_ hotkey: Hotkey, to slot: KeySlot, commit: (Hotkey) -> Void) {
-        guard let taken = holder(of: hotkey), taken != slot else {
+        guard let (taken, owner) = conflict(with: hotkey, excluding: slot) else {
             refusedSlot = nil
             commit(hotkey)
             return
         }
         // Refused: shake the recorder that asked, say who already owns the key,
         // and leave the old assignment untouched.
-        refusedMessage = loc("%1$@ is already your %2$@.", hotkey.displayName, taken.name)
+        if owner == hotkey {
+            refusedMessage = loc("%1$@ is already your %2$@.", hotkey.displayName, taken.name)
+        } else if hotkey.covers(owner) {
+            refusedMessage = loc("%1$@ includes %2$@, which is already your %3$@.",
+                                 hotkey.displayName, owner.displayName, taken.name)
+        } else {
+            refusedMessage = loc("%1$@ is part of %2$@, your %3$@.",
+                                 hotkey.displayName, owner.displayName, taken.name)
+        }
         refusedSlot = slot
         NSSound.beep()
         shake = 0
@@ -401,25 +415,14 @@ private extension View {
     }
 }
 
-// Click, then press the desired key (a lone modifier like right ⌥ counts).
+// Click, then press the desired key — a lone modifier, two or three
+// modifiers held together, a key with modifiers, or an extra mouse button.
 struct HotkeyRecorderView: View {
     var hotkey: Hotkey
     var onChange: (Hotkey) -> Void
-    @State private var recording = false
 
     var body: some View {
-        Button {
-            recording.toggle()
-            if recording { KeyCaptureWindow.begin { captured in
-                recording = false
-                if let captured { onChange(captured) }
-            } }
-        } label: {
-            Text(recording ? loc("Press a key…") : hotkey.displayName)
-                .frame(minWidth: 110)
-        }
-        .buttonStyle(.bordered)
-        .tint(recording ? .accentColor : nil)
+        HotkeyCaptureButton(idleLabel: hotkey.displayName, onChange: onChange)
     }
 }
 
@@ -427,69 +430,159 @@ struct HotkeyRecorderView: View {
 struct OptionalHotkeyRecorderView: View {
     var hotkey: Hotkey?
     var onChange: (Hotkey) -> Void
+
+    var body: some View {
+        HotkeyCaptureButton(idleLabel: hotkey?.displayName ?? loc("None"), onChange: onChange)
+    }
+}
+
+// The shared capture button: previews the keys as they're held, commits when
+// they're all released, and refuses more than three with the login-window
+// shake — no dialog, no extra controls.
+private struct HotkeyCaptureButton: View {
+    var idleLabel: String
+    var onChange: (Hotkey) -> Void
     @State private var recording = false
+    @State private var preview = ""
+    @State private var overLimit = false
+    @State private var limitShake: CGFloat = 0
 
     var body: some View {
         Button {
             recording.toggle()
-            if recording { KeyCaptureWindow.begin { captured in
-                recording = false
-                if let captured { onChange(captured) }
-            } }
+            if recording {
+                overLimit = false
+                preview = ""
+                KeyCaptureWindow.begin { held in
+                    preview = held
+                } completion: { result in
+                    recording = false
+                    preview = ""
+                    switch result {
+                    case .captured(let hk):
+                        onChange(hk)
+                    case .cancelled:
+                        break
+                    case .tooManyKeys:
+                        overLimit = true
+                        NSSound.beep()
+                        limitShake = 0
+                        withAnimation(.linear(duration: 0.35)) { limitShake = 1 }
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(1600))
+                            withAnimation { overLimit = false }
+                        }
+                    }
+                }
+            } else {
+                KeyCaptureWindow.end()
+            }
         } label: {
-            Text(recording ? loc("Press a key…") : (hotkey?.displayName ?? loc("None")))
+            Text(label)
                 .frame(minWidth: 110)
         }
         .buttonStyle(.bordered)
         .tint(recording ? .accentColor : nil)
+        .shaking(limitShake)
+    }
+
+    private var label: String {
+        if overLimit { return loc("Up to three keys") }
+        if recording { return preview.isEmpty ? loc("Press up to three keys…") : preview }
+        return idleLabel
     }
 }
 
-// Captures the next key or lone-modifier press via a local event monitor.
+// Captures the next key, mouse button, or combo of up to three keys held
+// together via a local event monitor. Modifier-only combos commit when the
+// last key is released; a regular key or mouse button commits immediately
+// with whatever modifiers are down.
 @MainActor
 enum KeyCaptureWindow {
     private static var monitor: Any?
 
-    static func begin(completion: @escaping (Hotkey?) -> Void) {
+    enum Capture {
+        case captured(Hotkey)
+        case cancelled
+        case tooManyKeys
+    }
+
+    static func begin(onUpdate: @escaping (String) -> Void = { _ in },
+                      completion: @escaping (Capture) -> Void) {
         end()
-        var lastFlags = NSEvent.modifierFlags
+        var heldMods: CGEventFlags = []     // modifiers down right now
+        var chordMods: CGEventFlags = []    // accumulated over this hold
+        var loneKeyCode: UInt16?            // keycode of a single held modifier (keeps left/right)
+        var fnDown = false
+
+        func finish(_ result: Capture) {
+            end()
+            completion(result)
+        }
+
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .otherMouseDown]) { event in
             if event.type == .otherMouseDown {
-                // Extra mouse buttons (3rd and up) can be push-to-talk keys.
-                end()
-                completion(Hotkey(keyCode: UInt16(clamping: event.buttonNumber),
-                                  modifiers: 0, isModifierKey: false, isMouseButton: true))
+                // Extra mouse buttons (3rd and up), alone or with modifiers.
+                let mods = cgFlags(from: event.modifierFlags)
+                if mods.rawValue.nonzeroBitCount > 2 { finish(.tooManyKeys); return nil }
+                finish(.captured(Hotkey(keyCode: UInt16(clamping: event.buttonNumber),
+                                        modifiers: mods.rawValue, isModifierKey: false,
+                                        isMouseButton: true)))
                 return nil
             }
             if event.type == .keyDown {
                 if event.keyCode == 53 { // Esc cancels recording
-                    end(); completion(nil); return nil
+                    finish(.cancelled); return nil
                 }
-                let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
-                var cgFlags: UInt64 = 0
-                if mods.contains(.command) { cgFlags |= CGEventFlags.maskCommand.rawValue }
-                if mods.contains(.option) { cgFlags |= CGEventFlags.maskAlternate.rawValue }
-                if mods.contains(.control) { cgFlags |= CGEventFlags.maskControl.rawValue }
-                if mods.contains(.shift) { cgFlags |= CGEventFlags.maskShift.rawValue }
-                end()
-                completion(Hotkey(keyCode: event.keyCode, modifiers: cgFlags, isModifierKey: false))
+                let mods = cgFlags(from: event.modifierFlags)
+                if mods.rawValue.nonzeroBitCount > 2 { finish(.tooManyKeys); return nil }
+                finish(.captured(Hotkey(keyCode: event.keyCode, modifiers: mods.rawValue,
+                                        isModifierKey: false)))
                 return nil
-            } else {
-                // A modifier released with no other key = lone-modifier hotkey.
-                let now = event.modifierFlags
-                let released = lastFlags.subtracting(now)
-                lastFlags = now
-                if !released.isEmpty {
-                    let candidate = Hotkey(keyCode: event.keyCode, modifiers: 0, isModifierKey: true)
-                    if candidate.modifierFlag != nil {
-                        end()
-                        completion(candidate)
-                        return nil
-                    }
+            }
+            // flagsChanged: build up a modifier combo, commit on full release.
+            if event.keyCode == UInt16(kVK_Function) {
+                let nowDown = event.modifierFlags.contains(.function)
+                defer { fnDown = nowDown }
+                if fnDown, !nowDown, chordMods.isEmpty, heldMods.isEmpty {
+                    finish(.captured(Hotkey(keyCode: event.keyCode, modifiers: 0, isModifierKey: true)))
+                    return nil
                 }
                 return event
             }
+            let now = cgFlags(from: event.modifierFlags)
+            if now.rawValue.nonzeroBitCount > 3 { finish(.tooManyKeys); return nil }
+            if !now.subtracting(heldMods).isEmpty {         // something pressed
+                if heldMods.isEmpty { loneKeyCode = event.keyCode }
+                chordMods.formUnion(now)
+            }
+            heldMods = now
+            onUpdate(Hotkey.glyphs(for: chordMods))
+            if now.isEmpty {
+                switch chordMods.rawValue.nonzeroBitCount {
+                case 0:
+                    return event
+                case 1:
+                    // A lone modifier keeps its physical key (Left ⌥ ≠ Right ⌥).
+                    let candidate = Hotkey(keyCode: loneKeyCode ?? event.keyCode,
+                                           modifiers: 0, isModifierKey: true)
+                    if candidate.modifierFlag != nil { finish(.captured(candidate)) } else { finish(.cancelled) }
+                default:
+                    finish(.captured(Hotkey.chord(chordMods)))
+                }
+                return nil
+            }
+            return event
         }
+    }
+
+    private static func cgFlags(from mods: NSEvent.ModifierFlags) -> CGEventFlags {
+        var flags: CGEventFlags = []
+        if mods.contains(.command) { flags.insert(.maskCommand) }
+        if mods.contains(.option) { flags.insert(.maskAlternate) }
+        if mods.contains(.control) { flags.insert(.maskControl) }
+        if mods.contains(.shift) { flags.insert(.maskShift) }
+        return flags
     }
 
     static func end() {

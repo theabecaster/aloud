@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Carbon.HIToolbox
 import Foundation
 
 // Headless verbs so agents and CI can verify subsystems with no GUI and no
@@ -344,22 +345,43 @@ enum CLI {
             return 1
         }
         let hotkey = SettingsStore.shared.hotkey
-        guard hotkey.isModifierKey, let flag = hotkey.modifierFlag else {
+        guard hotkey.isModifierKey else {
+            FileHandle.standardError.write(Data("--simulate-hold currently supports modifier hotkeys only\n".utf8))
+            return 2
+        }
+        // Each chord member is a (virtual keycode, flag bit) pair; a lone
+        // modifier is a chord of one. Press in order with cumulative flags,
+        // release in reverse — the same event stream real keys produce.
+        let members: [(key: CGKeyCode, flag: CGEventFlags)]
+        if hotkey.isChord {
+            let all: [(CGEventFlags, Int)] = [(.maskControl, kVK_Control), (.maskAlternate, kVK_Option),
+                                              (.maskShift, kVK_Shift), (.maskCommand, kVK_Command)]
+            members = all.filter { hotkey.chordMask.contains($0.0) }
+                .map { (CGKeyCode($0.1), $0.0) }
+        } else if let flag = hotkey.modifierFlag {
+            members = [(CGKeyCode(hotkey.keyCode), flag)]
+        } else {
             FileHandle.standardError.write(Data("--simulate-hold currently supports modifier hotkeys only\n".utf8))
             return 2
         }
         let source = CGEventSource(stateID: .hidSystemState)
-        func post(down: Bool) {
-            guard let e = CGEvent(keyboardEventSource: source,
-                                  virtualKey: CGKeyCode(hotkey.keyCode), keyDown: down) else { return }
+        func post(key: CGKeyCode, flags: CGEventFlags) {
+            guard let e = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: !flags.isEmpty) else { return }
             e.type = .flagsChanged
-            e.flags = down ? flag : []
+            e.flags = flags
             e.post(tap: .cghidEventTap)
         }
         FileHandle.standardError.write(Data("holding \(hotkey.displayName) for \(seconds)s\n".utf8))
-        post(down: true)
+        var held: CGEventFlags = []
+        for m in members {
+            held.insert(m.flag)
+            post(key: m.key, flags: held)
+        }
         Thread.sleep(forTimeInterval: seconds)
-        post(down: false)
+        for m in members.reversed() {
+            held.remove(m.flag)
+            post(key: m.key, flags: held)
+        }
         return 0
     }
 
@@ -380,9 +402,10 @@ enum CLI {
         setenv("ALOUD_STATE_DIR", tmp.path, 1)
 
         // 1. Hotkey engine: hold/commit, short-tap cancel, Esc, hands-free — pure logic.
-        var engine = HotkeyEngine(hotkey: .default)
-        let key = Hotkey.default.keyCode
-        let flag = Hotkey.default.modifierFlag!
+        let lone = Hotkey(keyCode: UInt16(kVK_Option), modifiers: 0, isModifierKey: true)
+        var engine = HotkeyEngine(hotkey: lone)
+        let key = lone.keyCode
+        let flag = lone.modifierFlag!
         expect(engine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0) == .begin,
                "hotkey: modifier down begins")
         expect(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.5) == .commit,
@@ -416,14 +439,14 @@ enum CLI {
                "hotkey: double-tap finishes hands-free")
         expect(engine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 7.25) == .none,
                "hotkey: stopping tap release swallowed")
-        var noHandsFree = HotkeyEngine(hotkey: .default, handsFreeEnabled: false)
+        var noHandsFree = HotkeyEngine(hotkey: lone, handsFreeEnabled: false)
         _ = noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0)
         _ = noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.05)
         _ = noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0.2)
         expect(noHandsFree.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.25) == .cancel,
                "hotkey: hands-free off means double-press never locks")
         // Command key engine: same hold semantics, relabeled actions, no lock.
-        var commandEngine = CommandKeyEngine(hotkey: .default)
+        var commandEngine = CommandKeyEngine(hotkey: lone)
         expect(commandEngine.handle(type: .flagsChanged, keyCode: key, flags: flag, time: 0) == .beginCommand,
                "command key: press begins")
         expect(commandEngine.handle(type: .flagsChanged, keyCode: key, flags: [], time: 0.5) == .commitCommand,
@@ -466,6 +489,58 @@ enum CLI {
                "hotkey: regular key commits")
         expect(keyEngine.handle(type: .keyDown, keyCode: 97, flags: [], time: 1) == .none,
                "hotkey: other keys ignored")
+
+        // Modifier chords: exact set pressed together begins, any member up
+        // commits, a foreign key right after the press means it was a
+        // shortcut and cancels, and releasing down *into* the set never fires.
+        let ctrl = UInt16(kVK_Control), opt = UInt16(kVK_Option), cmd = UInt16(kVK_Command)
+        var chordEngine = HotkeyEngine(hotkey: .default)   // ⌃⌥
+        expect(chordEngine.handle(type: .flagsChanged, keyCode: ctrl, flags: .maskControl, time: 0) == HotkeyAction.none,
+               "chord: half the chord does nothing")
+        expect(chordEngine.handle(type: .flagsChanged, keyCode: opt, flags: [.maskControl, .maskAlternate], time: 0.05) == .begin,
+               "chord: full chord begins")
+        expect(chordEngine.handle(type: .flagsChanged, keyCode: opt, flags: .maskControl, time: 0.6) == .commit,
+               "chord: releasing a member commits")
+        _ = chordEngine.handle(type: .flagsChanged, keyCode: ctrl, flags: [], time: 0.65)
+        _ = chordEngine.handle(type: .flagsChanged, keyCode: ctrl, flags: .maskControl, time: 2.0)
+        _ = chordEngine.handle(type: .flagsChanged, keyCode: opt, flags: [.maskControl, .maskAlternate], time: 2.05)
+        expect(chordEngine.handle(type: .keyDown, keyCode: 123, flags: [.maskControl, .maskAlternate], time: 2.2) == .cancel,
+               "chord: foreign key inside grace window cancels")
+        expect(chordEngine.handle(type: .flagsChanged, keyCode: opt, flags: .maskControl, time: 2.5) == HotkeyAction.none,
+               "chord: release after a cancel stays quiet")
+        _ = chordEngine.handle(type: .flagsChanged, keyCode: ctrl, flags: [], time: 2.55)
+        // Arrived from above (⌃⌥⌘ minus ⌘) — not a press, must not begin.
+        _ = chordEngine.handle(type: .flagsChanged, keyCode: ctrl, flags: .maskControl, time: 3.0)
+        _ = chordEngine.handle(type: .flagsChanged, keyCode: opt, flags: [.maskControl, .maskAlternate], time: 3.02)
+        _ = chordEngine.handle(type: .flagsChanged, keyCode: cmd, flags: [.maskControl, .maskAlternate, .maskCommand], time: 3.03)
+        var lateEngine = HotkeyEngine(hotkey: .default)
+        _ = lateEngine.handle(type: .flagsChanged, keyCode: ctrl, flags: .maskControl, time: 3.0)
+        _ = lateEngine.handle(type: .flagsChanged, keyCode: cmd, flags: [.maskControl, .maskCommand], time: 3.01)
+        expect(lateEngine.handle(type: .flagsChanged, keyCode: cmd, flags: [.maskControl, .maskAlternate], time: 3.1) == HotkeyAction.none,
+               "chord: reached by releasing another modifier never begins")
+        // A brushed key after the grace window is ignored, not a cancel.
+        var longHold = HotkeyEngine(hotkey: .default)
+        _ = longHold.handle(type: .flagsChanged, keyCode: ctrl, flags: .maskControl, time: 10)
+        _ = longHold.handle(type: .flagsChanged, keyCode: opt, flags: [.maskControl, .maskAlternate], time: 10.05)
+        expect(longHold.handle(type: .keyDown, keyCode: 11, flags: [.maskControl, .maskAlternate], time: 11.0) == HotkeyAction.none,
+               "chord: stray key after grace window is ignored")
+        expect(longHold.handle(type: .flagsChanged, keyCode: opt, flags: .maskControl, time: 12.0) == .commit,
+               "chord: long hold still commits")
+
+        // Overlap rules: containment conflicts, partial overlap doesn't.
+        expect(Hotkey.default.overlaps(Hotkey.chord([.maskControl, .maskAlternate, .maskCommand])),
+               "overlap: ⌃⌥ conflicts with ⌃⌥⌘")
+        expect(!Hotkey.default.overlaps(Hotkey.defaultHandsFreeKey),
+               "overlap: ⌃⌥ coexists with ⌃⇧")
+        expect(Hotkey(keyCode: UInt16(kVK_Option), modifiers: 0, isModifierKey: true)
+            .overlaps(Hotkey.default),
+               "overlap: lone ⌥ conflicts with ⌃⌥")
+        expect(!Hotkey(keyCode: UInt16(kVK_Option), modifiers: 0, isModifierKey: true)
+            .overlaps(Hotkey(keyCode: UInt16(kVK_RightOption), modifiers: 0, isModifierKey: true)),
+               "overlap: left ⌥ coexists with right ⌥")
+        expect(Hotkey(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue, isModifierKey: false)
+            .overlaps(Hotkey(keyCode: UInt16(kVK_Command), modifiers: 0, isModifierKey: true)),
+               "overlap: lone ⌘ conflicts with ⌘Space")
 
         // 2. Hotkey persistence round-trip.
         let hk = Hotkey(keyCode: 96, modifiers: CGEventFlags.maskCommand.rawValue, isModifierKey: false)

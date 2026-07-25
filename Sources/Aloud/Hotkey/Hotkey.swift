@@ -1,12 +1,13 @@
 import AppKit
 import Carbon.HIToolbox
 
-// A push-to-talk key: either a lone modifier (held) or a regular key (held),
-// optionally with required modifier flags. Persisted in UserDefaults as JSON.
+// A push-to-talk key: a lone modifier (held), a chord of two or three
+// modifiers (held together), or a regular key / extra mouse button, optionally
+// with required modifier flags. Persisted in UserDefaults as JSON.
 struct Hotkey: Codable, Equatable {
     var keyCode: UInt16
-    var modifiers: UInt64        // CGEventFlags rawValue for non-modifier keys; 0 for lone modifiers
-    var isModifierKey: Bool      // true → track via flagsChanged (e.g. right ⌘)
+    var modifiers: UInt64        // CGEventFlags rawValue; 0 for lone modifiers, chord mask for modifier chords
+    var isModifierKey: Bool      // true → track via flagsChanged (e.g. right ⌘, or a ⌃⌥ chord)
     var isMouseButton: Bool      // true → keyCode is a mouse button number (3rd button and up)
 
     init(keyCode: UInt16, modifiers: UInt64, isModifierKey: Bool, isMouseButton: Bool = false) {
@@ -25,16 +26,43 @@ struct Hotkey: Codable, Equatable {
         isMouseButton = try c.decodeIfPresent(Bool.self, forKey: .isMouseButton) ?? false
     }
 
-    // Default: hold left Option. Fn is system-reserved (dictation/emoji),
-    // F-keys collide with media keys, and ⌘/⌃ are navigation modifiers — held
-    // during dictation they'd poison any click or keystroke the user makes.
-    // A lone ⌥ is never a standalone shortcut and has the mildest side effects
-    // of any modifier; left ⌥ because compact keyboards often lack a right one.
-    static let `default` = Hotkey(keyCode: UInt16(kVK_Option), modifiers: 0, isModifierKey: true)
+    // The four modifiers a chord can be built from. fn stays out: it is
+    // system-reserved (dictation/emoji) and behaves erratically in combos.
+    static let chordable: CGEventFlags = [.maskControl, .maskAlternate, .maskShift, .maskCommand]
+
+    // A chord of two or three modifiers held together. Chords are
+    // side-insensitive (either ⌃ works); the stored keyCode is a canonical
+    // stand-in so equality and legacy pathways stay well-defined.
+    static func chord(_ flags: CGEventFlags) -> Hotkey {
+        let mask = flags.intersection(chordable)
+        return Hotkey(keyCode: canonicalKeyCode(for: mask), modifiers: mask.rawValue, isModifierKey: true)
+    }
+
+    private static func canonicalKeyCode(for mask: CGEventFlags) -> UInt16 {
+        if mask.contains(.maskControl) { return UInt16(kVK_Control) }
+        if mask.contains(.maskAlternate) { return UInt16(kVK_Option) }
+        if mask.contains(.maskShift) { return UInt16(kVK_Shift) }
+        return UInt16(kVK_Command)
+    }
+
+    // Defaults: Control pairs. Control is the one modifier macOS text editing
+    // never holds together with another (⌥/⌘/⇧ pairs all steer the cursor or
+    // selection), so these stay out of the way of word-jumps, line-jumps, and
+    // shift-selection. One family, one story: Control plus a neighbor talks
+    // to Aloud.
+    static let `default` = Hotkey.chord([.maskControl, .maskAlternate])
+    static let defaultHandsFreeKey = Hotkey.chord([.maskControl, .maskShift])
+    static let defaultCommandKey = Hotkey.chord([.maskControl, .maskCommand])
+
+    // A modifier chord (⌃⌥) rather than a single tracked modifier key.
+    var isChord: Bool { isModifierKey && modifiers != 0 }
+
+    // All modifiers that must be down for a chord hotkey.
+    var chordMask: CGEventFlags { CGEventFlags(rawValue: modifiers).intersection(Self.chordable) }
 
     // The CGEventFlags bit a lone-modifier hotkey toggles, used to detect hold/release.
     var modifierFlag: CGEventFlags? {
-        guard isModifierKey else { return nil }
+        guard isModifierKey, !isChord else { return nil }
         switch Int(keyCode) {
         case kVK_Command, kVK_RightCommand: return .maskCommand
         case kVK_Option, kVK_RightOption: return .maskAlternate
@@ -45,15 +73,61 @@ struct Hotkey: Codable, Equatable {
         }
     }
 
+    // How many keys the user physically holds: chord members, plus the
+    // regular key or mouse button if there is one.
+    var memberCount: Int {
+        let flagCount = memberFlags.rawValue.nonzeroBitCount
+        return isModifierKey ? max(flagCount, 1) : flagCount + 1
+    }
+
+    // The modifier flags this hotkey involves, side-insensitive.
+    private var memberFlags: CGEventFlags {
+        if isChord { return chordMask }
+        if isModifierKey { return modifierFlag?.intersection(Self.chordable) ?? [] }
+        return CGEventFlags(rawValue: modifiers).intersection(Self.chordable)
+    }
+
+    // True when every key of `other` is also part of self (or vice versa
+    // checked by the caller) — pressing the bigger combo necessarily passes
+    // through the smaller one, so the two can't coexist. Two lone modifiers
+    // on different physical keys (Left ⌥ vs Right ⌥) never conflict: the
+    // engine tells them apart by keycode.
+    func overlaps(_ other: Hotkey) -> Bool {
+        if self == other { return true }
+        if isModifierKey, !isChord, other.isModifierKey, !other.isChord {
+            return keyCode == other.keyCode
+        }
+        return covers(other) || other.covers(self)
+    }
+
+    // Every member of `other` is contained in self.
+    func covers(_ other: Hotkey) -> Bool {
+        guard other.memberFlags.isSubset(of: memberFlags) else { return false }
+        if other.isModifierKey { return !other.memberFlags.isEmpty }  // pure-modifier subset (fn tracks by keycode only)
+        // A terminal key/button must match exactly to be contained.
+        return other.isMouseButton == isMouseButton
+            && !isModifierKey
+            && other.keyCode == keyCode
+    }
+
     var displayName: String {
-        if isMouseButton { return loc("Mouse %ld", Int(keyCode) + 1) }
+        if isChord { return Self.glyphs(for: chordMask) }
         let mods = CGEventFlags(rawValue: modifiers)
+        let prefix = Self.glyphs(for: mods)
+        if isMouseButton {
+            let name = loc("Mouse %ld", Int(keyCode) + 1)
+            return prefix.isEmpty ? name : "\(prefix) \(name)"
+        }
+        return prefix + Hotkey.keyName(for: keyCode)
+    }
+
+    // Standard macOS ordering: ⌃ ⌥ ⇧ ⌘.
+    static func glyphs(for mods: CGEventFlags) -> String {
         var parts: [String] = []
         if mods.contains(.maskControl) { parts.append("⌃") }
         if mods.contains(.maskAlternate) { parts.append("⌥") }
         if mods.contains(.maskShift) { parts.append("⇧") }
         if mods.contains(.maskCommand) { parts.append("⌘") }
-        parts.append(Hotkey.keyName(for: keyCode))
         return parts.joined()
     }
 

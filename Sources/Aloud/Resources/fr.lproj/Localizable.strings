@@ -109,7 +109,8 @@
 "Remove the hands-free key" = "Supprimer la touche mains libres";
 "Command key" = "Touche de commande";
 "Remove the command key" = "Supprimer la touche de commande";
-"Press a key…" = "Appuyez sur une touche…";
+"Press up to three keys…" = "Appuyez sur une à trois touches…";
+"Up to three keys" = "Trois touches maximum";
 "None" = "Aucune";
 
 /* Settings — dictation */
@@ -263,7 +264,7 @@
 
 "Polishing…" = "Peaufinage…";
 "Kept your exact words — Aloud never rewrites here" = "Vos mots exacts ont été conservés — Aloud ne réécrit jamais ici";
-"Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too." = "Maintenez %@ pour parler, relâchez pour écrire. Échap pendant l’appui annule. Les boutons de souris supplémentaires fonctionnent aussi.";
+"Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier." = "Maintenez %@ pour parler, relâchez pour écrire. Échap pendant l’appui annule. Les boutons de souris supplémentaires fonctionnent aussi, seuls ou avec un modificateur.";
 "Double-press %@ to keep listening after you let go. Esc finishes and types everything." = "Appuyez deux fois sur %@ pour continuer à écouter après le relâchement. Échap termine et écrit tout.";
 "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "Appuyez sur %1$@ pour lancer l’écoute, puis Échap — ou %1$@ à nouveau — pour terminer et écrire. Le double appui sur %2$@ fonctionne toujours.";
 "Off — %@ only listens while you hold it." = "Désactivé — %@ n’écoute que tant que vous la maintenez.";
@@ -271,6 +272,8 @@
 "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Maintenez %@ et dites quoi faire : réécrire ou traduire le texte sélectionné, ou écrire quelque chose de nouveau au curseur.";
 "Tip: press %@ to keep listening hands-free. Esc finishes." = "Astuce : appuyez sur %@ pour continuer en mains libres. Échap termine.";
 "%1$@ is already your %2$@." = "%1$@ est déjà votre %2$@.";
+"%1$@ includes %2$@, which is already your %3$@." = "%1$@ inclut %2$@, qui est déjà votre %3$@.";
+"%1$@ is part of %2$@, your %3$@." = "%1$@ fait partie de %2$@, votre %3$@.";
 "dictation key" = "touche de dictée";
 "hands-free key" = "touche mains libres";
 "command key" = "touche de commande";

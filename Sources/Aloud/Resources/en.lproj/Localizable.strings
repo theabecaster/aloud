@@ -109,7 +109,8 @@
 "Remove the hands-free key" = "Remove the hands-free key";
 "Command key" = "Command key";
 "Remove the command key" = "Remove the command key";
-"Press a key…" = "Press a key…";
+"Press up to three keys…" = "Press up to three keys…";
+"Up to three keys" = "Up to three keys";
 "None" = "None";
 
 /* Settings — dictation */
@@ -263,7 +264,7 @@
 
 "Polishing…" = "Polishing…";
 "Kept your exact words — Aloud never rewrites here" = "Kept your exact words — Aloud never rewrites here";
-"Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too." = "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too.";
+"Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier." = "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier.";
 "Double-press %@ to keep listening after you let go. Esc finishes and types everything." = "Double-press %@ to keep listening after you let go. Esc finishes and types everything.";
 "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works.";
 "Off — %@ only listens while you hold it." = "Off — %@ only listens while you hold it.";
@@ -271,6 +272,8 @@
 "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor.";
 "Tip: press %@ to keep listening hands-free. Esc finishes." = "Tip: press %@ to keep listening hands-free. Esc finishes.";
 "%1$@ is already your %2$@." = "%1$@ is already your %2$@.";
+"%1$@ includes %2$@, which is already your %3$@." = "%1$@ includes %2$@, which is already your %3$@.";
+"%1$@ is part of %2$@, your %3$@." = "%1$@ is part of %2$@, your %3$@.";
 "dictation key" = "dictation key";
 "hands-free key" = "hands-free key";
 "command key" = "command key";

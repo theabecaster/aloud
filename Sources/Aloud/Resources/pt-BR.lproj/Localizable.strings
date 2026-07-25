@@ -109,7 +109,8 @@
 "Remove the hands-free key" = "Remover a tecla de mãos livres";
 "Command key" = "Tecla de comando";
 "Remove the command key" = "Remover a tecla de comando";
-"Press a key…" = "Pressione uma tecla…";
+"Press up to three keys…" = "Pressione até três teclas…";
+"Up to three keys" = "No máximo três teclas";
 "None" = "Nenhuma";
 
 /* Settings — dictation */
@@ -263,7 +264,7 @@
 
 "Polishing…" = "Aprimorando…";
 "Kept your exact words — Aloud never rewrites here" = "Suas palavras exatas foram mantidas — o Aloud nunca reescreve aqui";
-"Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too." = "Segure %@ para falar e solte para digitar. Esc enquanto segura cancela. Botões extras do mouse também funcionam.";
+"Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier." = "Segure %@ para falar e solte para digitar. Esc enquanto segura cancela. Botões extras do mouse também funcionam, sozinhos ou com um modificador.";
 "Double-press %@ to keep listening after you let go. Esc finishes and types everything." = "Pressione %@ duas vezes para continuar ouvindo depois de soltar. Esc encerra e digita tudo.";
 "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "Pressione %1$@ para começar a ouvir e depois Esc — ou %1$@ de novo — para encerrar e digitar. Pressionar %2$@ duas vezes continua funcionando.";
 "Off — %@ only listens while you hold it." = "Desativado — %@ só ouve enquanto você segura.";
@@ -271,6 +272,8 @@
 "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Segure %@ e diga o que fazer: reescrever ou traduzir o texto selecionado, ou escrever algo novo no cursor.";
 "Tip: press %@ to keep listening hands-free. Esc finishes." = "Dica: pressione %@ para continuar sem as mãos. Esc encerra.";
 "%1$@ is already your %2$@." = "%1$@ já é sua %2$@.";
+"%1$@ includes %2$@, which is already your %3$@." = "%1$@ inclui %2$@, que já é sua %3$@.";
+"%1$@ is part of %2$@, your %3$@." = "%1$@ faz parte de %2$@, sua %3$@.";
 "dictation key" = "tecla de ditado";
 "hands-free key" = "tecla sem as mãos";
 "command key" = "tecla de comando";
