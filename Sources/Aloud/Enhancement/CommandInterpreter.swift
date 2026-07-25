@@ -109,7 +109,17 @@ enum CommandInterpreterFactory {
 // Sanity checks for generated-at-cursor text; rewrites of a selection reuse
 // EnhancerOutputCheck (which compares against the original).
 enum CommandOutputCheck {
-    static func validateGenerated(_ output: String) -> String? {
+    // Chat-reply shapes for generated text: the model answering the user
+    // ("Sure! What can I do for you?" — seen live in Spanish, "¡Claro! ¿Qué
+    // puedo hacer por ti?") instead of writing the thing they asked for.
+    private static let replyShapes = [
+        "sure", "of course", "certainly", "absolutely", "no problem", "okay",
+        "got it", "i can help", "i'd be happy", "i would be happy",
+        "happy to help", "what can i do", "how can i help",
+        "¡claro", "claro,", "por supuesto", "¿qué puedo",
+    ]
+
+    static func validateGenerated(_ output: String, instruction: String? = nil) -> String? {
         var trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         // The model likes to present its work in quotes ("I'm back Monday…");
         // the user asked for text to insert, not a quotation of it.
@@ -122,6 +132,15 @@ enum CommandOutputCheck {
         }
         guard !trimmed.isEmpty else { return nil }
         guard !trimmed.contains("```") else { return nil }
+        let lowered = trimmed.lowercased()
+        guard !replyShapes.contains(where: { lowered.hasPrefix($0) }) else { return nil }
+        // An echo of the instruction itself means the model had nothing to
+        // write ("purple monkey dishwasher" came straight back) — typing the
+        // user's command words into their document is never what they meant.
+        if let instruction {
+            let norm = { (t: String) in t.lowercased().filter { $0.isLetter || $0.isNumber } }
+            guard norm(trimmed) != norm(instruction) else { return nil }
+        }
         // "Write something short at the cursor" — a whole essay means the
         // model ran away with the instruction.
         guard trimmed.count <= 1200 else { return nil }
@@ -197,7 +216,7 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
         // to echo the text untouched (observed on "shorten this" commands).
         let response = try await session.respond(
             to: "Text:\n\(text)\n\nInstruction: \(instruction)",
-            options: GenerationOptions(temperature: 0.1))
+            options: GenerationOptions(temperature: 0.1, maximumResponseTokens: 700))
         guard let clean = EnhancerOutputCheck.validate(response.content, original: text) else {
             throw EnhancerError.rejectedOutput
         }
@@ -209,9 +228,13 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
         let session = LanguageModelSession(model: model, instructions: Self.generateInstructions)
         // Slightly warmer than the rewrites — composing wants a little room —
         // but not so warm it wanders off the instruction.
+        // The token cap doubles as a runaway brake: a confused instruction
+        // once looped until it filled the whole 4k context (observed live).
         let response = try await session.respond(to: instruction,
-                                                 options: GenerationOptions(temperature: 0.2))
-        guard let clean = CommandOutputCheck.validateGenerated(response.content) else {
+                                                 options: GenerationOptions(temperature: 0.2,
+                                                                            maximumResponseTokens: 400))
+        guard let clean = CommandOutputCheck.validateGenerated(response.content,
+                                                               instruction: instruction) else {
             throw EnhancerError.rejectedOutput
         }
         return clean
@@ -251,8 +274,10 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
     You write short text to be inserted at the user's cursor, following their spoken \
     instruction. Keep it brief and natural — a phrase, a sentence, or a few lines, \
     in the user's first-person voice unless the instruction says otherwise. Never \
-    explain what you did, never add greetings around it, never write code blocks. \
-    Reply with the text to insert only.
+    explain what you did, never add greetings around it, never write code blocks, \
+    and never reply to the user or ask them anything. If the instruction is not a \
+    clear request to write something, reply with nothing at all. Reply with the \
+    text to insert only.
     """
 }
 #endif

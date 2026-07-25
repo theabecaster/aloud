@@ -70,7 +70,7 @@ final class DictationController: ObservableObject {
         }
     }
 
-    // The last injected dictation, kept so "Type Exact Words Instead" can
+    // The last injected dictation, kept so "Use Exact Words" can
     // swap an AI-tightened result back to the verbatim transcript.
     @Published private(set) var undoEnhancementAvailable = false
     private var lastEnhanced: (typed: String, verbatim: String)?
@@ -98,6 +98,7 @@ final class DictationController: ObservableObject {
         recorder.onDeviceChange = { [weak self] in
             self?.indicator.showNotice(loc("Microphone changed — still listening"))
         }
+        settings.dropCollidingKeys()
         settings.$handsFree
             .sink { [weak self] enabled in self?.hotkeyManager.handsFree = enabled }
             .store(in: &cancellables)
@@ -128,6 +129,9 @@ final class DictationController: ObservableObject {
     func updateHotkey(_ hotkey: Hotkey) {
         settings.hotkey = hotkey
         hotkeyManager.hotkey = hotkey
+        // Settings refuses a duplicate at the moment of choice; this covers
+        // onboarding's recorder and anything saved by an older build.
+        settings.dropCollidingKeys()
     }
 
     // Shown briefly by SettingsView when opening Settings ended a session.
@@ -228,6 +232,14 @@ final class DictationController: ObservableObject {
         return (polisher.polish(raw), fallback)
     }
 
+    // Engine output, minus the filler it sometimes invents from an utterance
+    // that never happened (see SpeechPresence). Empty here means "nothing was
+    // said", and every commit path already knows to type nothing for that.
+    private func verbatim(_ result: Transcription, samples: [Float]) -> String {
+        let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SpeechPresence.isPhantom(text: raw, samples: samples) ? "" : raw
+    }
+
     private func finishText(from raw: String) async -> (text: String, enhanced: Bool) {
         let (input, fallback) = polishedVariants(from: raw)
         guard let rewritten = await rewriteIfAllowed(input) else { return (fallback, false) }
@@ -239,6 +251,7 @@ final class DictationController: ObservableObject {
     // own "exact words" rule — behavior is otherwise identical in every app.
     private func rewriteIfAllowed(_ polished: String) async -> String? {
         guard settings.polishLevel == .concise, !polished.isEmpty,
+              EnhancerOutputCheck.isWorthRewriting(polished),
               let enhancer, enhancer.isAvailable else { return nil }
         let decision = ModeResolver.decision(forBundleID: sessionApp.bundleID,
                                              rules: settings.appModes)
@@ -392,13 +405,19 @@ final class DictationController: ObservableObject {
         }
         liveUpdatesTask = Task { [weak self] in
             for await transcript in session.updates {
-                guard let self, self.liveSession === session else { break }
+                guard let self, self.liveSession === session, !Task.isCancelled else { break }
                 // Skip previews while the user is mid-edit; the transcript is
                 // cumulative, so the next quiet update catches everything up.
                 if let last = self.lastUserKeystroke,
                    Date().timeIntervalSince(last) < Self.userEditHoldOff { continue }
-                let polisher = TextPolisher(level: self.settings.polishLevel,
+                // The preview polishes the same way the commit will (Concise
+                // runs its deterministic half here — the rewrite only happens
+                // at commit), minus the name pass, whose verdict changes as the
+                // sentence grows. Matching the commit's rules keeps the final
+                // reconciliation down to a word or two.
+                var polisher = TextPolisher(level: self.settings.polishLevel.deterministicLevel,
                                             replacements: self.settings.replacements)
+                polisher.capitalizeNames = false
                 self.liveTyper.apply(polisher.polish(transcript.full))
             }
         }
@@ -430,15 +449,13 @@ final class DictationController: ObservableObject {
     // window boundaries can drop the odd word), and one last diff pass settles
     // whatever is on screen into that canonical result.
     private func commitLive(session: StreamingTranscription, samples: [Float]) {
-        // The words are already on screen, so a "Typing…" flash is usually
-        // noise — except when a Concise rewrite is coming: that takes a
-        // second, and the silent gap before the text reshapes itself read as
-        // a glitch. Show what's happening instead.
-        if settings.polishLevel == .concise, enhancerAvailable {
-            indicator.showTranscribing(label: loc("Polishing…"))
-        } else {
-            indicator.hide()
-        }
+        // What's on screen is still a preview. The commit re-transcribes the
+        // whole recording and settles the field on that result — Concise
+        // rewrites it on top — so there is exactly one reshape left, and it
+        // lands a moment after the key comes up. The pill stays up saying so
+        // until that final text is applied: an announced rewrite reads as the
+        // dictation finishing, the same rewrite unannounced reads as a glitch.
+        indicator.showTranscribing(label: loc("Polishing…"))
         phase = .transcribing
         // Stop preview updates first so a late one can't race the final pass.
         liveUpdatesTask?.cancel()
@@ -454,7 +471,7 @@ final class DictationController: ObservableObject {
         Task {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
-                let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let raw = verbatim(result, samples: samples)
                 let (rewriteInput, fallback) = polishedVariants(from: raw)
                 var text = fallback
                 var enhanced = false
@@ -534,7 +551,7 @@ final class DictationController: ObservableObject {
         Task {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
-                let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let raw = verbatim(result, samples: samples)
                 var (text, enhanced) = await finishText(from: raw)
                 var sendReturn = false
                 if settings.pressEnterCommand, let stripped = TrailingCommand.stripPressEnter(text) {
@@ -621,7 +638,7 @@ final class DictationController: ObservableObject {
         Task {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
-                let spoken = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let spoken = verbatim(result, samples: samples)
                 guard !spoken.isEmpty else {
                     indicator.hide()
                     phase = .idle
@@ -662,7 +679,7 @@ final class DictationController: ObservableObject {
         // Selection read at commit: the pill never takes focus, so the focused
         // element is unchanged since the hold began. A rewrite lands by paste,
         // which replaces the selection in place.
-        let selection = SelectionReader.currentSelection()
+        let selection = await SelectionReader.currentSelectionWithFallback()
         let result: String? = await withTaskGroup(of: String?.self) { group in
             group.addTask { try? await interpreter.perform(spoken, selection: selection) }
             group.addTask {
@@ -710,7 +727,7 @@ final class DictationController: ObservableObject {
         Task {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
-                let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let raw = verbatim(result, samples: samples)
                 var (text, enhanced) = await finishText(from: raw)
                 if let expansion = SnippetMatcher.expansion(for: text, snippets: settings.snippets) {
                     text = expansion
