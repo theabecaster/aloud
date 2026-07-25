@@ -337,7 +337,7 @@ final class DictationController: ObservableObject {
         let appBundleID = front?.bundleIdentifier
         Task.detached(priority: .userInitiated) { [weak self] in
             let snapshot = FocusSnapshot.capture(appName: appName, appBundleID: appBundleID)
-            await MainActor.run { self?.sessionContext = snapshot }
+            await MainActor.run { [weak self] in self?.sessionContext = snapshot }
         }
         do {
             try recorder.start(deviceUID: settings.microphoneUID)
