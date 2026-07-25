@@ -175,7 +175,8 @@ final class HotkeyEngineTests: XCTestCase {
         // A transcript that merely starts with "I can't" in the speaker's own
         // voice is longer than a refusal and must survive — prefix match only
         // rejects, it never rewrites, so the fallback keeps the polished text.
-        XCTAssertNotNil(EnhancerOutputCheck.validate("It cannot ship this week.", original: original))
+        XCTAssertNotNil(EnhancerOutputCheck.validate(
+            "It cannot ship this week.", original: "um it cannot ship this week testing is not done"))
     }
 
     @MainActor
@@ -190,6 +191,111 @@ final class HotkeyEngineTests: XCTestCase {
         // Long fields keep only the tail near the cursor.
         snap.fieldText = String(repeating: "a", count: 1000) + " Chellie"
         XCTAssertLessThan(DictationController.contextHint(from: snap)!.count, 450)
+    }
+
+    func testGeneratedChatRepliesAreRejected() {
+        XCTAssertNil(CommandOutputCheck.validateGenerated("Sure! What can I do for you?"))
+        XCTAssertNil(CommandOutputCheck.validateGenerated("¡Claro! ¿Qué puedo hacer por ti?"))
+        XCTAssertNil(CommandOutputCheck.validateGenerated("I'd be happy to help with that."))
+        XCTAssertNil(CommandOutputCheck.validateGenerated(""))
+        // Real insertions still pass, including ones that begin with I.
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("I'm back Monday."), "I'm back Monday.")
+        XCTAssertEqual(CommandOutputCheck.validateGenerated("\u{201C}Buongiorno!\u{201D}"), "Buongiorno!")
+    }
+
+    func testRoleFlippedRequestsAreRejected() {
+        let request = "Hey can you send me the report when you get a chance"
+        XCTAssertNil(EnhancerOutputCheck.validate("Sure, I'll send it when I get a chance.", original: request))
+        XCTAssertNil(EnhancerOutputCheck.validate("I'll send it over shortly.", original: request))
+        // The request kept as a request passes.
+        XCTAssertNotNil(EnhancerOutputCheck.validate("Hey, can you send me the report when you get a chance?",
+                                                     original: request))
+        // First-person statements aren't requests — "I'll" outputs are fine.
+        XCTAssertNotNil(EnhancerOutputCheck.validate("I'll send the invoice tomorrow.",
+                                                     original: "um I'll send the invoice tomorrow"))
+    }
+
+    // Observed: a reply that also asks a question back used to pass, because
+    // the old net only fired when the output contained no question of its own.
+    func testAssistantReplyWithCounterQuestionIsRejected() {
+        let request = "can you please send me an email to my email"
+        XCTAssertNil(EnhancerOutputCheck.validate(
+            "Sure, I can help you with that. Could you please provide me with the details of the email you want to send?",
+            original: request))
+        // Same shape, other openers.
+        XCTAssertNil(EnhancerOutputCheck.validate("Of course! What would you like it to say?", original: request))
+        XCTAssertNil(EnhancerOutputCheck.validate("Happy to help — could you share the address?", original: request))
+        XCTAssertNil(EnhancerOutputCheck.validate("Got it. I'll draft that for you.", original: request))
+        // The request kept as a request still passes.
+        XCTAssertNotNil(EnhancerOutputCheck.validate("Can you please send me an email?", original: request))
+    }
+
+    // A speaker who really did open with "Sure" keeps their words: the opener
+    // only convicts when it appeared out of nowhere.
+    func testSpeakersOwnReplyOpenerSurvives() {
+        XCTAssertNotNil(EnhancerOutputCheck.validate(
+            "Sure, I'll send it tonight.", original: "um sure I'll send it tonight"))
+        XCTAssertNotNil(EnhancerOutputCheck.validate(
+            "Of course, that works for me.", original: "of course uh that works for me"))
+    }
+
+    // Observed live: "insert my email" came back as example #3 from the
+    // model's own instructions — words the speaker never said.
+    func testEchoedInstructionExamplesAreRejected() {
+        for example in EnhancerOutputCheck.exampleOutputs {
+            XCTAssertNil(EnhancerOutputCheck.validate(example, original: "insert my email"),
+                         "echoed example slipped through: \(example)")
+        }
+        // Also when the model wraps it in something else.
+        XCTAssertNil(EnhancerOutputCheck.validate(
+            "Sounds good. Let's leave at nine thirty.", original: "insert my email"))
+    }
+
+    // The catch-all: a rewrite made mostly of words the speaker never said.
+    func testComposedTextIsRejected() {
+        XCTAssertNil(EnhancerOutputCheck.validate(
+            "I have not received your email regarding the contract. Please let me know when you can send it.",
+            original: "Hey just wanted to check if you got my last email about the contract. Lemme know when you can."))
+        // A genuine tightening keeps the speaker's words and passes.
+        XCTAssertNotNil(EnhancerOutputCheck.validate(
+            "I was thinking we could maybe push the meeting to Thursday because the deck isn't ready yet.",
+            original: "Um so I was thinking we could uh maybe push the meeting to Thursday because um the deck isn't ready yet."))
+    }
+
+    // Nothing to tighten: ship the polished transcript, don't wake the model.
+    func testShortTranscriptsSkipTheRewrite() {
+        XCTAssertFalse(EnhancerOutputCheck.isWorthRewriting("insert my email"))
+        XCTAssertFalse(EnhancerOutputCheck.isWorthRewriting("send it"))
+        XCTAssertTrue(EnhancerOutputCheck.isWorthRewriting("can you send me the report today"))
+    }
+
+    // The rejection list has to stay in step with the prompt it mirrors.
+    func testExampleOutputsMatchTheInstructions() throws {
+        #if canImport(FoundationModels)
+        guard #available(macOS 26.0, *) else { throw XCTSkip("no system language model") }
+        for example in EnhancerOutputCheck.exampleOutputs {
+            XCTAssertTrue(FoundationModelEnhancer.instructions.contains(example),
+                          "example drifted out of the instructions: \(example)")
+        }
+        #endif
+    }
+
+    // A short line can gain punctuation, not a paragraph.
+    func testShortTranscriptCannotBalloon() {
+        let short = "send the invoice"
+        XCTAssertNotNil(EnhancerOutputCheck.validate("Send the invoice.", original: short))
+        XCTAssertNil(EnhancerOutputCheck.validate(
+            "Please send the invoice to the client as soon as you get a chance today.", original: short))
+    }
+
+    func testConciseKeepsSpokenCorrectionsForTheRewrite() {
+        var p = TextPolisher(level: .standard, replacements: [])
+        p.spokenCorrections = false
+        // "no wait" survives for the rewrite engine to resolve with full context…
+        XCTAssertTrue(p.polish("meet at 2 no wait 3").contains("no wait"))
+        // …while the default deterministic path still applies it.
+        XCTAssertFalse(TextPolisher(level: .standard, replacements: [])
+            .polish("meet at 2 no wait 3").contains("no wait"))
     }
 
     func testConciseFallsBackToStandardRules() {
@@ -313,14 +419,20 @@ final class CommandIntentTests: XCTestCase {
     }
 
     func testConversationalRestatementFallsBackToSpokenWords() {
-        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "Make it shorter",
-                                                          spoken: "uh make it shorter"),
-                       "Make it shorter")
-        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "I'd be happy to help you rewrite the text.",
-                                                          spoken: "rewrite this as a polite decline"),
-                       "rewrite this as a polite decline")
-        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "  ", spoken: "fix the grammar"),
-                       "fix the grammar")
+        // Spoken words are always the instruction; translate only sticks when
+        // the words actually mention it.
+        let plain = CommandIntent.resolved(action: .rewrite, language: nil, spoken: "make this all one line")
+        XCTAssertEqual(plain, CommandIntent(action: .rewrite, instruction: "make this all one line"))
+        let hallucinated = CommandIntent.resolved(action: .translate, language: "Spanish",
+                                                  spoken: "purple monkey dishwasher")
+        XCTAssertEqual(hallucinated, CommandIntent(action: .rewrite, instruction: "purple monkey dishwasher"))
+        let byName = CommandIntent.resolved(action: .translate, language: "Spanish",
+                                            spoken: "say this in spanish")
+        XCTAssertEqual(byName, CommandIntent(action: .translate, instruction: "say this in spanish",
+                                             language: "Spanish"))
+        let byVerb = CommandIntent.resolved(action: .translate, language: "French",
+                                            spoken: "translate this to french please")
+        XCTAssertEqual(byVerb.action, .translate)
     }
 
     func testLanguageResolver() {
@@ -425,6 +537,30 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertTrue(s2.launchAtLogin)
         XCTAssertEqual(s2.microphoneUID, "some-uid")
         XCTAssertEqual(s2.historyLimit, 10)
+    }
+
+    // A key in two slots means one of them silently never fires: the dictation
+    // key keeps it, the hands-free key beats the command key, losers clear.
+    func testCollidingKeysAreDropped() {
+        let suite = "aloud-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let settings = SettingsStore(defaults: defaults)
+        let other = Hotkey(keyCode: 49, modifiers: 0, isModifierKey: false)
+
+        settings.handsFreeHotkey = settings.hotkey
+        settings.commandHotkey = other
+        XCTAssertTrue(settings.dropCollidingKeys())
+        XCTAssertNil(settings.handsFreeHotkey)
+        XCTAssertEqual(settings.commandHotkey, other, "a unique command key survives")
+
+        settings.handsFreeHotkey = other
+        XCTAssertTrue(settings.dropCollidingKeys())
+        XCTAssertEqual(settings.handsFreeHotkey, other)
+        XCTAssertNil(settings.commandHotkey, "command key loses to the hands-free key")
+
+        XCTAssertFalse(settings.dropCollidingKeys(), "no collisions left to drop")
     }
 }
 

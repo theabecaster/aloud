@@ -13,6 +13,34 @@ final class TextPolisherTests: XCTestCase {
         XCTAssertEqual(polish("um, so like  this .", level: .off), "um, so like  this .")
     }
 
+    // MARK: spoken numbers
+
+    func testNumbersAreWrittenOutFromLightUp() {
+        XCTAssertEqual(polish("can we get the report at three p.m.", level: .light),
+                       "Can we get the report at 3 PM")
+        XCTAssertEqual(polish("it went up twenty percent"), "It went up 20%")
+    }
+
+    func testOffKeepsSpokenNumbers() {
+        XCTAssertEqual(polish("at three p.m.", level: .off), "at three p.m.")
+    }
+
+    func testNumbersFollowTheDeclaredLanguage() {
+        var polisher = TextPolisher(level: .standard, replacements: [])
+        polisher.languages = ["es"]
+        XCTAssertEqual(polisher.polish("cuarenta y dos euros"), "42 euros")
+        // A language without a number table is left exactly as dictated.
+        polisher.languages = ["nl"]
+        XCTAssertEqual(polisher.polish("veertig euro"), "Veertig euro")
+    }
+
+    func testPreviewHoldsTheTrailingNumber() {
+        var polisher = TextPolisher(level: .standard, replacements: [])
+        polisher.capitalizeNames = false
+        polisher.finalPass = false
+        XCTAssertEqual(polisher.polish("meet me at three"), "Meet me at three")
+    }
+
     // MARK: fillers
 
     func testFillerRemoval() {

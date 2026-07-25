@@ -3,6 +3,11 @@ import Combine
 import Network
 import SwiftUI
 
+extension Notification.Name {
+    /// Posted by Settings › About; the delegate runs the check and any install.
+    static let aloudCheckForUpdates = Notification.Name("AloudCheckForUpdates")
+}
+
 // Menu bar app: NSStatusItem + menu, onboarding/settings windows, silent
 // update check. LSUIElement in Info.plist keeps us out of the Dock.
 @MainActor
@@ -60,6 +65,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // percentage so progress is glanceable without opening the menu.
         downloadObservation = controller.$upgradeState.sink { [weak self] state in
             self?.refreshDownloadBadge(for: state)
+        }
+
+        // Settings › About owns the manual check now; the install flow still
+        // lives here, next to the pending-update state it mutates.
+        NotificationCenter.default.addObserver(forName: .aloudCheckForUpdates,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkForUpdates() }
+        }
+
+        // Harness hook: ALOUD_OPEN_SETTINGS=1 opens the Settings window at
+        // launch, so a pane can be inspected without driving the menu.
+        if ProcessInfo.processInfo.environment["ALOUD_OPEN_SETTINGS"] == "1" {
+            openSettings()
         }
 
         silentUpdateCheck()
@@ -149,18 +167,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(status)
 
         if bundleWasReplacedOnDisk {
-            menu.addItem(withTitle: loc("Relaunch to Finish Update…"),
+            menu.addItem(withTitle: loc("Relaunch to Finish Update"),
                          action: #selector(relaunchFromDisk), keyEquivalent: "").target = self
         }
 
         if !Permissions.allGranted || !controller.settings.onboardingComplete {
-            menu.addItem(withTitle: loc("Finish Setup…"),
+            menu.addItem(withTitle: loc("Finish Setup"),
                          action: #selector(openOnboarding), keyEquivalent: "").target = self
         } else if case .modelMissing = controller.upgradeState {
-            menu.addItem(withTitle: loc("Download Voice Recognition…"),
+            menu.addItem(withTitle: loc("Download Voice Recognition"),
                          action: #selector(downloadModel), keyEquivalent: "").target = self
         } else if case .failed = controller.upgradeState {
-            menu.addItem(withTitle: loc("Retry Voice Download…"),
+            menu.addItem(withTitle: loc("Retry Voice Download"),
                          action: #selector(downloadModel), keyEquivalent: "").target = self
         } else if controller.usingFallback {
             // Dictation already works (basic); the accuracy upgrade is still
@@ -176,39 +194,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item)
         }
 
+        // An update is news, not a chore: it sits with the other attention
+        // lines under the status. Routine checking lives in Settings › About.
+        if let update = pendingUpdate {
+            menu.addItem(withTitle: loc("Update Available (%@)", update.tag),
+                         action: #selector(applyUpdate), keyEquivalent: "").target = self
+        }
+
+        // Two groups, always in this order: what to do with the words you just
+        // said, then the app itself. Anything unavailable is simply absent —
+        // a menu of dimmed rows is longer without being more useful.
         menu.addItem(.separator())
-        if controller.undoEnhancementAvailable {
-            menu.addItem(withTitle: loc("Type Exact Words Instead"),
-                         action: #selector(undoEnhancement), keyEquivalent: "").target = self
+        if !controller.lastTranscription.isEmpty {
+            menu.addItem(withTitle: loc("Copy Last Text"),
+                         action: #selector(copyLastDictation), keyEquivalent: "").target = self
         }
         if controller.retryAvailable {
-            menu.addItem(withTitle: loc("Retry Last Dictation"),
+            menu.addItem(withTitle: loc("Type It Again"),
                          action: #selector(retryLastDictation), keyEquivalent: "").target = self
         }
-        if !controller.lastTranscription.isEmpty {
-            menu.addItem(withTitle: loc("Copy Last Dictation"),
-                         action: #selector(copyLastDictation), keyEquivalent: "").target = self
+        if controller.undoEnhancementAvailable {
+            menu.addItem(withTitle: loc("Use Exact Words"),
+                         action: #selector(undoEnhancement), keyEquivalent: "").target = self
         }
         let scratchItem = NSMenuItem(title: loc("Scratchpad"),
                                      action: #selector(toggleScratchpad), keyEquivalent: "")
         scratchItem.target = self
         scratchItem.state = scratchpad.isVisible ? .on : .off
         menu.addItem(scratchItem)
-        menu.addItem(withTitle: loc("Settings…"),
-                     action: #selector(openSettings), keyEquivalent: ",").target = self
-
-        if let update = pendingUpdate {
-            menu.addItem(.separator())
-            let item = NSMenuItem(title: loc("Update Available (%@)…", update.tag),
-                                  action: #selector(applyUpdate), keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-        } else {
-            menu.addItem(withTitle: loc("Check for Updates…"),
-                         action: #selector(checkForUpdates), keyEquivalent: "").target = self
-        }
 
         menu.addItem(.separator())
+        // No ⌘, here: Aloud has no app menu to own that shortcut, so it only
+        // fires while this menu is already open — a promise the rest of the
+        // Mac can't keep.
+        menu.addItem(withTitle: loc("Settings"),
+                     action: #selector(openSettings), keyEquivalent: "").target = self
         menu.addItem(withTitle: loc("Quit Aloud"),
                      action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
@@ -311,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let window = NSWindow(contentViewController:
             NSHostingController(rootView: SettingsView(controller: controller)))
         window.title = loc("Aloud Settings")
-        window.styleMask = [.titled, .closable]
+        window.styleMask = [.titled, .closable, .resizable]
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         settingsWindow = window

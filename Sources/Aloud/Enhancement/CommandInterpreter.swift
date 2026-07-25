@@ -43,17 +43,24 @@ extension CommandIntent {
         return .rewrite
     }
 
-    // The parse step sometimes "restates" the instruction as a chat reply
-    // ("I'd be happy to help you rewrite the text.") instead of an imperative.
-    // The user's own words are always a safe instruction — fall back to them
-    // whenever the restatement smells conversational.
-    static func sanitizedInstruction(parsed: String, spoken: String) -> String {
-        let trimmed = parsed.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return spoken }
-        let lowered = trimmed.lowercased()
-        let conversational = ["i'd ", "i'll ", "i will ", "i can ", "sure", "okay", "happy to", "of course"]
-        guard !conversational.contains(where: { lowered.hasPrefix($0) }) else { return spoken }
-        return trimmed
+    // The classifier's restated instruction is never used — restatements
+    // hallucinate ("make this all one line" once came back as "make it
+    // shorter", nonsense once came back as "make it Spanish"). The user's own
+    // spoken words are already an imperative; classification is all the parse
+    // step is trusted for. And a translate verdict only counts when the words
+    // actually talk about translating or name the language — otherwise it
+    // degrades to a plain rewrite of the spoken instruction.
+    static func resolved(action: Action, language: String?, spoken: String) -> CommandIntent {
+        guard action == .translate else {
+            return CommandIntent(action: action, instruction: spoken)
+        }
+        let lowered = spoken.lowercased()
+        let mentionsTranslation = lowered.contains("translat")
+            || (language.map { lowered.contains($0.lowercased()) } ?? false)
+        guard mentionsTranslation else {
+            return CommandIntent(action: .rewrite, instruction: spoken)
+        }
+        return CommandIntent(action: .translate, instruction: spoken, language: language)
     }
 }
 
@@ -109,7 +116,17 @@ enum CommandInterpreterFactory {
 // Sanity checks for generated-at-cursor text; rewrites of a selection reuse
 // EnhancerOutputCheck (which compares against the original).
 enum CommandOutputCheck {
-    static func validateGenerated(_ output: String) -> String? {
+    // Chat-reply shapes for generated text: the model answering the user
+    // ("Sure! What can I do for you?" — seen live in Spanish, "¡Claro! ¿Qué
+    // puedo hacer por ti?") instead of writing the thing they asked for.
+    private static let replyShapes = [
+        "sure", "of course", "certainly", "absolutely", "no problem", "okay",
+        "got it", "i can help", "i'd be happy", "i would be happy",
+        "happy to help", "what can i do", "how can i help",
+        "¡claro", "claro,", "por supuesto", "¿qué puedo",
+    ]
+
+    static func validateGenerated(_ output: String, instruction: String? = nil) -> String? {
         var trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         // The model likes to present its work in quotes ("I'm back Monday…");
         // the user asked for text to insert, not a quotation of it.
@@ -122,6 +139,15 @@ enum CommandOutputCheck {
         }
         guard !trimmed.isEmpty else { return nil }
         guard !trimmed.contains("```") else { return nil }
+        let lowered = trimmed.lowercased()
+        guard !replyShapes.contains(where: { lowered.hasPrefix($0) }) else { return nil }
+        // An echo of the instruction itself means the model had nothing to
+        // write ("purple monkey dishwasher" came straight back) — typing the
+        // user's command words into their document is never what they meant.
+        if let instruction {
+            let norm = { (t: String) in t.lowercased().filter { $0.isLetter || $0.isNumber } }
+            guard norm(trimmed) != norm(instruction) else { return nil }
+        }
         // "Write something short at the cursor" — a whole essay means the
         // model ran away with the instruction.
         guard trimmed.count <= 1200 else { return nil }
@@ -184,10 +210,10 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
         let response = try await session.respond(to: spoken, generating: ParsedCommand.self,
                                                  options: GenerationOptions(temperature: 0.1))
         let language = response.content.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
-        return CommandIntent(action: CommandIntent.Action(rawValue: response.content.action.rawValue) ?? .rewrite,
-                             instruction: CommandIntent.sanitizedInstruction(
-                                parsed: response.content.instruction, spoken: spoken),
-                             language: language.isEmpty ? nil : language)
+        return CommandIntent.resolved(
+            action: CommandIntent.Action(rawValue: response.content.action.rawValue) ?? .rewrite,
+            language: language.isEmpty ? nil : language,
+            spoken: spoken)
     }
 
     func rewrite(_ text: String, instruction: String) async throws -> String {
@@ -197,9 +223,23 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
         // to echo the text untouched (observed on "shorten this" commands).
         let response = try await session.respond(
             to: "Text:\n\(text)\n\nInstruction: \(instruction)",
-            options: GenerationOptions(temperature: 0.1))
+            options: GenerationOptions(temperature: 0.1, maximumResponseTokens: 700))
         guard let clean = EnhancerOutputCheck.validate(response.content, original: text) else {
             throw EnhancerError.rejectedOutput
+        }
+        // Identical-modulo-whitespace means the instruction changed nothing —
+        // a confused command ("purple monkey dishwasher") comes back as the
+        // selection with mutated spacing, and pasting that would still edit
+        // the user's text. Only instructions that are actually about spacing
+        // get to make whitespace-only changes.
+        let squeeze = { (t: String) in t.filter { !$0.isWhitespace } }
+        if squeeze(clean) == squeeze(text) {
+            let formattingWords = ["space", "spacing", "line", "lines", "break",
+                                   "indent", "paragraph", "newline"]
+            let instr = instruction.lowercased()
+            guard clean != text, formattingWords.contains(where: instr.contains) else {
+                throw EnhancerError.rejectedOutput
+            }
         }
         return clean
     }
@@ -209,9 +249,13 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
         let session = LanguageModelSession(model: model, instructions: Self.generateInstructions)
         // Slightly warmer than the rewrites — composing wants a little room —
         // but not so warm it wanders off the instruction.
+        // The token cap doubles as a runaway brake: a confused instruction
+        // once looped until it filled the whole 4k context (observed live).
         let response = try await session.respond(to: instruction,
-                                                 options: GenerationOptions(temperature: 0.2))
-        guard let clean = CommandOutputCheck.validateGenerated(response.content) else {
+                                                 options: GenerationOptions(temperature: 0.2,
+                                                                            maximumResponseTokens: 400))
+        guard let clean = CommandOutputCheck.validateGenerated(response.content,
+                                                               instruction: instruction) else {
             throw EnhancerError.rejectedOutput
         }
         return clean
@@ -251,8 +295,10 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
     You write short text to be inserted at the user's cursor, following their spoken \
     instruction. Keep it brief and natural — a phrase, a sentence, or a few lines, \
     in the user's first-person voice unless the instruction says otherwise. Never \
-    explain what you did, never add greetings around it, never write code blocks. \
-    Reply with the text to insert only.
+    explain what you did, never add greetings around it, never write code blocks, \
+    and never reply to the user or ask them anything. If the instruction is not a \
+    clear request to write something, reply with nothing at all. Reply with the \
+    text to insert only.
     """
 }
 #endif

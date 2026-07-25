@@ -3,7 +3,7 @@ import Foundation
 // Turns a user's correction of a dictation into candidate vocabulary
 // replacements: diff the corrected text against what Aloud typed, and every
 // changed word or phrase becomes a proposed Replacement ("always type X
-// instead of Y"). Pure logic, no state — the History "Fix…" flow drives it.
+// instead of Y"). Pure logic, no state — the History "Fix" flow drives it.
 //
 // The diff is a word-token LCS. Adjacent changed tokens are grouped into one
 // phrase pair ("jon smith" → "Jon Smyth" is a single candidate, not two), so

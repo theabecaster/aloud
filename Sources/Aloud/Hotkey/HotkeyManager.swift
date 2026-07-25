@@ -289,6 +289,12 @@ final class HotkeyManager {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
+        // The event's own timestamp, not processing time: the tap source runs
+        // on the main run loop, so a busy main thread delays when we *see* an
+        // event. Measuring hold lengths with the wall clock inflated quick
+        // taps into holds and broke the hands-free double-tap.
+        let time = Double(event.timestamp) / 1_000_000_000
+
         // Mouse events carry a button number instead of a keycode.
         let isMouse = type == .otherMouseDown || type == .otherMouseUp
         let keyCode = isMouse
@@ -307,7 +313,7 @@ final class HotkeyManager {
         if commandEngine != nil, commandHotkey != engine.hotkey {
             let commandAction = commandEngine?.handle(
                 type: type, keyCode: keyCode, flags: event.flags,
-                time: ProcessInfo.processInfo.systemUptime) ?? .none
+                time: time) ?? .none
             if commandAction != .none {
                 DispatchQueue.main.async { [weak self] in self?.onAction?(commandAction) }
                 return
@@ -315,7 +321,7 @@ final class HotkeyManager {
         }
 
         let action = engine.handle(type: type, keyCode: keyCode, flags: event.flags,
-                                   time: ProcessInfo.processInfo.systemUptime)
+                                   time: time)
         if action != .none {
             DispatchQueue.main.async { [weak self] in self?.onAction?(action) }
         }

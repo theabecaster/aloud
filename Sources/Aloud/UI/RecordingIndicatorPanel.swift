@@ -10,10 +10,24 @@ final class RecordingIndicatorPanel {
     private var panel: NSPanel?
     private let model = IndicatorModel()
     private var levelTimer: Timer?
-    // Bumped by present() and hide() so a hide's fade-out completion can tell
+    // Bumped by present() and hide() so a pending or in-flight hide can tell
     // whether a show snuck in behind it (hands-free is a cancel immediately
-    // followed by a re-show) and must not order the panel out.
+    // followed by a re-show) and must leave the panel alone.
     private var hideGeneration = 0
+    // Same idea for hint auto-dismissal, so a second hint can't be cut short
+    // by the first one's timer.
+    private var hintGeneration = 0
+    // Logically on screen: present() called, no hide committed yet.
+    private var isShowing = false
+    private var isFadingOut = false
+    private var shownAt: TimeInterval = 0
+    private static let fadeDuration: TimeInterval = 0.18
+    // A pill that just appeared holds still this long before it may fade out.
+    // Arming hands-free is a short tap (cancel → hide) followed by a second
+    // press up to a double-tap window later (begin → show); without this floor
+    // the pill blinks out and back in mid-gesture and reads as a glitch. Any
+    // session long enough to be real has already outlived it.
+    private static let minimumVisible: TimeInterval = 0.6
     // Hands-free silence reminder: after this long without speech — and only
     // when the keyboard and mouse are idle too, so it never interrupts someone
     // editing — the pill switches to "Still listening…". Long on purpose:
@@ -61,6 +75,8 @@ final class RecordingIndicatorPanel {
         model.isLocked = false
         model.isCommand = command
         model.stillListening = false
+        model.notice = nil   // never carry a previous session's note into this one
+        model.level = 0
         present()
         // While recording the pill takes mouse input so it can be dragged to
         // a better spot and right-clicked for the quick menu. The transient
@@ -71,7 +87,12 @@ final class RecordingIndicatorPanel {
             let level = levelProvider()
             Task { @MainActor in
                 guard let self else { return }
-                self.model.level = level
+                // Fast attack, slow release: raw RMS jitters frame to frame and
+                // a bare threshold made the leading bars strobe. Rising edges
+                // stay instant so the meter still feels live.
+                self.model.level = level > self.model.level
+                    ? level
+                    : self.model.level + (level - self.model.level) * 0.25
                 self.updateStillListening(level: level)
             }
         }
@@ -86,20 +107,30 @@ final class RecordingIndicatorPanel {
         lastVoiceTime = ProcessInfo.processInfo.systemUptime
     }
 
+    // The reminder latches: it appears once the session has been silent long
+    // enough while the user is away from the keyboard, and then only speech
+    // takes it back down. Recomputing it every frame let a single mouse twitch
+    // swap the caption for the meter and back — a 30 Hz flicker on an otherwise
+    // static pill.
     private func updateStillListening(level: Float) {
         let now = ProcessInfo.processInfo.systemUptime
-        if level > Self.voiceLevel { lastVoiceTime = now }
-        guard model.isLocked, now - lastVoiceTime > Self.silenceReminderAfter else {
+        if level > Self.voiceLevel {
+            lastVoiceTime = now
             model.stillListening = false
             return
         }
+        guard model.isLocked else {
+            model.stillListening = false
+            return
+        }
+        guard !model.stillListening, now - lastVoiceTime > Self.silenceReminderAfter else { return }
         // System-wide input idle: typing or mousing means the user is engaged,
         // not absent — hold the reminder back.
         let inputIdle = min(
             CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown),
             CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown),
             CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved))
-        model.stillListening = inputIdle > Self.inputIdleGrace
+        if inputIdle > Self.inputIdleGrace { model.stillListening = true }
     }
 
     // Brief note inside a live recording pill (e.g. mic switched) — the meter
@@ -112,10 +143,11 @@ final class RecordingIndicatorPanel {
         }
     }
 
-    func showTranscribing() {
+    func showTranscribing(label: String? = nil) {
         levelTimer?.invalidate()
         model.mode = .transcribing
         model.isCommand = false
+        model.transcribingLabel = label
         present()
         panel?.ignoresMouseEvents = true
     }
@@ -125,46 +157,86 @@ final class RecordingIndicatorPanel {
         levelTimer?.invalidate()
         model.mode = .transcribing
         model.isCommand = true
+        model.transcribingLabel = nil
         present()
         panel?.ignoresMouseEvents = true
     }
 
     func showHint(_ text: String) {
         levelTimer?.invalidate()
+        levelTimer = nil
         model.mode = .hint
         model.hint = text
+        model.notice = nil
+        model.stillListening = false
         present()
+        panel?.ignoresMouseEvents = true
+        hintGeneration += 1
+        let generation = hintGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
-            if self?.model.mode == .hint { self?.hide() }
+            guard let self, self.hintGeneration == generation, self.model.mode == .hint else { return }
+            self.hide()
         }
     }
 
     func hide() {
         levelTimer?.invalidate()
         levelTimer = nil
-        guard let panel else { return }
+        model.level = 0   // let the meter drain rather than freeze mid-fade
+        guard let panel, isShowing else { return }
+        isShowing = false
         panel.ignoresMouseEvents = true
         hideGeneration += 1
         let generation = hideGeneration
+        let elapsed = ProcessInfo.processInfo.systemUptime - shownAt
+        let delay = max(0, Self.minimumVisible - elapsed)
+        guard delay > 0 else { return fadeOut(generation) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.fadeOut(generation)
+        }
+    }
+
+    private func fadeOut(_ generation: Int) {
+        guard hideGeneration == generation, let panel, panel.isVisible else { return }
+        isFadingOut = true
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.18
+            ctx.duration = Self.fadeDuration
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.hideGeneration == generation else { return }
+                self.isFadingOut = false
                 panel.orderOut(nil)
             }
         })
     }
 
     private func present() {
-        hideGeneration += 1   // invalidate any in-flight hide completion
+        hideGeneration += 1   // cancel any pending or in-flight hide
         let panel = ensurePanel()
+        if !isShowing {
+            isShowing = true
+            shownAt = ProcessInfo.processInfo.systemUptime
+        }
+        // Already on screen: only the pill's contents changed. Re-running the
+        // fade (or re-deriving the position, which follows the mouse's screen)
+        // is what made every state change blink and occasionally jump displays.
+        guard !panel.isVisible else {
+            if isFadingOut || panel.alphaValue < 1 { fadeIn(panel) }
+            return
+        }
         position(panel)
         panel.alphaValue = 0
         panel.orderFrontRegardless()
+        fadeIn(panel)
+    }
+
+    // Ramps from wherever alpha is now, so catching a fade-out mid-flight
+    // reverses it instead of restarting from invisible.
+    private func fadeIn(_ panel: NSPanel) {
+        isFadingOut = false
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.18
+            ctx.duration = Self.fadeDuration
             panel.animator().alphaValue = 1
         }
     }
@@ -230,7 +302,7 @@ final class RecordingIndicatorPanel {
 
 @MainActor
 final class IndicatorModel: ObservableObject {
-    enum Mode { case recording, transcribing, hint }
+    enum Mode: Equatable { case recording, transcribing, hint }
     @Published var mode: Mode = .recording
     @Published var level: Float = 0
     @Published var hint: String?
@@ -239,6 +311,8 @@ final class IndicatorModel: ObservableObject {
     @Published var isBasic = false
     @Published var isCommand = false
     @Published var notice: String?
+    // Overrides the "Typing…" caption (e.g. "Polishing…" while a rewrite runs).
+    @Published var transcribingLabel: String?
     var onStop: (() -> Void)?
     var onResetPosition: (() -> Void)?
     var settings: SettingsStore?
@@ -301,7 +375,7 @@ struct IndicatorView: View {
             case .transcribing:
                 ProgressView()
                     .controlSize(.small)
-                Text(model.isCommand ? loc("Working…") : loc("Typing…"))
+                Text(model.transcribingLabel ?? (model.isCommand ? loc("Working…") : loc("Typing…")))
                     .foregroundStyle(.secondary)
             case .hint:
                 Image(systemName: "info.circle")
@@ -317,7 +391,7 @@ struct IndicatorView: View {
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.spring(duration: 0.25), value: model.mode == .recording)
+        .animation(.spring(duration: 0.25), value: model.mode)
         .animation(.spring(duration: 0.25), value: model.isLocked)
         .animation(.spring(duration: 0.25), value: model.stillListening)
         .animation(.spring(duration: 0.25), value: model.notice)
@@ -359,17 +433,26 @@ struct LevelMeter: View {
     var body: some View {
         HStack(spacing: 3) {
             ForEach(0..<barCount, id: \.self) { i in
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(barActive(i) ? Color.accentColor : Color.secondary.opacity(0.3))
-                    .frame(width: 3)
-                    .frame(height: barHeight(i))
+                ZStack {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.secondary.opacity(0.3))
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.accentColor)
+                        .opacity(barFill(i))
+                }
+                .frame(width: 3)
+                .frame(height: barHeight(i))
             }
         }
         .animation(.linear(duration: 0.08), value: level)
     }
 
-    private func barActive(_ i: Int) -> Bool {
-        Float(i) / Float(barCount) < level
+    // A bar lights across its own width rather than snapping on: with a hard
+    // threshold the bar at the edge of the level strobed on every frame.
+    private func barFill(_ i: Int) -> Double {
+        let step = 1 / Double(barCount)
+        let past = Double(level) - Double(i) * step
+        return min(max(past / step, 0), 1)
     }
 
     private func barHeight(_ i: Int) -> CGFloat {

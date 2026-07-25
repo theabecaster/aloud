@@ -1,9 +1,10 @@
 import Network
 import SwiftUI
 
-// First-run flow, Setup Assistant style: one instruction per screen, a single
-// primary button, progress dots. Screens for permissions poll live status and
-// auto-advance the moment the user grants access in System Settings.
+// First-run flow: four screens, one job each — say what Aloud is, collect the
+// two permissions it can't work without, get the voice model down, prove it
+// works. Screens that wait on something (permissions, the download) poll and
+// advance themselves the moment the requirement is met.
 struct OnboardingView: View {
     @ObservedObject var controller: DictationController
     @ObservedObject private var settings: SettingsStore
@@ -16,10 +17,22 @@ struct OnboardingView: View {
     }
 
     enum Step: Int, CaseIterable {
-        case welcome, microphone, accessibility, model, liveTyping, tryIt
+        case welcome, access, voice, tryIt, features
+
+        // Harness hook: ALOUD_ONBOARDING_STEP=tryIt opens the flow on a later
+        // screen so a screen can be inspected without clicking through.
+        static var initial: Step {
+            switch ProcessInfo.processInfo.environment["ALOUD_ONBOARDING_STEP"] {
+            case "access": return .access
+            case "voice": return .voice
+            case "tryIt": return .tryIt
+            case "features": return .features
+            default: return .welcome
+            }
+        }
     }
 
-    @State private var step: Step = .welcome
+    @State private var step: Step = .initial
     @State private var micStatus = Permissions.microphone
     @State private var axStatus = Permissions.accessibility
     @State private var tryItDone = false
@@ -27,6 +40,9 @@ struct OnboardingView: View {
     @State private var networkMonitor = NWPathMonitor()
     @State private var startingBasic = false
     @State private var basicUnavailable = false
+    @State private var openedAccessibility = false
+    // Which feature tile has its explanation open (one at a time).
+    @State private var openFeature: String?
 
     private let poll = Timer.publish(every: 0.8, on: .main, in: .common).autoconnect()
 
@@ -34,13 +50,15 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             Spacer(minLength: 28)
             content
-                .frame(maxWidth: 420)
+                .frame(maxWidth: 430)
                 .padding(.horizontal, 40)
+                .id(step)
+                .transition(.opacity)
             Spacer()
             dots
                 .padding(.bottom, 28)
         }
-        .frame(width: 560, height: 460)
+        .frame(width: 560, height: 470)
         .background(.background)
         .overlay(alignment: .bottomLeading) {
             if step != .welcome {
@@ -54,20 +72,11 @@ struct OnboardingView: View {
                 .padding(.bottom, 20)
             }
         }
-        .overlay(alignment: .bottomTrailing) {
-            if step == .liveTyping {
-                Button(loc("Next")) { advance() }
-                    .buttonStyle(OnboardingButtonStyle(prominent: true, minWidth: 60))
-                    .keyboardShortcut(.defaultAction)
-                    .padding(.trailing, 20)
-                    .padding(.bottom, 20)
-            }
-        }
         .onAppear {
             // Start the model download quietly right away so it's finished (or
-            // well underway) by the time the user reaches the model screen.
+            // well underway) by the time the user reaches the voice screen.
             Task { await controller.prepareModel() }
-            // Watch connectivity for the model step: no network is a normal
+            // Watch connectivity for the voice screen: no network is a normal
             // first-run situation, and the download should resume by itself.
             networkMonitor.pathUpdateHandler = { path in
                 let nowOnline = path.status == .satisfied
@@ -91,9 +100,8 @@ struct OnboardingView: View {
             // happened in a system dialog or System Settings, and macOS
             // doesn't hand focus back to us — reclaim it so the flow visibly
             // continues instead of sitting behind whatever has focus.
-            if step == .microphone, micStatus == .granted { advance(); reclaimFocus() }
-            if step == .accessibility, axStatus == .granted { advance(); reclaimFocus() }
-            if step == .model, controller.transcriberState == .ready { advance() }
+            if step == .access, Permissions.allGranted { advance(); reclaimFocus() }
+            if step == .voice, controller.transcriberState == .ready { advance() }
             if step == .tryIt, !controller.lastTranscription.isEmpty { tryItDone = true }
         }
     }
@@ -102,11 +110,10 @@ struct OnboardingView: View {
     private var content: some View {
         switch step {
         case .welcome: welcome
-        case .microphone: microphone
-        case .accessibility: accessibility
-        case .model: model
-        case .liveTyping: liveTyping
+        case .access: access
+        case .voice: voice
         case .tryIt: tryIt
+        case .features: features
         }
     }
 
@@ -115,9 +122,9 @@ struct OnboardingView: View {
     private var welcome: some View {
         screen(symbol: "waveform",
                title: loc("Welcome to Aloud"),
-               message: loc("Speak instead of typing — your words appear wherever your cursor is. Everything happens on your Mac; nothing you say ever leaves it.")) {
+               message: loc("Speak instead of typing. Your words land wherever the cursor is, and nothing you say leaves this Mac.")) {
             VStack(spacing: 16) {
-                VStack(spacing: 10) {
+                VStack(spacing: 8) {
                     HStack(spacing: 6) {
                         Text(loc("Hold"))
                         HotkeyRecorderView(hotkey: settings.hotkey) { controller.updateHotkey($0) }
@@ -125,7 +132,7 @@ struct OnboardingView: View {
                     }
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    Text(loc("That’s your talk key. %@ works great — or click it to pick your own.", Hotkey.default.displayName))
+                    Text(loc("Click the key to pick a different one."))
                         .font(.footnote)
                         .foregroundStyle(.tertiary)
                 }
@@ -134,57 +141,102 @@ struct OnboardingView: View {
         }
     }
 
-    private var microphone: some View {
-        screen(symbol: "mic",
-               title: loc("Allow the Microphone"),
-               message: loc("Aloud needs the microphone to hear you while you hold the dictation key. Audio is processed on this Mac and never uploaded.")) {
+    // Both permissions on one screen: the user sees the whole ask at once and
+    // watches it complete, instead of granting one and meeting a surprise.
+    private var access: some View {
+        screen(symbol: "lock.open",
+               title: loc("Let Aloud Hear and Type"),
+               message: loc("macOS guards both of these. Aloud needs them to work.")) {
             VStack(spacing: 12) {
-                if micStatus == .denied {
-                    Text(loc("Microphone access is turned off. Turn it on for Aloud in System Settings, then come back — this screen will move on automatically."))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    primaryButton(loc("Open System Settings")) { Permissions.openMicrophoneSettings() }
-                } else {
-                    primaryButton(loc("Allow Microphone")) {
-                        Permissions.requestMicrophone { granted in
-                            micStatus = Permissions.microphone
-                            if granted { advance() }
+                VStack(spacing: 0) {
+                    accessRow(symbol: "mic",
+                              title: loc("Microphone"),
+                              detail: loc("Hears you while you hold the key."),
+                              granted: micStatus == .granted,
+                              actionLabel: micStatus == .denied ? loc("Open Settings") : loc("Allow")) {
+                        if micStatus == .denied {
+                            Permissions.openMicrophoneSettings()
+                        } else {
+                            Permissions.requestMicrophone { _ in micStatus = Permissions.microphone }
                         }
                     }
+                    Divider().padding(.leading, 46)
+                    accessRow(symbol: "keyboard",
+                              title: loc("Accessibility"),
+                              detail: loc("Types your words, and makes the key work in every app."),
+                              granted: axStatus == .granted,
+                              actionLabel: loc("Open Settings")) {
+                        openedAccessibility = true
+                        Permissions.openAccessibilitySettings()
+                    }
+                }
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+
+                if axStatus != .granted {
+                    // After an update macOS often keeps a stale entry: the
+                    // switch reads on while the app isn't actually trusted.
+                    // Once they've been over there and it still hasn't taken,
+                    // that's the likely reason — say so.
+                    Text(openedAccessibility
+                         ? loc("Switch already on? Turn it off and on again — macOS keeps a stale entry after an update.")
+                         : loc("In System Settings, turn on the switch next to Aloud. This screen continues on its own."))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
     }
 
-    private var accessibility: some View {
-        screen(symbol: "keyboard",
-               title: loc("Let Aloud Type for You"),
-               message: loc("This lets your talk key work in every app, and lets Aloud type the words where your cursor is. macOS calls this “Accessibility” access.")) {
-            VStack(spacing: 12) {
-                Text(loc("In System Settings, turn on the switch next to Aloud under Privacy & Security → Accessibility. This screen will move on automatically once it's on."))
-                    .font(.callout)
+    private func accessRow(symbol: String, title: String, detail: String,
+                           granted: Bool, actionLabel: String,
+                           action: @escaping () -> Void) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 17))
+                .foregroundStyle(granted ? Color.green : Color.accentColor)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                primaryButton(loc("Open System Settings")) {
-                    Permissions.openAccessibilitySettings()
-                }
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            if granted {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.green)
+                    .accessibilityLabel(loc("Allowed"))
+            } else {
+                // Fixed width so the two rows' buttons share an edge rather
+                // than ending wherever their label happens to stop.
+                Button(actionLabel, action: action)
+                    .buttonStyle(OnboardingButtonStyle(minWidth: 100))
             }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(minHeight: 54)
     }
 
     // The download already started in the background when onboarding opened,
     // so this screen usually just shows progress and auto-advances when ready.
-    private var model: some View {
+    private var voice: some View {
         screen(symbol: "arrow.down.circle",
-               title: loc("Setting Up Your Voice"),
-               message: loc("Aloud is downloading its voice recognition — this happens once (about 500 MB). After this, dictation works completely offline, forever.")) {
+               title: loc("Setting Up Voice Recognition"),
+               message: loc("A one-time download, about 500 MB. After this, dictation works offline.")) {
             VStack(spacing: 14) {
                 switch controller.transcriberState {
                 case .modelMissing where !isOnline, .failed where !isOnline:
                     Label(loc("No internet connection"), systemImage: "wifi.slash")
                         .foregroundStyle(.secondary)
-                    Text(loc("Aloud needs the internet once, for this download. This screen will continue automatically when you're back online."))
+                    Text(loc("This screen continues on its own once you're back online."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -202,7 +254,7 @@ struct OnboardingView: View {
                     basicDictationOption
                 case .loading:
                     ProgressView()
-                    Text(loc("Getting things ready… (first time takes a few seconds)"))
+                    Text(loc("Almost ready…"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 case .ready:
@@ -241,15 +293,13 @@ struct OnboardingView: View {
                             startingBasic = false
                             // The 0.8 s poll also advances on .ready — only
                             // advance if it hasn't beaten us to it.
-                            if ok { if step == .model { advance() } } else { basicUnavailable = true }
+                            if ok { if step == .voice { advance() } } else { basicUnavailable = true }
                         }
                     }
                 }
                 Text(basicUnavailable
                      ? loc("Basic dictation isn’t available right now — please wait for the download.")
-                     : isOnline
-                     ? loc("Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes.")
-                     : loc("Basic dictation is less accurate. Aloud switches to full accuracy by itself once the download finishes — it resumes when you’re back online."))
+                     : loc("Less accurate. Aloud switches to full accuracy on its own when the download finishes."))
                     .font(.footnote)
                     .foregroundStyle(basicUnavailable ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
                     .multilineTextAlignment(.center)
@@ -257,95 +307,64 @@ struct OnboardingView: View {
         }
     }
 
-    private var liveTyping: some View {
-        screen(symbol: "text.cursor",
-               title: loc("How Should Words Appear?"),
-               message: loc("You can change this any time in Settings.")) {
-            HStack(spacing: 12) {
-                choiceCard(symbol: "text.cursor",
-                           title: loc("Live"),
-                           badge: loc("Experimental"),
-                           caption: loc("Words appear as you say them and settle as Aloud hears more."),
-                           selected: settings.liveTyping) {
-                    settings.liveTyping = true
-                }
-                choiceCard(symbol: "text.insert",
-                           title: loc("All at once"),
-                           caption: loc("Everything is typed the moment you let go of the key."),
-                           selected: !settings.liveTyping) {
-                    settings.liveTyping = false
-                }
-            }
-            .animation(.spring(duration: 0.25), value: settings.liveTyping)
-        }
-    }
-
-    // A radio-style option card: exactly one is selected, shown by the accent
-    // border, tinted fill, and corner checkmark.
-    private func choiceCard(symbol: String, title: String, badge: String? = nil, caption: String,
-                            selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Image(systemName: symbol)
-                    .font(.system(size: 24, weight: .light))
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                    .frame(height: 30)
-                HStack(spacing: 5) {
-                    Text(title)
-                        .font(.callout.weight(.semibold))
-                    if let badge {
-                        Text(badge)
-                            .font(.system(size: 9, weight: .medium))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1.5)
-                            .foregroundStyle(.orange)
-                            .overlay(Capsule().strokeBorder(Color.orange.opacity(0.5), lineWidth: 0.5))
-                    }
-                }
-                Text(caption)
+    // The one setting worth choosing before the first real dictation: how much
+    // Aloud tidies what you said. It sits here, under the words the user just
+    // spoke, because that's the only place the choice is concrete — and it's
+    // the same card as the permission rows, so the flow gains no new shape.
+    // Say it again after switching and the difference is right there.
+    private var cleanUp: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "wand.and.sparkles")
+                .font(.system(size: 17))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(loc("Clean-up"))
+                    .font(.callout.weight(.semibold))
+                // Reserved space: the row can't change height as the
+                // explanation changes underneath the picker.
+                Text(settings.polishLevel.explanation)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                    .lineLimit(2, reservesSpace: true)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(14)
-            .frame(width: 172, height: 138, alignment: .top)
-            .background(selected ? Color.accentColor.opacity(0.1) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor),
-                                  lineWidth: selected ? 2 : 1)
-            )
-            .overlay(alignment: .topTrailing) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(Color.accentColor)
-                    .padding(6)
-                    .opacity(selected ? 1 : 0)
+            Spacer(minLength: 8)
+            Picker("", selection: $settings.polishLevel) {
+                ForEach(controller.availableLevels) { level in
+                    Text(level.displayName).tag(level)
+                }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .labelsHidden()
+            .fixedSize()
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+        .frame(maxWidth: 380)
     }
 
     private var tryIt: some View {
         screen(symbol: "quote.bubble",
                title: loc("Try It"),
-               message: loc("Click the box below, hold %@ while you say something, then let go.", controller.settings.hotkey.displayName)) {
-            VStack(spacing: 16) {
+               message: loc("Click the box, hold %@ while you say something, then let go.", settings.hotkey.displayName)) {
+            VStack(spacing: 14) {
                 TextField(loc("Your words will appear here"), text: .constant(controller.lastTranscription))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 300)
+                cleanUp
                 if controller.usingFallback {
                     // First impressions happen on the basic engine after a
                     // skip — make clear this isn't Aloud at full strength.
-                    Text(loc("You’re trying basic dictation — accuracy gets noticeably better on its own once setup finishes."))
+                    Text(loc("You’re on basic dictation — accuracy improves on its own once setup finishes."))
                         .font(.footnote)
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
                 }
                 if tryItDone {
-                    Label(loc("That’s it — you’re set"), systemImage: "checkmark.circle.fill")
+                    Label(loc("That’s all there is to it"), systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 }
                 (Text(loc("Aloud lives in your menu bar — the "))
@@ -354,35 +373,142 @@ struct OnboardingView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                Text(loc("Tip: double-press %@ to keep listening hands-free — Esc finishes. You can turn this off in Settings.", controller.settings.hotkey.displayName))
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
                 if tryItDone {
-                    primaryButton(loc("Done")) { onFinished() }
+                    primaryButton(loc("Continue")) { advance() }
                 } else {
-                    secondaryButton(loc("Skip for now")) { onFinished() }
+                    secondaryButton(loc("Skip for now")) { advance() }
                 }
             }
         }
+    }
+
+    // MARK: what else Aloud does
+
+    // A map, not a manual: six things the user would otherwise never find,
+    // two words each. The ⓘ opens the same quiet popover History uses — the
+    // sentence is there for whoever wants it, and costs nothing to whoever
+    // doesn't. Nothing here needs doing now, so the only button is the exit.
+    private struct Feature: Identifiable {
+        let id: String
+        let symbol: String
+        let title: String
+        let tagline: String
+        let detail: String
+    }
+
+    private var featureList: [Feature] {
+        var items = [
+            Feature(id: "handsFree", symbol: "ear",
+                    title: loc("Hands-free"), tagline: loc("Talk without holding"),
+                    detail: settings.handsFreeHotkey.map {
+                        loc("Press %@ and Aloud keeps listening until you press Esc — good for long thoughts.", $0.displayName)
+                    } ?? loc("Double-press %@ and Aloud keeps listening until you press Esc — good for long thoughts.",
+                             settings.hotkey.displayName)),
+            Feature(id: "vocabulary", symbol: "character.book.closed",
+                    title: loc("Vocabulary"), tagline: loc("Fix words it mishears"),
+                    detail: loc("Teach Aloud a name, a product, a term of art — it types your spelling from then on.")),
+            Feature(id: "snippets", symbol: "text.insert",
+                    title: loc("Snippets"), tagline: loc("Short phrase, long text"),
+                    detail: loc("Say “my email” as the whole dictation and Aloud types the address instead.")),
+            Feature(id: "appRules", symbol: "macwindow",
+                    title: loc("App Rules"), tagline: loc("Match each app’s tone"),
+                    detail: loc("Aloud reads the app you’re in and writes to suit it. Pin the style yourself when you’d rather decide.")),
+            Feature(id: "history", symbol: "clock",
+                    title: loc("History"), tagline: loc("Find anything you said"),
+                    detail: loc("Every dictation is searchable, and never leaves this Mac. Copy it again, or correct it and teach Aloud the right words.")),
+            Feature(id: "scratchpad", symbol: "note.text",
+                    title: loc("Scratchpad"), tagline: loc("A note that floats"),
+                    detail: loc("A small always-on-top window to dictate into when there’s nowhere else to put the words.")),
+        ]
+        if controller.commandsAvailable {
+            // Only where the on-device engine exists — elsewhere the tile
+            // would describe a key the user can never make work.
+            items.insert(Feature(id: "commands", symbol: "wand.and.sparkles",
+                                 title: loc("Voice commands"), tagline: loc("Say what to change"),
+                                 detail: loc("Set a command key in Settings, then hold it and say what to do: rewrite or translate the selected text, or write something new.")),
+                         at: 3)
+            items.removeAll { $0.id == "scratchpad" }
+        }
+        return items
+    }
+
+    private var features: some View {
+        // Echoes the grid below it, the way each screen's glyph names its own
+        // content (waveform, lock, download arrow, speech bubble).
+        screen(symbol: "square.grid.2x2",
+               title: loc("What Else Aloud Does"),
+               message: loc("Nothing to set up now — this is just so you know it’s there.")) {
+            VStack(spacing: 14) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8),
+                                    GridItem(.flexible(), spacing: 8)],
+                          spacing: 8) {
+                    ForEach(featureList) { feature in
+                        featureTile(feature)
+                    }
+                }
+                primaryButton(loc("Start Using Aloud")) { onFinished() }
+            }
+        }
+    }
+
+    private func featureTile(_ feature: Feature) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: feature.symbol)
+                .font(.system(size: 15))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(feature.title)
+                    .font(.callout.weight(.semibold))
+                Text(feature.tagline)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .lineLimit(1)
+            Spacer(minLength: 4)
+            Button {
+                openFeature = openFeature == feature.id ? nil : feature.id
+            } label: {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(loc("What this does"))
+            .popover(isPresented: Binding(get: { openFeature == feature.id },
+                                          set: { if !$0, openFeature == feature.id { openFeature = nil } }),
+                     arrowEdge: .bottom) {
+                Text(feature.detail)
+                    .font(.callout)
+                    .frame(width: 260, alignment: .leading)
+                    .padding(14)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
     }
 
     // MARK: chrome
 
     private func screen(symbol: String, title: String, message: String,
                         @ViewBuilder actions: () -> some View) -> some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 16) {
             Image(systemName: symbol)
-                .font(.system(size: 44, weight: .light))
+                .font(.system(size: 42, weight: .light))
                 .foregroundStyle(Color.accentColor)
-                .frame(height: 56)
-            Text(title)
-                .font(.title.weight(.semibold))
-            Text(message)
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+                .frame(height: 52)
+            VStack(spacing: 8) {
+                Text(title)
+                    .font(.title.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                Text(message)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             actions()
                 .padding(.top, 6)
         }
@@ -409,6 +535,8 @@ struct OnboardingView: View {
                     .frame(width: 7, height: 7)
             }
         }
+        .accessibilityElement()
+        .accessibilityLabel(loc("Step %1$ld of %2$ld", step.rawValue + 1, Step.allCases.count))
     }
 
     // Skip steps that are already satisfied, so reopening setup (or a re-grant
@@ -418,7 +546,7 @@ struct OnboardingView: View {
         while let candidate = Step(rawValue: raw), isSatisfied(candidate) { raw += 1 }
         guard let next = Step(rawValue: raw) else { return }
         if next == .tryIt { _ = controller.startListening() }
-        withAnimation(.spring(duration: 0.3)) { step = next }
+        withAnimation(.easeOut(duration: 0.22)) { step = next }
     }
 
     private func reclaimFocus() {
@@ -432,15 +560,14 @@ struct OnboardingView: View {
         var raw = step.rawValue - 1
         while let candidate = Step(rawValue: raw), isSatisfied(candidate) { raw -= 1 }
         guard let prev = Step(rawValue: raw) else { return }
-        withAnimation(.spring(duration: 0.3)) { step = prev }
+        withAnimation(.easeOut(duration: 0.22)) { step = prev }
     }
 
     private func isSatisfied(_ s: Step) -> Bool {
         switch s {
-        case .microphone: return Permissions.microphone == .granted
-        case .accessibility: return Permissions.accessibility == .granted
-        case .model: return controller.transcriberState == .ready
-        case .welcome, .liveTyping, .tryIt: return false
+        case .access: return Permissions.allGranted
+        case .voice: return controller.transcriberState == .ready
+        case .welcome, .tryIt, .features: return false
         }
     }
 }

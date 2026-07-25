@@ -520,6 +520,14 @@ enum CLI {
         expect(tracked && rebased && typer.typed.isEmpty,
                "livetyper: tracks text, rebase continues with tail only")
 
+        // 6b. Spoken numbers written back out — and prose left alone.
+        var numberPolisher = TextPolisher(level: .standard, replacements: [])
+        numberPolisher.capitalizeNames = false
+        expect(numberPolisher.polish("meet me at three thirty p.m.") == "Meet me at 3:30 PM",
+               "numbers: spoken time becomes a written one")
+        expect(numberPolisher.polish("one of them left") == "One of them left",
+               "numbers: prose keeps its words")
+
         // 7. Updater semver.
         expect(Updater.semverLess("1.0.0", "1.0.1"), "updater: patch compare")
         expect(Updater.semverLess("v1.9.0", "v1.10.0"), "updater: no lexicographic trap")
