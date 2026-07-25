@@ -226,6 +226,7 @@ final class DictationController: ObservableObject {
     private func polishedVariants(from raw: String) -> (rewriteInput: String, fallback: String) {
         var polisher = TextPolisher(level: settings.polishLevel.deterministicLevel,
                                     replacements: settings.replacements)
+        polisher.languages = settings.declaredLanguages
         let fallback = polisher.polish(raw)
         guard settings.polishLevel == .concise else { return (fallback, fallback) }
         polisher.spokenCorrections = false
@@ -233,11 +234,11 @@ final class DictationController: ObservableObject {
     }
 
     // Engine output, minus the filler it sometimes invents from an utterance
-    // that never happened (see SpeechPresence). Empty here means "nothing was
+    // that never happened (see PhantomFilter). Empty here means "nothing was
     // said", and every commit path already knows to type nothing for that.
-    private func verbatim(_ result: Transcription, samples: [Float]) -> String {
+    private func verbatim(_ result: Transcription) -> String {
         let raw = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return SpeechPresence.isPhantom(text: raw, samples: samples) ? "" : raw
+        return PhantomFilter.isPhantom(text: raw, confidence: result.confidence) ? "" : raw
     }
 
     private func finishText(from raw: String) async -> (text: String, enhanced: Bool) {
@@ -418,6 +419,8 @@ final class DictationController: ObservableObject {
                 var polisher = TextPolisher(level: self.settings.polishLevel.deterministicLevel,
                                             replacements: self.settings.replacements)
                 polisher.capitalizeNames = false
+                polisher.languages = self.settings.declaredLanguages
+                polisher.finalPass = false
                 self.liveTyper.apply(polisher.polish(transcript.full))
             }
         }
@@ -471,7 +474,7 @@ final class DictationController: ObservableObject {
         Task {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
-                let raw = verbatim(result, samples: samples)
+                let raw = verbatim(result)
                 let (rewriteInput, fallback) = polishedVariants(from: raw)
                 var text = fallback
                 var enhanced = false
@@ -551,7 +554,7 @@ final class DictationController: ObservableObject {
         Task {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
-                let raw = verbatim(result, samples: samples)
+                let raw = verbatim(result)
                 var (text, enhanced) = await finishText(from: raw)
                 var sendReturn = false
                 if settings.pressEnterCommand, let stripped = TrailingCommand.stripPressEnter(text) {
@@ -638,7 +641,7 @@ final class DictationController: ObservableObject {
         Task {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
-                let spoken = verbatim(result, samples: samples)
+                let spoken = verbatim(result)
                 guard !spoken.isEmpty else {
                     indicator.hide()
                     phase = .idle
@@ -727,7 +730,7 @@ final class DictationController: ObservableObject {
         Task {
             do {
                 let result = try await transcriber.transcribe(samples: samples)
-                let raw = verbatim(result, samples: samples)
+                let raw = verbatim(result)
                 var (text, enhanced) = await finishText(from: raw)
                 if let expansion = SnippetMatcher.expansion(for: text, snippets: settings.snippets) {
                     text = expansion

@@ -14,7 +14,7 @@ final class LocalizationTests: XCTestCase {
         "Quit Aloud",
         "Hold %@ to dictate",
         "Welcome to Aloud",
-        "Settings…",
+        "Settings",
         "Still listening…",
         "Uninstall Aloud?",
         "Open Aloud at login",

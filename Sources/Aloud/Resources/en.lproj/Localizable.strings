@@ -1,17 +1,17 @@
 /* Menu bar */
-"Relaunch to Finish Update…" = "Relaunch to Finish Update…";
-"Finish Setup…" = "Finish Setup…";
-"Download Voice Recognition…" = "Download Voice Recognition…";
-"Retry Voice Download…" = "Retry Voice Download…";
+"Relaunch to Finish Update" = "Relaunch to Finish Update";
+"Finish Setup" = "Finish Setup";
+"Download Voice Recognition" = "Download Voice Recognition";
+"Retry Voice Download" = "Retry Voice Download";
 "Improving accuracy…" = "Improving accuracy…";
 "Improving accuracy… %ld%%" = "Improving accuracy… %ld%%";
-"Type Exact Words Instead" = "Type Exact Words Instead";
-"Retry Last Dictation" = "Retry Last Dictation";
-"Copy Last Dictation" = "Copy Last Dictation";
+"Copy Last Text" = "Copy Last Text";
+"Type It Again" = "Type It Again";
+"Use Exact Words" = "Use Exact Words";
 "Scratchpad" = "Scratchpad";
-"Settings…" = "Settings…";
-"Update Available (%@)…" = "Update Available (%@)…";
-"Check for Updates…" = "Check for Updates…";
+"Settings" = "Settings";
+"Update Available (%@)" = "Update Available (%@)";
+"Check for Updates" = "Check for Updates";
 "Quit Aloud" = "Quit Aloud";
 
 /* Menu bar status line */
@@ -77,7 +77,7 @@
 "Uninstall Aloud?" = "Uninstall Aloud?";
 "This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind." = "This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind.";
 "Uninstall" = "Uninstall";
-"Uninstall Aloud…" = "Uninstall Aloud…";
+"Uninstall Aloud" = "Uninstall Aloud";
 
 /* Settings sidebar */
 "General" = "General";
@@ -104,15 +104,11 @@
 
 /* Settings — keys */
 "Dictation key" = "Dictation key";
-"Hold to talk, release to type. Esc while holding cancels. Extra mouse buttons work too." = "Hold to talk, release to type. Esc while holding cancels. Extra mouse buttons work too.";
 "Hands-free mode" = "Hands-free mode";
 "Hands-free key" = "Hands-free key";
 "Remove the hands-free key" = "Remove the hands-free key";
-"Double-press the dictation key — or set a key of its own — to keep listening without holding. Esc finishes and types everything." = "Double-press the dictation key — or set a key of its own — to keep listening without holding. Esc finishes and types everything.";
-"Off: the dictation key only listens while you hold it." = "Off: the dictation key only listens while you hold it.";
 "Command key" = "Command key";
 "Remove the command key" = "Remove the command key";
-"Optional. Hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Optional. Hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor.";
 "Press a key…" = "Press a key…";
 "None" = "None";
 
@@ -142,37 +138,35 @@
 "Light" = "Light";
 "Standard" = "Standard";
 "Concise" = "Concise";
-"Exactly what you said, word for word." = "Exactly what you said, word for word.";
-"Removes “um” and “uh”, tidies spacing, capitalizes names." = "Removes “um” and “uh”, tidies spacing, capitalizes names.";
-"Also honors “scratch that” corrections and your replacements." = "Also honors “scratch that” corrections and your replacements.";
-"Rewrites your words to be tighter — entirely on this Mac." = "Rewrites your words to be tighter — entirely on this Mac.";
+"Types exactly what you said, word for word." = "Types exactly what you said, word for word.";
+"Drops “um” and “uh”, fixes spacing, capitalizes names." = "Drops “um” and “uh”, fixes spacing, capitalizes names.";
+"Light clean-up, plus spoken fixes like “scratch that” and your Vocabulary words." = "Light clean-up, plus spoken fixes like “scratch that” and your Vocabulary words.";
+"Standard clean-up, then tightens the wording." = "Standard clean-up, then tightens the wording.";
 
 /* Settings — list editors (Vocabulary, Snippets, App Rules) */
-"Add one below." = "Add one below.";
+"Nothing here yet — add one below." = "Nothing here yet — add one below.";
+"Corrections" = "Corrections";
 "Remove" = "Remove";
 "Add" = "Add";
 
 /* Settings — vocabulary */
-"Words Aloud keeps getting wrong — a name, a product, a term of art. You can also add these from History with “Fix…”." = "Words Aloud keeps getting wrong — a name, a product, a term of art. You can also add these from History with “Fix…”.";
-"No Corrections Yet" = "No Corrections Yet";
+"Words Aloud keeps getting wrong — a name, a product, a term of art. You can also add these from History with “Fix”." = "Words Aloud keeps getting wrong — a name, a product, a term of art. You can also add these from History with “Fix”.";
 "Aloud types…" = "Aloud types…";
 "It should be…" = "It should be…";
 
 /* Settings — snippets */
 "Say a short phrase as a whole dictation and Aloud types the long version — say “my email”, get your address." = "Say a short phrase as a whole dictation and Aloud types the long version — say “my email”, get your address.";
-"No Snippets Yet" = "No Snippets Yet";
 "When you say…" = "When you say…";
 
 /* Settings — app rules */
 "Pin how Aloud writes in one app. Without a rule it adapts on its own — chat, email, notes, and code all read differently." = "Pin how Aloud writes in one app. Without a rule it adapts on its own — chat, email, notes, and code all read differently.";
-"No App Rules" = "No App Rules";
 "App" = "App";
 "Behavior" = "Behavior";
-"Choose an app…" = "Choose an app…";
-"Other app…" = "Other app…";
+"Choose an app" = "Choose an app";
+"Other app" = "Other app";
 "Exact words" = "Exact words";
 "%@ style" = "%@ style";
-"Custom instruction…" = "Custom instruction…";
+"Custom instruction" = "Custom instruction";
 "Bundle ID, e.g. com.example.app" = "Bundle ID, e.g. com.example.app";
 "How should it be written there? e.g. Warm and upbeat." = "How should it be written there? e.g. Warm and upbeat.";
 "“%@”" = "“%@”";
@@ -193,9 +187,10 @@
 "Keep" = "Keep";
 "%ld dictations" = "%ld dictations";
 "Clear History" = "Clear History";
+"less than a minute ago" = "less than a minute ago";
 "Show original" = "Show original";
 "Hide original" = "Hide original";
-"Fix…" = "Fix…";
+"Fix" = "Fix";
 "Correct this dictation and teach Aloud the right words" = "Correct this dictation and teach Aloud the right words";
 "Copy" = "Copy";
 "Copy Original" = "Copy Original";
@@ -268,3 +263,38 @@
 
 "Polishing…" = "Polishing…";
 "Kept your exact words — Aloud never rewrites here" = "Kept your exact words — Aloud never rewrites here";
+"Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too." = "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too.";
+"Double-press %@ to keep listening after you let go. Esc finishes and types everything." = "Double-press %@ to keep listening after you let go. Esc finishes and types everything.";
+"Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works.";
+"Off — %@ only listens while you hold it." = "Off — %@ only listens while you hold it.";
+"Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor.";
+"Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor.";
+"Tip: press %@ to keep listening hands-free. Esc finishes." = "Tip: press %@ to keep listening hands-free. Esc finishes.";
+"%1$@ is already your %2$@." = "%1$@ is already your %2$@.";
+"dictation key" = "dictation key";
+"hands-free key" = "hands-free key";
+"command key" = "command key";
+"These words aren’t applied while Clean-up is %@." = "These words aren’t applied while Clean-up is %@.";
+"Use Standard" = "Use Standard";
+"Not in use — Clean-up is set to %@." = "Not in use — Clean-up is set to %@.";
+"What Else Aloud Does" = "What Else Aloud Does";
+"Nothing to set up now — this is just so you know it’s there." = "Nothing to set up now — this is just so you know it’s there.";
+"Start Using Aloud" = "Start Using Aloud";
+"What this does" = "What this does";
+"Hands-free" = "Hands-free";
+"Talk without holding" = "Talk without holding";
+"Press %@ and Aloud keeps listening until you press Esc — good for long thoughts." = "Press %@ and Aloud keeps listening until you press Esc — good for long thoughts.";
+"Double-press %@ and Aloud keeps listening until you press Esc — good for long thoughts." = "Double-press %@ and Aloud keeps listening until you press Esc — good for long thoughts.";
+"Fix words it mishears" = "Fix words it mishears";
+"Teach Aloud a name, a product, a term of art — it types your spelling from then on." = "Teach Aloud a name, a product, a term of art — it types your spelling from then on.";
+"Short phrase, long text" = "Short phrase, long text";
+"Say “my email” as the whole dictation and Aloud types the address instead." = "Say “my email” as the whole dictation and Aloud types the address instead.";
+"Match each app’s tone" = "Match each app’s tone";
+"Aloud reads the app you’re in and writes to suit it. Pin the style yourself when you’d rather decide." = "Aloud reads the app you’re in and writes to suit it. Pin the style yourself when you’d rather decide.";
+"Find anything you said" = "Find anything you said";
+"Every dictation is searchable, and never leaves this Mac. Copy it again, or correct it and teach Aloud the right words." = "Every dictation is searchable, and never leaves this Mac. Copy it again, or correct it and teach Aloud the right words.";
+"A note that floats" = "A note that floats";
+"A small always-on-top window to dictate into when there’s nowhere else to put the words." = "A small always-on-top window to dictate into when there’s nowhere else to put the words.";
+"Voice commands" = "Voice commands";
+"Say what to change" = "Say what to change";
+"Set a command key in Settings, then hold it and say what to do: rewrite or translate the selected text, or write something new." = "Set a command key in Settings, then hold it and say what to do: rewrite or translate the selected text, or write something new.";

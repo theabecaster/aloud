@@ -113,13 +113,16 @@ final class ParakeetTranscriber: Transcriber {
     }
 }
 
-// Live transcription by whole-buffer re-decode: every ~1 s, run the SAME batch
-// transcription the commit path uses over ALL audio captured so far (fresh
-// decoder state each pass; >15 s audio auto-chunks internally exactly like a
-// committed dictation would). Each update is therefore a full-context best
-// hypothesis — later speech genuinely revises earlier words, and the preview
-// converges on the batch result by construction. Engine-agnostic: any
-// Transcriber can stream this way by handing over its decode function.
+// Live transcription by whole-buffer re-decode: a few times a second, run the
+// SAME batch transcription the commit path uses over ALL audio captured so far
+// (fresh decoder state each pass; >15 s audio auto-chunks internally exactly
+// like a committed dictation would). Each update is therefore a full-context
+// best hypothesis — later speech genuinely revises earlier words, and the
+// preview converges on the batch result by construction. Those revisions are
+// not published raw: StableTranscript holds each word back until two
+// consecutive decodes agree on it, so what reaches the screen only grows.
+// Engine-agnostic: any Transcriber can stream this way by handing over its
+// decode function.
 //
 // Chosen over the SDK's SlidingWindowAsrManager, whose small-chunk streaming
 // path proved fragile (cross-window token dedup drops words; the decoder's
@@ -127,9 +130,14 @@ final class ParakeetTranscriber: Transcriber {
 // Re-decode costs one inference per tick (~0.1 s on Apple silicon for ≤15 s of
 // audio) which comfortably outruns the update cadence.
 final class RedecodeStreamingTranscription: StreamingTranscription, @unchecked Sendable {
-    // New audio required before another decode is worth it.
-    private static let minNewSamples = 4_800          // 0.3 s, also the model's floor
-    private static let tickInterval: UInt64 = 250_000_000   // 0.25 s poll
+    // The model's floor: shorter audio than this can't be decoded at all.
+    private static let minSamples = 4_800             // 0.3 s
+    // New audio required before another decode is worth it. Below the floor on
+    // purpose — a word is only released once two decodes agree on it, so a
+    // tighter cadence is what keeps that confirmation feeling immediate. The
+    // pump awaits each decode, so it can never outrun the hardware.
+    private static let minNewSamples = 3_200          // 0.2 s
+    private static let tickInterval: UInt64 = 150_000_000   // 0.15 s poll
 
     private let decode: @Sendable ([Float]) async throws -> String
     private let lock = NSLock()
@@ -145,16 +153,24 @@ final class RedecodeStreamingTranscription: StreamingTranscription, @unchecked S
         (updateStream, updateContinuation) = AsyncStream.makeStream(of: LiveTranscript.self)
         pumpTask = Task { [weak self] in
             var decodedCount = 0
+            var stable = StableTranscript()
             while let self {
                 let (snapshot, done) = self.snapshotBuffer()
-                if snapshot.count - decodedCount >= Self.minNewSamples,
-                   snapshot.count >= Self.minNewSamples {
+                if snapshot.count >= Self.minSamples,
+                   snapshot.count - decodedCount >= Self.minNewSamples {
                     decodedCount = snapshot.count
-                    if let text = try? await self.decode(snapshot) {
-                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty {
-                            self.updateContinuation.yield(LiveTranscript(confirmed: "", volatile: trimmed))
-                        }
+                    // A preview that is nothing but a filler is withheld: two
+                    // consecutive decodes of the same room tone agree on
+                    // "Yeah." as readily as on a real word, so without this the
+                    // preview types a phantom and the commit has to take it
+                    // back. No confidence to weigh here (a decode pass returns
+                    // text only), and none is needed — either speech follows
+                    // and the filler stops being the whole transcript, or the
+                    // commit re-decodes and rules on it with PhantomFilter.
+                    if let text = try? await self.decode(snapshot),
+                       !PhantomFilter.isFillerOnly(text),
+                       let confirmed = stable.accept(text), !confirmed.isEmpty {
+                        self.updateContinuation.yield(LiveTranscript(confirmed: confirmed, volatile: ""))
                     }
                 }
                 if done { break }
@@ -186,7 +202,11 @@ final class RedecodeStreamingTranscription: StreamingTranscription, @unchecked S
         markFinished()
         await pumpTask?.value
         let (samples, _) = snapshotBuffer()
-        let text = samples.count >= Self.minNewSamples ? try await decode(samples) : ""
+        var text = samples.count >= Self.minSamples ? try await decode(samples) : ""
+        // Same rule the preview stream runs on, for the same reason — this is
+        // the end of that stream, not the committed dictation (which goes
+        // through transcribe(samples:) and gets the confidence-aware check).
+        if PhantomFilter.isFillerOnly(text) { text = "" }
         return Transcription(text: text,
                              confidence: 1,
                              audioDuration: Double(samples.count) / 16_000,

@@ -17,10 +17,22 @@ struct OnboardingView: View {
     }
 
     enum Step: Int, CaseIterable {
-        case welcome, access, voice, tryIt
+        case welcome, access, voice, tryIt, features
+
+        // Harness hook: ALOUD_ONBOARDING_STEP=tryIt opens the flow on a later
+        // screen so a screen can be inspected without clicking through.
+        static var initial: Step {
+            switch ProcessInfo.processInfo.environment["ALOUD_ONBOARDING_STEP"] {
+            case "access": return .access
+            case "voice": return .voice
+            case "tryIt": return .tryIt
+            case "features": return .features
+            default: return .welcome
+            }
+        }
     }
 
-    @State private var step: Step = .welcome
+    @State private var step: Step = .initial
     @State private var micStatus = Permissions.microphone
     @State private var axStatus = Permissions.accessibility
     @State private var tryItDone = false
@@ -28,6 +40,9 @@ struct OnboardingView: View {
     @State private var networkMonitor = NWPathMonitor()
     @State private var startingBasic = false
     @State private var basicUnavailable = false
+    @State private var openedAccessibility = false
+    // Which feature tile has its explanation open (one at a time).
+    @State private var openFeature: String?
 
     private let poll = Timer.publish(every: 0.8, on: .main, in: .common).autoconnect()
 
@@ -98,6 +113,7 @@ struct OnboardingView: View {
         case .access: access
         case .voice: voice
         case .tryIt: tryIt
+        case .features: features
         }
     }
 
@@ -150,6 +166,7 @@ struct OnboardingView: View {
                               detail: loc("Types your words, and makes the key work in every app."),
                               granted: axStatus == .granted,
                               actionLabel: loc("Open Settings")) {
+                        openedAccessibility = true
                         Permissions.openAccessibilitySettings()
                     }
                 }
@@ -158,9 +175,15 @@ struct OnboardingView: View {
                     .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
 
                 if axStatus != .granted {
-                    Text(loc("In System Settings, turn on the switch next to Aloud. This screen continues on its own."))
+                    // After an update macOS often keeps a stale entry: the
+                    // switch reads on while the app isn't actually trusted.
+                    // Once they've been over there and it still hasn't taken,
+                    // that's the likely reason — say so.
+                    Text(openedAccessibility
+                         ? loc("Switch already on? Turn it off and on again — macOS keeps a stale entry after an update.")
+                         : loc("In System Settings, turn on the switch next to Aloud. This screen continues on its own."))
                         .font(.footnote)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -191,8 +214,10 @@ struct OnboardingView: View {
                     .foregroundStyle(.green)
                     .accessibilityLabel(loc("Allowed"))
             } else {
+                // Fixed width so the two rows' buttons share an edge rather
+                // than ending wherever their label happens to stop.
                 Button(actionLabel, action: action)
-                    .buttonStyle(OnboardingButtonStyle(minWidth: 0))
+                    .buttonStyle(OnboardingButtonStyle(minWidth: 100))
             }
         }
         .padding(.horizontal, 12)
@@ -282,6 +307,45 @@ struct OnboardingView: View {
         }
     }
 
+    // The one setting worth choosing before the first real dictation: how much
+    // Aloud tidies what you said. It sits here, under the words the user just
+    // spoke, because that's the only place the choice is concrete — and it's
+    // the same card as the permission rows, so the flow gains no new shape.
+    // Say it again after switching and the difference is right there.
+    private var cleanUp: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "wand.and.sparkles")
+                .font(.system(size: 17))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(loc("Clean-up"))
+                    .font(.callout.weight(.semibold))
+                // Reserved space: the row can't change height as the
+                // explanation changes underneath the picker.
+                Text(settings.polishLevel.explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2, reservesSpace: true)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Picker("", selection: $settings.polishLevel) {
+                ForEach(controller.availableLevels) { level in
+                    Text(level.displayName).tag(level)
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+        .frame(maxWidth: 380)
+    }
+
     private var tryIt: some View {
         screen(symbol: "quote.bubble",
                title: loc("Try It"),
@@ -290,6 +354,7 @@ struct OnboardingView: View {
                 TextField(loc("Your words will appear here"), text: .constant(controller.lastTranscription))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 300)
+                cleanUp
                 if controller.usingFallback {
                     // First impressions happen on the basic engine after a
                     // skip — make clear this isn't Aloud at full strength.
@@ -309,16 +374,120 @@ struct OnboardingView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 if tryItDone {
-                    Text(loc("Tip: double-press %@ to keep listening hands-free. Esc finishes.", settings.hotkey.displayName))
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                    primaryButton(loc("Done")) { onFinished() }
+                    primaryButton(loc("Continue")) { advance() }
                 } else {
-                    secondaryButton(loc("Skip for now")) { onFinished() }
+                    secondaryButton(loc("Skip for now")) { advance() }
                 }
             }
         }
+    }
+
+    // MARK: what else Aloud does
+
+    // A map, not a manual: six things the user would otherwise never find,
+    // two words each. The ⓘ opens the same quiet popover History uses — the
+    // sentence is there for whoever wants it, and costs nothing to whoever
+    // doesn't. Nothing here needs doing now, so the only button is the exit.
+    private struct Feature: Identifiable {
+        let id: String
+        let symbol: String
+        let title: String
+        let tagline: String
+        let detail: String
+    }
+
+    private var featureList: [Feature] {
+        var items = [
+            Feature(id: "handsFree", symbol: "ear",
+                    title: loc("Hands-free"), tagline: loc("Talk without holding"),
+                    detail: settings.handsFreeHotkey.map {
+                        loc("Press %@ and Aloud keeps listening until you press Esc — good for long thoughts.", $0.displayName)
+                    } ?? loc("Double-press %@ and Aloud keeps listening until you press Esc — good for long thoughts.",
+                             settings.hotkey.displayName)),
+            Feature(id: "vocabulary", symbol: "character.book.closed",
+                    title: loc("Vocabulary"), tagline: loc("Fix words it mishears"),
+                    detail: loc("Teach Aloud a name, a product, a term of art — it types your spelling from then on.")),
+            Feature(id: "snippets", symbol: "text.insert",
+                    title: loc("Snippets"), tagline: loc("Short phrase, long text"),
+                    detail: loc("Say “my email” as the whole dictation and Aloud types the address instead.")),
+            Feature(id: "appRules", symbol: "macwindow",
+                    title: loc("App Rules"), tagline: loc("Match each app’s tone"),
+                    detail: loc("Aloud reads the app you’re in and writes to suit it. Pin the style yourself when you’d rather decide.")),
+            Feature(id: "history", symbol: "clock",
+                    title: loc("History"), tagline: loc("Find anything you said"),
+                    detail: loc("Every dictation is searchable, and never leaves this Mac. Copy it again, or correct it and teach Aloud the right words.")),
+            Feature(id: "scratchpad", symbol: "note.text",
+                    title: loc("Scratchpad"), tagline: loc("A note that floats"),
+                    detail: loc("A small always-on-top window to dictate into when there’s nowhere else to put the words.")),
+        ]
+        if controller.commandsAvailable {
+            // Only where the on-device engine exists — elsewhere the tile
+            // would describe a key the user can never make work.
+            items.insert(Feature(id: "commands", symbol: "wand.and.sparkles",
+                                 title: loc("Voice commands"), tagline: loc("Say what to change"),
+                                 detail: loc("Set a command key in Settings, then hold it and say what to do: rewrite or translate the selected text, or write something new.")),
+                         at: 3)
+            items.removeAll { $0.id == "scratchpad" }
+        }
+        return items
+    }
+
+    private var features: some View {
+        // Echoes the grid below it, the way each screen's glyph names its own
+        // content (waveform, lock, download arrow, speech bubble).
+        screen(symbol: "square.grid.2x2",
+               title: loc("What Else Aloud Does"),
+               message: loc("Nothing to set up now — this is just so you know it’s there.")) {
+            VStack(spacing: 14) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8),
+                                    GridItem(.flexible(), spacing: 8)],
+                          spacing: 8) {
+                    ForEach(featureList) { feature in
+                        featureTile(feature)
+                    }
+                }
+                primaryButton(loc("Start Using Aloud")) { onFinished() }
+            }
+        }
+    }
+
+    private func featureTile(_ feature: Feature) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: feature.symbol)
+                .font(.system(size: 15))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(feature.title)
+                    .font(.callout.weight(.semibold))
+                Text(feature.tagline)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .lineLimit(1)
+            Spacer(minLength: 4)
+            Button {
+                openFeature = openFeature == feature.id ? nil : feature.id
+            } label: {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(loc("What this does"))
+            .popover(isPresented: Binding(get: { openFeature == feature.id },
+                                          set: { if !$0, openFeature == feature.id { openFeature = nil } }),
+                     arrowEdge: .bottom) {
+                Text(feature.detail)
+                    .font(.callout)
+                    .frame(width: 260, alignment: .leading)
+                    .padding(14)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
     }
 
     // MARK: chrome
@@ -398,7 +567,7 @@ struct OnboardingView: View {
         switch s {
         case .access: return Permissions.allGranted
         case .voice: return controller.transcriberState == .ready
-        case .welcome, .tryIt: return false
+        case .welcome, .tryIt, .features: return false
         }
     }
 }

@@ -28,18 +28,27 @@ enum PolishLevel: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    // Each one stands on its own: the picker shows a single line at a time, so
+    // "also…" told the user nothing unless they'd just read the line above.
     var explanation: String {
         switch self {
-        case .off: return loc("Exactly what you said, word for word.")
-        case .light: return loc("Removes “um” and “uh”, tidies spacing, capitalizes names.")
-        case .standard: return loc("Also honors “scratch that” corrections and your replacements.")
-        case .concise: return loc("Rewrites your words to be tighter — entirely on this Mac.")
+        case .off: return loc("Types exactly what you said, word for word.")
+        case .light: return loc("Drops “um” and “uh”, fixes spacing, capitalizes names.")
+        case .standard: return loc("Light clean-up, plus spoken fixes like “scratch that” and your Vocabulary words.")
+        case .concise: return loc("Standard clean-up, then tightens the wording.")
         }
     }
 
     // The rule-based level that runs before (or instead of) the rewrite.
     var deterministicLevel: PolishLevel {
         self == .concise ? .standard : self
+    }
+
+    /// Vocabulary replacements and spoken corrections belong to the Standard
+    /// pass, so the two lighter levels never see them. Settings dims the
+    /// Vocabulary pane on this.
+    var appliesVocabulary: Bool {
+        deterministicLevel == .standard
     }
 }
 
@@ -60,6 +69,21 @@ struct TextPolisher {
     // intent stripped out. Off only for the rewrite's input; the fallback
     // text keeps the deterministic behavior.
     var spokenCorrections = true
+    // Spoken numbers are written out as digits (and as times, dates, money,
+    // percentages) from .light up — "3 PM" is not a rewrite of "three p.m.",
+    // it is how the words are spelled. The rules are language-specific, so the
+    // declared dictation languages come along; a language the tables don't
+    // cover is left untouched.
+    var languages: [String] = ["en"]
+    // A preview's last number is still being spoken — "three" may yet become
+    // "three thirty". The trailing phrase waits for the next update rather
+    // than being typed and rewritten a moment later.
+    var finalPass = true
+    // Proper-noun capitalization asks the system name tagger about a word in
+    // the context of the whole sentence — and its verdict flips as that
+    // sentence grows, so during live typing it keeps re-casing words the user
+    // is already reading. Previews turn it off; the committed text gets it.
+    var capitalizeNames = true
 
     // Fillers stripped in .light and above. Deliberately short: only sounds
     // that carry no meaning in any context. ("like"/"you know" can be real
@@ -82,7 +106,10 @@ struct TextPolisher {
             text = Self.applyReplacements(text, replacements)
         }
 
+        text = NumberNormalizer.normalize(text, languages: languages, holdTail: !finalPass)
+
         text = Self.tidy(text)
+        guard capitalizeNames else { return text }
         // Words the replacements just produced are the user's exact spelling —
         // the name pass must never second-guess them.
         let protected = level == .standard

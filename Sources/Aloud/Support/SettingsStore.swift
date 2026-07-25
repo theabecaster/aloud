@@ -177,6 +177,24 @@ final class SettingsStore: ObservableObject {
         statsDictations += 1
     }
 
+    /// Two slots holding the same key means one of them silently never fires.
+    /// The dictation key wins every tie, and the hands-free key beats the
+    /// command key; losers are cleared rather than left in Settings looking
+    /// like they still do something. Returns true when anything was dropped.
+    @discardableResult
+    func dropCollidingKeys() -> Bool {
+        var dropped = false
+        if handsFreeHotkey == hotkey {
+            handsFreeHotkey = nil
+            dropped = true
+        }
+        if let command = commandHotkey, command == hotkey || command == handsFreeHotkey {
+            commandHotkey = nil
+            dropped = true
+        }
+        return dropped
+    }
+
     private static func loadHotkey(from defaults: UserDefaults) -> Hotkey? {
         guard let data = defaults.data(forKey: Keys.hotkey) else { return nil }
         return try? JSONDecoder().decode(Hotkey.self, from: data)

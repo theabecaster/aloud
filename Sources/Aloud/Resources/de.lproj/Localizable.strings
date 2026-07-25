@@ -1,17 +1,17 @@
 /* Menu bar */
-"Relaunch to Finish Update…" = "Neu starten, um das Update abzuschließen…";
-"Finish Setup…" = "Einrichtung abschließen…";
-"Download Voice Recognition…" = "Spracherkennung laden…";
-"Retry Voice Download…" = "Sprachdownload erneut versuchen…";
+"Relaunch to Finish Update" = "Neu starten, um das Update abzuschließen";
+"Finish Setup" = "Einrichtung abschließen";
+"Download Voice Recognition" = "Spracherkennung laden";
+"Retry Voice Download" = "Sprachdownload erneut versuchen";
 "Improving accuracy…" = "Genauigkeit wird verbessert…";
 "Improving accuracy… %ld%%" = "Genauigkeit wird verbessert… %ld %%";
-"Type Exact Words Instead" = "Stattdessen die exakten Wörter eingeben";
-"Retry Last Dictation" = "Letztes Diktat wiederholen";
-"Copy Last Dictation" = "Letztes Diktat kopieren";
+"Copy Last Text" = "Letzten Text kopieren";
+"Type It Again" = "Erneut eintippen";
+"Use Exact Words" = "Exakte Wörter verwenden";
 "Scratchpad" = "Notizzettel";
-"Settings…" = "Einstellungen…";
-"Update Available (%@)…" = "Update verfügbar (%@)…";
-"Check for Updates…" = "Nach Updates suchen…";
+"Settings" = "Einstellungen";
+"Update Available (%@)" = "Update verfügbar (%@)";
+"Check for Updates" = "Nach Updates suchen";
 "Quit Aloud" = "Aloud beenden";
 
 /* Menu bar status line */
@@ -77,7 +77,7 @@
 "Uninstall Aloud?" = "Aloud deinstallieren?";
 "This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind." = "Dies entfernt die App, die geladene Spracherkennung sowie alle Einstellungen und den Verlauf von diesem Mac. Es bleibt nichts zurück.";
 "Uninstall" = "Deinstallieren";
-"Uninstall Aloud…" = "Aloud deinstallieren…";
+"Uninstall Aloud" = "Aloud deinstallieren";
 
 /* Settings sidebar */
 "General" = "Allgemein";
@@ -104,15 +104,11 @@
 
 /* Settings — keys */
 "Dictation key" = "Diktiertaste";
-"Hold to talk, release to type. Esc while holding cancels. Extra mouse buttons work too." = "Halten zum Sprechen, loslassen zum Schreiben. Esc beim Halten bricht ab. Zusätzliche Maustasten funktionieren auch.";
 "Hands-free mode" = "Freisprechmodus";
 "Hands-free key" = "Freisprechtaste";
 "Remove the hands-free key" = "Freisprechtaste entfernen";
-"Double-press the dictation key — or set a key of its own — to keep listening without holding. Esc finishes and types everything." = "Drücke die Diktattaste zweimal – oder lege eine eigene Taste fest –, um ohne Halten weiterzuhören. Esc beendet und schreibt alles.";
-"Off: the dictation key only listens while you hold it." = "Aus: Die Diktattaste hört nur, solange du sie hältst.";
 "Command key" = "Befehlstaste";
 "Remove the command key" = "Befehlstaste entfernen";
-"Optional. Hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Optional. Halte sie gedrückt und sag, was zu tun ist: markierten Text umschreiben oder übersetzen, oder etwas Neues an der Einfügemarke schreiben.";
 "Press a key…" = "Taste drücken…";
 "None" = "Keine";
 
@@ -142,37 +138,35 @@
 "Light" = "Leicht";
 "Standard" = "Standard";
 "Concise" = "Prägnant";
-"Exactly what you said, word for word." = "Exakt das, was Sie gesagt haben, Wort für Wort.";
-"Removes “um” and “uh”, tidies spacing, capitalizes names." = "Entfernt „um“ und „uh“, ordnet Abstände und schreibt Namen groß.";
-"Also honors “scratch that” corrections and your replacements." = "Berücksichtigt zusätzlich gesprochene Korrekturen wie „scratch that“ sowie Ihre Ersetzungen.";
-"Rewrites your words to be tighter — entirely on this Mac." = "Formuliert Ihre Worte knapper – vollständig auf diesem Mac.";
+"Types exactly what you said, word for word." = "Tippt exakt das, was du gesagt hast – Wort für Wort.";
+"Drops “um” and “uh”, fixes spacing, capitalizes names." = "Entfernt „um“ und „uh“, korrigiert Abstände und schreibt Namen groß.";
+"Light clean-up, plus spoken fixes like “scratch that” and your Vocabulary words." = "Die leichte Bereinigung, dazu gesprochene Korrekturen wie „scratch that“ und deine Wörter aus dem Vokabular.";
+"Standard clean-up, then tightens the wording." = "Die Standard-Bereinigung, danach wird die Formulierung gestrafft.";
 
 /* Settings — list editors (Vocabulary, Snippets, App Rules) */
-"Add one below." = "Füge unten einen hinzu.";
+"Nothing here yet — add one below." = "Noch nichts – füge unten etwas hinzu.";
+"Corrections" = "Korrekturen";
 "Remove" = "Entfernen";
 "Add" = "Hinzufügen";
 
 /* Settings — vocabulary */
-"Words Aloud keeps getting wrong — a name, a product, a term of art. You can also add these from History with “Fix…”." = "Wörter, die Aloud immer wieder falsch versteht – ein Name, ein Produkt, ein Fachbegriff. Du kannst sie auch im Verlauf mit „Korrigieren…“ hinzufügen.";
-"No Corrections Yet" = "Noch keine Korrekturen";
+"Words Aloud keeps getting wrong — a name, a product, a term of art. You can also add these from History with “Fix”." = "Wörter, die Aloud immer wieder falsch versteht – ein Name, ein Produkt, ein Fachbegriff. Du kannst sie auch im Verlauf mit „Korrigieren“ hinzufügen.";
 "Aloud types…" = "Aloud schreibt…";
 "It should be…" = "Es sollte heißen…";
 
 /* Settings — snippets */
 "Say a short phrase as a whole dictation and Aloud types the long version — say “my email”, get your address." = "Sag einen kurzen Satz als ganzes Diktat und Aloud schreibt die lange Fassung – sag „meine E-Mail“ und deine Adresse steht da.";
-"No Snippets Yet" = "Noch keine Textbausteine";
 "When you say…" = "Wenn Sie sagen…";
 
 /* Settings — app rules */
 "Pin how Aloud writes in one app. Without a rule it adapts on its own — chat, email, notes, and code all read differently." = "Lege fest, wie Aloud in einer bestimmten App schreibt. Ohne Regel passt es sich selbst an – Chat, E-Mail, Notizen und Code lesen sich anders.";
-"No App Rules" = "Keine App-Regeln";
 "App" = "App";
 "Behavior" = "Verhalten";
-"Choose an app…" = "App auswählen…";
-"Other app…" = "Andere App…";
+"Choose an app" = "App auswählen";
+"Other app" = "Andere App";
 "Exact words" = "Exakte Wörter";
 "%@ style" = "Stil „%@“";
-"Custom instruction…" = "Eigene Anweisung…";
+"Custom instruction" = "Eigene Anweisung";
 "Bundle ID, e.g. com.example.app" = "Bundle-ID, z. B. com.example.app";
 "How should it be written there? e.g. Warm and upbeat." = "Wie soll dort geschrieben werden? Z. B.: warm und locker.";
 "“%@”" = "„%@“";
@@ -193,9 +187,10 @@
 "Keep" = "Behalten";
 "%ld dictations" = "%ld Diktate";
 "Clear History" = "Verlauf löschen";
+"less than a minute ago" = "vor weniger als einer Minute";
 "Show original" = "Original einblenden";
 "Hide original" = "Original ausblenden";
-"Fix…" = "Korrigieren…";
+"Fix" = "Korrigieren";
 "Correct this dictation and teach Aloud the right words" = "Dieses Diktat korrigieren und Aloud die richtigen Wörter beibringen";
 "Copy" = "Kopieren";
 "Copy Original" = "Original kopieren";
@@ -268,3 +263,38 @@
 
 "Polishing…" = "Wird verfeinert …";
 "Kept your exact words — Aloud never rewrites here" = "Ihre exakten Worte wurden übernommen – Aloud formuliert hier nie um";
+"Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too." = "%@ halten zum Sprechen, loslassen zum Tippen. Esc währenddessen bricht ab. Zusätzliche Maustasten funktionieren auch.";
+"Double-press %@ to keep listening after you let go. Esc finishes and types everything." = "%@ zweimal drücken, damit Aloud nach dem Loslassen weiter zuhört. Esc beendet und tippt alles.";
+"Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "%1$@ drücken, um das Zuhören zu starten, dann Esc – oder erneut %1$@ – zum Beenden und Tippen. Zweimal %2$@ funktioniert weiterhin.";
+"Off — %@ only listens while you hold it." = "Aus – %@ hört nur zu, solange du sie hältst.";
+"Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Optional. Wähle eine Taste, halte sie und sag, was zu tun ist: markierten Text umschreiben oder übersetzen oder etwas Neues an der Einfügemarke schreiben.";
+"Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "%@ halten und sagen, was zu tun ist: markierten Text umschreiben oder übersetzen oder etwas Neues an der Einfügemarke schreiben.";
+"Tip: press %@ to keep listening hands-free. Esc finishes." = "Tipp: %@ drücken, um freihändig weiterzudiktieren. Esc beendet.";
+"%1$@ is already your %2$@." = "%1$@ ist bereits deine %2$@.";
+"dictation key" = "Diktattaste";
+"hands-free key" = "Freihändig-Taste";
+"command key" = "Befehlstaste";
+"These words aren’t applied while Clean-up is %@." = "Diese Wörter werden nicht angewendet, solange die Bereinigung auf %@ steht.";
+"Use Standard" = "Standard verwenden";
+"Not in use — Clean-up is set to %@." = "Nicht in Verwendung – die Bereinigung steht auf %@.";
+"What Else Aloud Does" = "Was Aloud sonst noch kann";
+"Nothing to set up now — this is just so you know it’s there." = "Jetzt ist nichts einzurichten – das ist nur, damit du weißt, dass es das gibt.";
+"Start Using Aloud" = "Aloud verwenden";
+"What this does" = "Was das macht";
+"Hands-free" = "Freihändig";
+"Talk without holding" = "Sprechen ohne Halten";
+"Press %@ and Aloud keeps listening until you press Esc — good for long thoughts." = "%@ drücken und Aloud hört weiter zu, bis du Esc drückst – gut für lange Gedanken.";
+"Double-press %@ and Aloud keeps listening until you press Esc — good for long thoughts." = "%@ zweimal drücken und Aloud hört weiter zu, bis du Esc drückst – gut für lange Gedanken.";
+"Fix words it mishears" = "Falsch Gehörtes korrigieren";
+"Teach Aloud a name, a product, a term of art — it types your spelling from then on." = "Bring Aloud einen Namen, ein Produkt, einen Fachbegriff bei – danach tippt es deine Schreibweise.";
+"Short phrase, long text" = "Kurze Phrase, langer Text";
+"Say “my email” as the whole dictation and Aloud types the address instead." = "Sag „meine E-Mail“ als ganzes Diktat und Aloud tippt stattdessen die Adresse.";
+"Match each app’s tone" = "Ton je App";
+"Aloud reads the app you’re in and writes to suit it. Pin the style yourself when you’d rather decide." = "Aloud erkennt die App, in der du bist, und schreibt passend dazu. Leg den Stil selbst fest, wenn du lieber entscheidest.";
+"Find anything you said" = "Alles Gesagte finden";
+"Every dictation is searchable, and never leaves this Mac. Copy it again, or correct it and teach Aloud the right words." = "Jedes Diktat ist durchsuchbar und verlässt diesen Mac nie. Kopier es erneut oder korrigier es und bring Aloud die richtigen Wörter bei.";
+"A note that floats" = "Eine schwebende Notiz";
+"A small always-on-top window to dictate into when there’s nowhere else to put the words." = "Ein kleines Fenster immer im Vordergrund, zum Hineindiktieren, wenn die Wörter sonst nirgends hinsollen.";
+"Voice commands" = "Sprachbefehle";
+"Say what to change" = "Sag, was sich ändern soll";
+"Set a command key in Settings, then hold it and say what to do: rewrite or translate the selected text, or write something new." = "Leg in den Einstellungen eine Befehlstaste fest, halte sie und sag, was zu tun ist: markierten Text umschreiben oder übersetzen oder etwas Neues schreiben.";
