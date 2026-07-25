@@ -12,10 +12,10 @@ final class SettingsStore: ObservableObject {
     init(defaults: UserDefaults = SettingsStore.resolveDefaults()) {
         self.defaults = defaults
         hotkey = Self.loadHotkey(from: defaults) ?? .default
-        handsFreeHotkey = (defaults.data(forKey: Keys.handsFreeHotkey))
-            .flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) }
-        commandHotkey = (defaults.data(forKey: Keys.commandHotkey))
-            .flatMap { try? JSONDecoder().decode(Hotkey.self, from: $0) }
+        handsFreeHotkey = Self.loadOptionalHotkey(from: defaults, key: Keys.handsFreeHotkey,
+                                                  fallback: .defaultHandsFreeKey)
+        commandHotkey = Self.loadOptionalHotkey(from: defaults, key: Keys.commandHotkey,
+                                                fallback: .defaultCommandKey)
         launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
         microphoneUID = defaults.string(forKey: Keys.microphoneUID)
         onboardingComplete = defaults.bool(forKey: Keys.onboardingComplete)
@@ -81,7 +81,7 @@ final class SettingsStore: ObservableObject {
             if let hk = handsFreeHotkey, let data = try? JSONEncoder().encode(hk) {
                 defaults.set(data, forKey: Keys.handsFreeHotkey)
             } else {
-                defaults.removeObject(forKey: Keys.handsFreeHotkey)
+                defaults.set(Data(), forKey: Keys.handsFreeHotkey)  // cleared, not unset
             }
         }
     }
@@ -92,7 +92,7 @@ final class SettingsStore: ObservableObject {
             if let hk = commandHotkey, let data = try? JSONEncoder().encode(hk) {
                 defaults.set(data, forKey: Keys.commandHotkey)
             } else {
-                defaults.removeObject(forKey: Keys.commandHotkey)
+                defaults.set(Data(), forKey: Keys.commandHotkey)  // cleared, not unset
             }
         }
     }
@@ -177,18 +177,21 @@ final class SettingsStore: ObservableObject {
         statsDictations += 1
     }
 
-    /// Two slots holding the same key means one of them silently never fires.
-    /// The dictation key wins every tie, and the hands-free key beats the
-    /// command key; losers are cleared rather than left in Settings looking
-    /// like they still do something. Returns true when anything was dropped.
+    /// Two slots whose keys overlap — the same combo, or one combo contained
+    /// in the other — means one of them silently never fires, or fires on the
+    /// way into the other. The dictation key wins every tie, and the
+    /// hands-free key beats the command key; losers are cleared rather than
+    /// left in Settings looking like they still do something. Returns true
+    /// when anything was dropped.
     @discardableResult
     func dropCollidingKeys() -> Bool {
         var dropped = false
-        if handsFreeHotkey == hotkey {
+        if let hf = handsFreeHotkey, hf.overlaps(hotkey) {
             handsFreeHotkey = nil
             dropped = true
         }
-        if let command = commandHotkey, command == hotkey || command == handsFreeHotkey {
+        if let command = commandHotkey,
+           command.overlaps(hotkey) || handsFreeHotkey.map(command.overlaps) == true {
             commandHotkey = nil
             dropped = true
         }
@@ -198,5 +201,15 @@ final class SettingsStore: ObservableObject {
     private static func loadHotkey(from defaults: UserDefaults) -> Hotkey? {
         guard let data = defaults.data(forKey: Keys.hotkey) else { return nil }
         return try? JSONDecoder().decode(Hotkey.self, from: data)
+    }
+
+    // Optional key slots ship with a default. Never-set → the default; an
+    // empty-data sentinel remembers "the user cleared this" across launches
+    // (removing the key entirely would resurrect the default).
+    private static func loadOptionalHotkey(from defaults: UserDefaults, key: String,
+                                           fallback: Hotkey) -> Hotkey? {
+        guard let data = defaults.data(forKey: key) else { return fallback }
+        guard !data.isEmpty else { return nil }
+        return (try? JSONDecoder().decode(Hotkey.self, from: data)) ?? fallback
     }
 }

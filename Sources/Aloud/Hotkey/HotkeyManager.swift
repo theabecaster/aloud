@@ -23,6 +23,97 @@ enum HotkeyAction: Equatable {
     case none
 }
 
+// Tracks the physical down/up of one hotkey — lone modifier, modifier chord,
+// key + modifiers, or mouse button + modifiers — from raw tap events. Pure;
+// the engines above it decide what a press means.
+struct KeyPressTracker {
+    let hotkey: Hotkey
+    private(set) var isDown = false
+    private var lastChordFlags: CGEventFlags = []
+
+    enum Event: Equatable {
+        case down           // the hotkey's keys are now all held
+        case up             // a member was released
+        case interrupted    // another key/button/modifier arrived while held
+        case none
+    }
+
+    init(hotkey: Hotkey) {
+        self.hotkey = hotkey
+    }
+
+    mutating func reset() {
+        isDown = false
+        lastChordFlags = []
+    }
+
+    mutating func handle(type: CGEventType, keyCode: UInt16, flags: CGEventFlags) -> Event {
+        switch type {
+        case .flagsChanged:
+            let current = flags.intersection(Hotkey.chordable)
+            defer { lastChordFlags = current }
+            if hotkey.isChord {
+                let mask = hotkey.chordMask
+                if !isDown {
+                    // Down only when the exact chord is reached by *pressing*
+                    // (from a proper subset) — releasing ⌘ out of ⌃⌥⌘ must
+                    // not fire a ⌃⌥ hotkey.
+                    guard current == mask, lastChordFlags != mask,
+                          lastChordFlags.isSubset(of: mask) else { return .none }
+                    isDown = true
+                    return .down
+                }
+                if !mask.isSubset(of: current) {    // a member came up
+                    isDown = false
+                    return .up
+                }
+                if current != mask { return .interrupted }  // extra modifier joined
+                return .none
+            }
+            guard hotkey.isModifierKey, keyCode == hotkey.keyCode,
+                  let flag = hotkey.modifierFlag else { return .none }
+            let nowDown = flags.contains(flag)
+            if nowDown && !isDown { isDown = true; return .down }
+            if !nowDown && isDown { isDown = false; return .up }
+            return .none
+
+        case .otherMouseDown:
+            if hotkey.isMouseButton, keyCode == hotkey.keyCode, !isDown, flagsMatch(flags) {
+                isDown = true
+                return .down
+            }
+            return isDown ? .interrupted : .none
+
+        case .otherMouseUp:
+            guard hotkey.isMouseButton, keyCode == hotkey.keyCode, isDown else { return .none }
+            isDown = false
+            return .up
+
+        case .keyDown:
+            if !hotkey.isModifierKey, !hotkey.isMouseButton, keyCode == hotkey.keyCode,
+               !isDown, flagsMatch(flags) {
+                isDown = true
+                return .down
+            }
+            return isDown ? .interrupted : .none
+
+        case .keyUp:
+            guard !hotkey.isModifierKey, !hotkey.isMouseButton, keyCode == hotkey.keyCode, isDown
+            else { return .none }
+            isDown = false
+            return .up
+
+        default:
+            return .none
+        }
+    }
+
+    private func flagsMatch(_ flags: CGEventFlags) -> Bool {
+        flags.intersection(Hotkey.chordable)
+            == CGEventFlags(rawValue: hotkey.modifiers).intersection(Hotkey.chordable)
+    }
+}
+
 // Pure state machine: feed it event type + keycode + flags, get an action.
 //
 // Modes:
@@ -31,82 +122,83 @@ enum HotkeyAction: Equatable {
 //     (recording, begun on the second press, continues); another double-tap
 //     or Esc finishes → .commit. Single presses while locked are ignored.
 //   Esc while *holding* cancels.
+//   A foreign key right after the press means the user was typing a shortcut
+//   that shares our keys (⌥→ word-jump, ⌃⌥← window snap) — cancel quietly.
+//   Past the grace window they're clearly dictating; stray keys are ignored
+//   so a long dictation can't be lost to a brushed key.
 struct HotkeyEngine {
-    var hotkey: Hotkey
+    var hotkey: Hotkey {
+        didSet { tracker = KeyPressTracker(hotkey: hotkey) }
+    }
     // When false, double-pressing never locks — the key only works while held.
     var handsFreeEnabled: Bool
-    private(set) var isHeld = false
     private(set) var isLocked = false
+    private var tracker: KeyPressTracker
     private var pressTime: TimeInterval = 0
     private var lastTapTime: TimeInterval = -1
+    // The engine's session state, distinct from tracker.isDown: Esc or a
+    // foreign-key cancel ends the session while the keys are still physically
+    // held, and the leftover release must not commit anything.
+    private var heldSession = false
+
+    var isHeld: Bool { heldSession }
 
     // Holds shorter than this are accidental taps — recording still starts
     // instantly on press; the *commit* is suppressed for sub-threshold holds.
     static let minimumHold: TimeInterval = 0.15
     // Two taps within this window arm hands-free mode.
     static let doubleTapWindow: TimeInterval = 0.4
+    // A foreign key inside this window after press = shortcut, not speech.
+    static let graceWindow: TimeInterval = 0.5
 
     init(hotkey: Hotkey, handsFreeEnabled: Bool = true) {
         self.hotkey = hotkey
         self.handsFreeEnabled = handsFreeEnabled
+        tracker = KeyPressTracker(hotkey: hotkey)
     }
 
     // Back to idle, forgetting any held/locked state and pending double-tap.
     mutating func reset() {
-        isHeld = false
+        heldSession = false
         isLocked = false
         lastTapTime = -1
+        tracker.reset()
     }
 
     // Jump straight to a hands-free session (the dedicated hands-free key
     // skips the double-tap dance). Caller emits .begin/.lock itself.
     mutating func forceLock() {
-        isHeld = false
+        heldSession = false
         isLocked = true
         lastTapTime = -1
     }
 
     mutating func handle(type: CGEventType, keyCode: UInt16, flags: CGEventFlags,
                          time: TimeInterval) -> HotkeyAction {
-        switch type {
-        case .flagsChanged:
-            guard hotkey.isModifierKey, keyCode == hotkey.keyCode, let flag = hotkey.modifierFlag else { return .none }
-            let nowDown = flags.contains(flag)
-            if nowDown && !isHeld {
-                return press(time: time)
-            } else if !nowDown && isHeld {
-                return release(time: time)
-            }
-            return .none
-
-        case .otherMouseDown:
-            guard hotkey.isMouseButton, keyCode == hotkey.keyCode, !isHeld else { return .none }
+        if type == .keyDown, keyCode == UInt16(kVK_Escape), heldSession || isLocked {
+            // Esc finishes a hands-free session (all that dictation should
+            // type, not vanish) but discards a held one. The tracker resets
+            // with it so a re-press can begin fresh even if the keys were
+            // never fully released; the leftover release is then a no-op.
+            let wasLocked = isLocked
+            heldSession = false; isLocked = false; lastTapTime = -1
+            tracker.reset()
+            return wasLocked ? .commit : .cancel
+        }
+        switch tracker.handle(type: type, keyCode: keyCode, flags: flags) {
+        case .down:
             return press(time: time)
-
-        case .otherMouseUp:
-            guard hotkey.isMouseButton, keyCode == hotkey.keyCode, isHeld else { return .none }
+        case .up:
+            guard heldSession else { return .none }  // session already ended by Esc/foreign key
             return release(time: time)
-
-        case .keyDown:
-            if keyCode == UInt16(kVK_Escape), isHeld || isLocked {
-                // Esc finishes a hands-free session (all that dictation should
-                // type, not vanish) but discards a held one.
-                let wasLocked = isLocked
-                isHeld = false; isLocked = false; lastTapTime = -1
-                return wasLocked ? .commit : .cancel
-            }
-            guard !hotkey.isModifierKey, !hotkey.isMouseButton, keyCode == hotkey.keyCode, !isHeld,
-                  flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).rawValue
-                    == CGEventFlags(rawValue: hotkey.modifiers).intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).rawValue
-            else { return .none }
-            return press(time: time)
-
-        case .keyUp:
-            guard !hotkey.isModifierKey, !hotkey.isMouseButton, keyCode == hotkey.keyCode, isHeld
-            else { return .none }
-            return release(time: time)
-
-        default:
+        case .interrupted:
+            // Another key while we're held: within the grace window it was a
+            // shortcut sharing our modifiers — bow out. Later it's a brush.
+            guard heldSession, !isLocked, (time - pressTime) < Self.graceWindow else { return .none }
+            heldSession = false
+            lastTapTime = -1
+            return .cancel
+        case .none:
             return .none
         }
     }
@@ -114,26 +206,26 @@ struct HotkeyEngine {
     private mutating func press(time: TimeInterval) -> HotkeyAction {
         if isLocked {
             // Double-tapping the hotkey again ends hands-free, mirroring how it
-            // began. isHeld stays false so this press's release is swallowed and
-            // lastTapTime is cleared so the pair can't re-arm a new session.
+            // began. heldSession stays false so this press's release is swallowed
+            // and lastTapTime is cleared so the pair can't re-arm a new session.
             if lastTapTime >= 0, (time - lastTapTime) <= Self.doubleTapWindow {
                 isLocked = false
-                isHeld = false
+                heldSession = false
                 lastTapTime = -1
                 return .commit
             }
-            isHeld = true
+            heldSession = true
             pressTime = time
             lastTapTime = time
             return .none
         }
-        isHeld = true
+        heldSession = true
         pressTime = time
         return .begin
     }
 
     private mutating func release(time: TimeInterval) -> HotkeyAction {
-        isHeld = false
+        heldSession = false
         if isLocked {                       // hands-free runs until Esc
             return .none
         }
@@ -209,11 +301,19 @@ final class HotkeyManager {
         set { engine.handsFreeEnabled = newValue }
     }
 
-    // Optional dedicated hands-free key: one press starts a locked session,
-    // another finishes it. Handled ahead of the engine; ignored when it
-    // duplicates the main key.
-    var handsFreeHotkey: Hotkey?
-    private var handsFreeModifierWasDown = false
+    // Optional dedicated hands-free key: one clean tap starts a locked
+    // session, another finishes it. Handled ahead of the engine; ignored when
+    // it duplicates the main key. "Clean" = nothing else pressed between down
+    // and up — ⌃⇧-click or ⌃⌘Space is a shortcut, not a hands-free request.
+    var handsFreeHotkey: Hotkey? {
+        didSet {
+            guard handsFreeHotkey != oldValue else { return }
+            handsFreeTracker = handsFreeHotkey.map(KeyPressTracker.init)
+            handsFreeTapDirty = false
+        }
+    }
+    private var handsFreeTracker: KeyPressTracker?
+    private var handsFreeTapDirty = false
 
     // Optional dedicated command key: hold to speak an instruction, release to
     // run it. A parallel engine (also handled ahead of the main one) so a
@@ -327,42 +427,36 @@ final class HotkeyManager {
         }
     }
 
-    // Detect a press of the dedicated hands-free key. Returns nil when the
-    // event isn't ours (fall through to the engine); .none swallows a release.
+    // Detect a clean tap of the dedicated hands-free key. Returns nil when
+    // the event isn't ours (fall through to the engines); .none swallows an
+    // event that is ours but toggles nothing. The toggle fires on *release*:
+    // if anything else was pressed while the key was down, the user was
+    // typing a shortcut that shares these keys, and nothing happens.
     private func handsFreeKeyAction(type: CGEventType, keyCode: UInt16,
                                     flags: CGEventFlags) -> HotkeyAction? {
-        guard let hk = handsFreeHotkey, hk != engine.hotkey else { return nil }
-        let pressed: Bool
-        switch type {
-        case .otherMouseDown where hk.isMouseButton && keyCode == hk.keyCode:
-            pressed = true
-        case .otherMouseUp where hk.isMouseButton && keyCode == hk.keyCode:
+        guard handsFreeTracker != nil, let hk = handsFreeHotkey, hk != engine.hotkey else { return nil }
+        switch handsFreeTracker!.handle(type: type, keyCode: keyCode, flags: flags) {
+        case .down:
+            handsFreeTapDirty = false
             return HotkeyAction.none
-        case .keyDown where !hk.isModifierKey && !hk.isMouseButton && keyCode == hk.keyCode:
-            let relevant: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
-            guard flags.intersection(relevant).rawValue
-                    == CGEventFlags(rawValue: hk.modifiers).intersection(relevant).rawValue
-            else { return nil }
-            pressed = true
-        case .keyUp where !hk.isModifierKey && !hk.isMouseButton && keyCode == hk.keyCode:
-            return HotkeyAction.none
-        case .flagsChanged where hk.isModifierKey && keyCode == hk.keyCode:
-            guard let flag = hk.modifierFlag else { return nil }
-            let nowDown = flags.contains(flag)
-            defer { handsFreeModifierWasDown = nowDown }
-            guard nowDown, !handsFreeModifierWasDown else { return HotkeyAction.none }
-            pressed = true
-        default:
+        case .up:
+            guard !handsFreeTapDirty else {
+                handsFreeTapDirty = false
+                return HotkeyAction.none
+            }
+            // A session in any state ends; idle begins a locked one.
+            if engine.isLocked || engine.isHeld {
+                engine.reset()
+                return .commit
+            }
+            engine.forceLock()
+            DispatchQueue.main.async { [weak self] in self?.onAction?(.begin) }
+            return .lock
+        case .interrupted:
+            handsFreeTapDirty = true
+            return nil          // not ours — let the other engines see it
+        case .none:
             return nil
         }
-        guard pressed else { return HotkeyAction.none }
-        // A session in any state ends; idle begins a locked one.
-        if engine.isLocked || engine.isHeld {
-            engine.reset()
-            return .commit
-        }
-        engine.forceLock()
-        DispatchQueue.main.async { [weak self] in self?.onAction?(.begin) }
-        return .lock
     }
 }

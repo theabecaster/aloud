@@ -370,6 +370,12 @@ final class DictationController: ObservableObject {
     private static let userEditHoldOff: TimeInterval = 1.0
     private var lastUserKeystroke: Date?
 
+    // How long a live commit runs before the pill announces "Polishing…".
+    // Long enough that a fast commit — a silent hold, a word or two — comes
+    // and goes without the caption ever flashing; short enough that a real
+    // rewrite is still announced well before its reshape lands.
+    private static let polishingCueDelay: TimeInterval = 0.3
+
     private func startLiveTyping() {
         guard let session = transcriber.makeStreamingTranscription() else { return }
         liveSession = session
@@ -452,24 +458,32 @@ final class DictationController: ObservableObject {
     // window boundaries can drop the odd word), and one last diff pass settles
     // whatever is on screen into that canonical result.
     private func commitLive(session: StreamingTranscription, samples: [Float]) {
-        // What's on screen is still a preview. The commit re-transcribes the
-        // whole recording and settles the field on that result — Concise
-        // rewrites it on top — so there is exactly one reshape left, and it
-        // lands a moment after the key comes up. The pill stays up saying so
-        // until that final text is applied: an announced rewrite reads as the
-        // dictation finishing, the same rewrite unannounced reads as a glitch.
-        indicator.showTranscribing(label: loc("Polishing…"))
-        phase = .transcribing
         // Stop preview updates first so a late one can't race the final pass.
         liveUpdatesTask?.cancel()
         liveUpdatesTask = nil
         Task { await session.cancel() }
+        // Below the model's minimum — accidental tap. Dismiss before touching
+        // the pill so "Polishing…" never flashes over an empty session.
         guard Double(samples.count) / AudioRecorder.targetSampleRate >= 0.35 else {
             liveTyper.eraseAll()
             endLiveTyping()
             indicator.hide()
             phase = .idle
             return
+        }
+        phase = .transcribing
+        // What's on screen is still a preview. The commit re-transcribes the
+        // whole recording and settles the field on that result — Concise
+        // rewrites it on top — so there is exactly one reshape left, and it
+        // lands a moment after the key comes up. If the commit is still going
+        // after a beat, the pill says so: an announced rewrite reads as the
+        // dictation finishing, the same rewrite unannounced reads as a glitch.
+        // A fast commit (silence, a couple of words) skips the caption — text
+        // just lands, and no "Polishing…" blinks through on its way out.
+        let polishingCue = Task { [indicator] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.polishingCueDelay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            indicator.showTranscribing(label: loc("Polishing…"))
         }
         Task {
             do {
@@ -519,6 +533,7 @@ final class DictationController: ObservableObject {
                 }
                 if sendReturn { TextInjector.postReturn() }
                 endLiveTyping()
+                polishingCue.cancel()
                 indicator.hide()
                 phase = .idle
             } catch {
@@ -526,6 +541,7 @@ final class DictationController: ObservableObject {
                 // watched appear would be worse than a rough tail.
                 keepAudioBackup(samples)
                 endLiveTyping()
+                polishingCue.cancel()
                 playCue("Basso")
                 indicator.showHint(loc("Couldn’t finish that dictation"))
                 phase = .error(error.localizedDescription)
