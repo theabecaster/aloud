@@ -43,17 +43,24 @@ extension CommandIntent {
         return .rewrite
     }
 
-    // The parse step sometimes "restates" the instruction as a chat reply
-    // ("I'd be happy to help you rewrite the text.") instead of an imperative.
-    // The user's own words are always a safe instruction — fall back to them
-    // whenever the restatement smells conversational.
-    static func sanitizedInstruction(parsed: String, spoken: String) -> String {
-        let trimmed = parsed.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return spoken }
-        let lowered = trimmed.lowercased()
-        let conversational = ["i'd ", "i'll ", "i will ", "i can ", "sure", "okay", "happy to", "of course"]
-        guard !conversational.contains(where: { lowered.hasPrefix($0) }) else { return spoken }
-        return trimmed
+    // The classifier's restated instruction is never used — restatements
+    // hallucinate ("make this all one line" once came back as "make it
+    // shorter", nonsense once came back as "make it Spanish"). The user's own
+    // spoken words are already an imperative; classification is all the parse
+    // step is trusted for. And a translate verdict only counts when the words
+    // actually talk about translating or name the language — otherwise it
+    // degrades to a plain rewrite of the spoken instruction.
+    static func resolved(action: Action, language: String?, spoken: String) -> CommandIntent {
+        guard action == .translate else {
+            return CommandIntent(action: action, instruction: spoken)
+        }
+        let lowered = spoken.lowercased()
+        let mentionsTranslation = lowered.contains("translat")
+            || (language.map { lowered.contains($0.lowercased()) } ?? false)
+        guard mentionsTranslation else {
+            return CommandIntent(action: .rewrite, instruction: spoken)
+        }
+        return CommandIntent(action: .translate, instruction: spoken, language: language)
     }
 }
 
@@ -203,10 +210,10 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
         let response = try await session.respond(to: spoken, generating: ParsedCommand.self,
                                                  options: GenerationOptions(temperature: 0.1))
         let language = response.content.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
-        return CommandIntent(action: CommandIntent.Action(rawValue: response.content.action.rawValue) ?? .rewrite,
-                             instruction: CommandIntent.sanitizedInstruction(
-                                parsed: response.content.instruction, spoken: spoken),
-                             language: language.isEmpty ? nil : language)
+        return CommandIntent.resolved(
+            action: CommandIntent.Action(rawValue: response.content.action.rawValue) ?? .rewrite,
+            language: language.isEmpty ? nil : language,
+            spoken: spoken)
     }
 
     func rewrite(_ text: String, instruction: String) async throws -> String {
@@ -219,6 +226,20 @@ final class FoundationModelCommandInterpreter: CommandInterpreter, @unchecked Se
             options: GenerationOptions(temperature: 0.1, maximumResponseTokens: 700))
         guard let clean = EnhancerOutputCheck.validate(response.content, original: text) else {
             throw EnhancerError.rejectedOutput
+        }
+        // Identical-modulo-whitespace means the instruction changed nothing —
+        // a confused command ("purple monkey dishwasher") comes back as the
+        // selection with mutated spacing, and pasting that would still edit
+        // the user's text. Only instructions that are actually about spacing
+        // get to make whitespace-only changes.
+        let squeeze = { (t: String) in t.filter { !$0.isWhitespace } }
+        if squeeze(clean) == squeeze(text) {
+            let formattingWords = ["space", "spacing", "line", "lines", "break",
+                                   "indent", "paragraph", "newline"]
+            let instr = instruction.lowercased()
+            guard clean != text, formattingWords.contains(where: instr.contains) else {
+                throw EnhancerError.rejectedOutput
+            }
         }
         return clean
     }

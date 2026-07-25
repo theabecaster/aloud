@@ -419,14 +419,20 @@ final class CommandIntentTests: XCTestCase {
     }
 
     func testConversationalRestatementFallsBackToSpokenWords() {
-        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "Make it shorter",
-                                                          spoken: "uh make it shorter"),
-                       "Make it shorter")
-        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "I'd be happy to help you rewrite the text.",
-                                                          spoken: "rewrite this as a polite decline"),
-                       "rewrite this as a polite decline")
-        XCTAssertEqual(CommandIntent.sanitizedInstruction(parsed: "  ", spoken: "fix the grammar"),
-                       "fix the grammar")
+        // Spoken words are always the instruction; translate only sticks when
+        // the words actually mention it.
+        let plain = CommandIntent.resolved(action: .rewrite, language: nil, spoken: "make this all one line")
+        XCTAssertEqual(plain, CommandIntent(action: .rewrite, instruction: "make this all one line"))
+        let hallucinated = CommandIntent.resolved(action: .translate, language: "Spanish",
+                                                  spoken: "purple monkey dishwasher")
+        XCTAssertEqual(hallucinated, CommandIntent(action: .rewrite, instruction: "purple monkey dishwasher"))
+        let byName = CommandIntent.resolved(action: .translate, language: "Spanish",
+                                            spoken: "say this in spanish")
+        XCTAssertEqual(byName, CommandIntent(action: .translate, instruction: "say this in spanish",
+                                             language: "Spanish"))
+        let byVerb = CommandIntent.resolved(action: .translate, language: "French",
+                                            spoken: "translate this to french please")
+        XCTAssertEqual(byVerb.action, .translate)
     }
 
     func testLanguageResolver() {
