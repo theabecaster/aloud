@@ -174,7 +174,7 @@ struct GeneralSettings: View {
                 Toggle(loc("Reduce background noise"), isOn: $settings.noiseReduction)
                 Toggle(loc("Sound when recording starts"), isOn: $settings.soundCues)
             } footer: {
-                Text(loc("Filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Turn it off if your voice sounds thin."))
+                Text(loc("Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on."))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

@@ -100,7 +100,7 @@
 "Microphone" = "Microphone";
 "System default" = "System default";
 "Reduce background noise" = "Reduce background noise";
-"Filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Turn it off if your voice sounds thin." = "Filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Turn it off if your voice sounds thin.";
+"Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on." = "Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on.";
 "Sound when recording starts" = "Sound when recording starts";
 "Open Aloud at login" = "Open Aloud at login";
 
