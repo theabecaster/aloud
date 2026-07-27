@@ -11,6 +11,7 @@ import FluidAudio
 //   from the manager's decoderLayerCount. Audio must be 16 kHz mono Float32,
 //   ≥ 0.3 s. Longer audio is auto-chunked internally.
 final class ParakeetTranscriber: Transcriber {
+    static let sampleRate = AudioRecorder.targetSampleRate
     private(set) var state: TranscriberState = .modelMissing
     private var manager: AsrManager?
     private var decoderLayers: Int = 0
@@ -64,10 +65,34 @@ final class ParakeetTranscriber: Transcriber {
         }
     }
 
+    // The model works on a fixed fifteen-second window and is told how much of
+    // it is real audio; the decoder then walks exactly that many frames. That
+    // bound turns out to change the answer: the same speech, decoded at
+    // different lengths, comes back different — and sometimes the *opening
+    // sentence is missing*. Measured on one recording: 12 s → 26 words, 13 s →
+    // 26, **14 s → 6**, 15 s → 36, and padding a 12 s clip with silence to
+    // 12.16 s dropped its first sentence. Nothing about the audio changed, only
+    // how much of the window the decoder was allowed to see.
+    //
+    // Filling the window makes every dictation take the same path through the
+    // decoder, and the results stop moving: all the failing lengths above come
+    // back complete and identical. Clean fixtures are unchanged or slightly
+    // better punctuated — the model gets the context it was trained on — and
+    // nothing is invented in the silence. It costs nothing: the engine already
+    // pads to this length internally, so the encoder was always running on a
+    // full window regardless.
+    static func decodeWindow(_ samples: [Float]) -> [Float] {
+        guard samples.count < ASRConstants.maxModelSamples else { return samples }
+        return samples + [Float](repeating: 0,
+                                 count: ASRConstants.maxModelSamples - samples.count)
+    }
+
     func transcribe(samples: [Float]) async throws -> Transcription {
         guard let manager else { throw TranscriberError.notReady }
         var decoderState = TdtDecoderState.make(decoderLayers: decoderLayers)
-        let result = try await manager.transcribe(samples, decoderState: &decoderState,
+        let spokenSeconds = Double(samples.count) / Self.sampleRate
+        let result = try await manager.transcribe(Self.decodeWindow(samples),
+                                                  decoderState: &decoderState,
                                                   language: languageHint)
         // Vocabulary biasing runs on the dictation (samples) path only: once
         // per committed dictation, and never on transcribe(file:) — that's the
@@ -82,7 +107,10 @@ final class ParakeetTranscriber: Transcriber {
         }
         return Transcription(text: text,
                              confidence: result.confidence,
-                             audioDuration: result.duration,
+                             // The engine now reports the padded window; what
+                             // history and the stats care about is how long
+                             // the person actually spoke.
+                             audioDuration: spokenSeconds,
                              processingTime: result.processingTime)
     }
 
@@ -107,7 +135,8 @@ final class ParakeetTranscriber: Transcriber {
         return RedecodeStreamingTranscription { [weak self] samples in
             guard let self, let manager = self.manager else { throw TranscriberError.notReady }
             var decoderState = TdtDecoderState.make(decoderLayers: self.decoderLayers)
-            return try await manager.transcribe(samples, decoderState: &decoderState,
+            return try await manager.transcribe(Self.decodeWindow(samples),
+                                                decoderState: &decoderState,
                                                 language: self.languageHint).text
         }
     }
