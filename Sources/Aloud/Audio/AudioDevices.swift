@@ -32,6 +32,14 @@ enum AudioDevices {
         inputDevices().first { $0.uid == uid }?.id
     }
 
+    // The stable identifier for a device the engine is already using. "Default
+    // input" is a moving target — the answer to "which microphone is this"
+    // has to come from the device itself.
+    static func uid(forDeviceID id: AudioDeviceID) -> String? {
+        guard id != 0 else { return nil }
+        return stringProperty(id, kAudioDevicePropertyDeviceUID)
+    }
+
     private static func inputChannelCount(_ id: AudioDeviceID) -> Int {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreamConfiguration,

@@ -99,6 +99,8 @@
 "Without both, Aloud can’t hear you or type for you." = "Ohne beide kann Aloud dich weder hören noch für dich schreiben.";
 "Microphone" = "Mikrofon";
 "System default" = "Systemstandard";
+"Reduce background noise" = "Hintergrundgeräusche reduzieren";
+"Filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Turn it off if your voice sounds thin." = "Filtert Raumgeräusche, Tastaturgeklapper und den Ton der Mac-Lautsprecher heraus, bevor Aloud zuhört. Schalte es aus, wenn deine Stimme dünn klingt.";
 "Sound when recording starts" = "Ton beim Start der Aufnahme";
 "Open Aloud at login" = "Aloud beim Anmelden öffnen";
 
@@ -239,15 +241,25 @@
 "Basic dictation isn’t available right now — please wait for the download." = "Das einfache Diktat ist gerade nicht verfügbar – bitte warten Sie auf den Download.";
 "Less accurate. Aloud switches to full accuracy on its own when the download finishes." = "Weniger genau. Aloud wechselt von selbst zur vollen Genauigkeit, wenn der Download fertig ist.";
 "Try It" = "Probieren Sie es aus";
-"Click the box, hold %@ while you say something, then let go." = "Klick ins Feld, halte %@ gedrückt, sag etwas und lass wieder los.";
+"Hold %@ while you say something, then let go." = "Halte %@ gedrückt, sag etwas, und lass wieder los.";
 "Your words will appear here" = "Ihre Worte erscheinen hier";
 "You’re on basic dictation — accuracy improves on its own once setup finishes." = "Du nutzt gerade das einfache Diktat – die Genauigkeit verbessert sich von selbst, sobald die Einrichtung fertig ist.";
-"That’s all there is to it" = "Mehr ist es nicht";
+"That’s all there is to it — your words go wherever the cursor is." = "Das ist alles — deine Worte landen dort, wo der Cursor steht.";
+"Listening…" = "Hört zu…";
+"One moment…" = "Einen Moment…";
 "Aloud lives in your menu bar — the " = "Aloud lebt in Ihrer Menüleiste – das Symbol ";
 " icon at the top of your screen." = " oben auf dem Bildschirm.";
 "Tip: double-press %@ to keep listening hands-free. Esc finishes." = "Tipp: Drücke %@ zweimal, um freihändig weiterzuhören. Esc beendet.";
 "Done" = "Fertig";
 "Skip for now" = "Vorerst überspringen";
+
+/* Onboarding — Clean-up. The demo sentence stays English: the spoken
+   fixes it shows (fillers, “scratch that”) are English-only rules, so
+   the sample card is shown only for English dictation. */
+"Aloud tidies what you say as it types. Try the settings on the same sentence." = "Aloud räumt beim Tippen auf, was du sagst. Probier die Stufen am selben Satz aus.";
+"You say" = "Du sagst";
+"Aloud types" = "Aloud tippt";
+"um send this to marketing scratch that what we really need is for somebody to please get it over to the sales team sometime before five p.m. today if at all possible" = "um send this to marketing scratch that what we really need is for somebody to please get it over to the sales team sometime before five p.m. today if at all possible";
 
 /* Hotkey names */
 "Mouse %ld" = "Maus %ld";
@@ -301,3 +313,7 @@
 "Voice commands" = "Sprachbefehle";
 "Say what to change" = "Sag, was sich ändern soll";
 "Set a command key in Settings, then hold it and say what to do: rewrite or translate the selected text, or write something new." = "Leg in den Einstellungen eine Befehlstaste fest, halte sie und sag, was zu tun ist: markierten Text umschreiben oder übersetzen oder etwas Neues schreiben.";
+"Filtering background noise — click to stop" = "Hintergrundgeräusche werden gefiltert — zum Ausschalten klicken";
+"Filter background noise" = "Hintergrundgeräusche filtern";
+"Background noise is being filtered — click to stop" = "Hintergrundgeräusche werden gefiltert — zum Ausschalten klicken";
+"Filter out background noise" = "Hintergrundgeräusche herausfiltern";

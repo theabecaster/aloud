@@ -40,6 +40,7 @@ final class SettingsStore: ObservableObject {
             : storedLanguages
         handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
         pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
+        noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? true
     }
 
     private static func resolveDefaults() -> UserDefaults {
@@ -69,6 +70,8 @@ final class SettingsStore: ObservableObject {
         static let declaredLanguages = "declaredLanguages"
         static let handsFree = "handsFree"
         static let pressEnterCommand = "pressEnterCommand"
+        static let noiseReduction = "noiseReduction"
+        static let deafDevices = "noiseReductionDeafDevices"
     }
 
     @Published var hotkey: Hotkey {
@@ -156,6 +159,32 @@ final class SettingsStore: ObservableObject {
     // someone's chat message unasked.
     @Published var pressEnterCommand: Bool {
         didSet { defaults.set(pressEnterCommand, forKey: Keys.pressEnterCommand) }
+    }
+    // Run the mic through macOS voice processing: room noise, keyboard clatter
+    // and whatever the Mac's own speakers are playing get attenuated before
+    // anything reaches the model. On by default — the failure mode it prevents
+    // (a café transcribing the next table) is far more common than the one it
+    // can cause (a studio mic sounding thinner than it needs to).
+    @Published var noiseReduction: Bool {
+        didSet { defaults.set(noiseReduction, forKey: Keys.noiseReduction) }
+    }
+
+    // Microphones that went completely silent under macOS voice processing.
+    // Some inputs — Bluetooth headsets in particular — accept it and then
+    // deliver nothing at all, which reads to the user as "Aloud stopped
+    // hearing me". Once a device has done that, it never gets voice processing
+    // again, so the failure happens at most once per microphone instead of
+    // every time it's plugged in. Not a user setting; there is nothing here
+    // for anyone to decide.
+    var deafUnderNoiseReduction: Set<String> {
+        get { Set(defaults.stringArray(forKey: Keys.deafDevices) ?? []) }
+        set { defaults.set(Array(newValue), forKey: Keys.deafDevices) }
+    }
+
+    func rememberDeafUnderNoiseReduction(_ uid: String) {
+        var set = deafUnderNoiseReduction
+        guard set.insert(uid).inserted else { return }
+        deafUnderNoiseReduction = set
     }
 
     // Lifetime dictation totals (words spoken, seconds of speech, sessions) —

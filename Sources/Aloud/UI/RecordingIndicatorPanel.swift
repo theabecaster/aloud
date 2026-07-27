@@ -28,19 +28,41 @@ final class RecordingIndicatorPanel {
     // the pill blinks out and back in mid-gesture and reads as a glitch. Any
     // session long enough to be real has already outlived it.
     private static let minimumVisible: TimeInterval = 0.6
-    // Hands-free silence reminder: after this long without speech — and only
-    // when the keyboard and mouse are idle too, so it never interrupts someone
-    // editing — the pill switches to "Still listening…". Long on purpose:
-    // most sessions should end before it ever appears.
-    private static let silenceReminderAfter: TimeInterval = 30
-    private static let inputIdleGrace: TimeInterval = 6
+    // The window the pill floats in. Taller than the pill itself so the noise
+    // badge can sit proud of its top corner without the window edge cutting
+    // through it; the pill stays vertically centred, so the extra height is
+    // invisible. Defined once because it is set in two places, and when those
+    // two drifted apart the reposition quietly squashed the badge flat.
+    static let panelSize = NSSize(width: 280, height: 80)
+    // Hands-free silence reminder ("Still listening…", rule in SilenceReminder
+    // below). These two track it when no speech detector is available: the
+    // input level that counts as a voice, and when it was last cleared.
     private static let voiceLevel: Float = 0.1
     private var lastVoiceTime: TimeInterval = 0
+    // When the session was locked.
+    private var lockedAt: TimeInterval = 0
+
+    // Seconds since the mic last heard actual speech, when a speech detector
+    // is running. nil falls back to the input-level threshold below — which is
+    // the reason this exists: a room with a fan, a café, or a nearby
+    // conversation clears that threshold on its own, so the reminder that's
+    // supposed to catch a session left running never fired anywhere noisy.
+    var speechAgeProvider: (() -> TimeInterval?)?
 
     // Fires when the close button on the locked pill is clicked.
     var onStopHandsFree: (() -> Void)? {
         get { model.onStop }
         set { model.onStop = newValue }
+    }
+
+    // The noise-filtering badge on the pill: its state, and what a click does.
+    var noiseReduction: Bool {
+        get { model.noiseReduction }
+        set { model.noiseReduction = newValue }
+    }
+    var onToggleNoiseReduction: (() -> Void)? {
+        get { model.onToggleNoiseReduction }
+        set { model.onToggleNoiseReduction = newValue }
     }
 
     // Settings drive the quick menu (mic, clean-up) and remember where the
@@ -69,7 +91,9 @@ final class RecordingIndicatorPanel {
 
     // `command: true` marks a command hold — same live meter, purple styling,
     // so "talking to the app" never looks like "typing into the document".
-    func show(levelProvider: @escaping () -> Float, command: Bool = false) {
+    func show(levelProvider: @escaping () -> Float,
+              bandsProvider: (() -> [Float])? = nil,
+              command: Bool = false) {
         model.mode = .recording
         model.hint = nil
         model.isLocked = false
@@ -77,6 +101,7 @@ final class RecordingIndicatorPanel {
         model.stillListening = false
         model.notice = nil   // never carry a previous session's note into this one
         model.level = 0
+        model.bands = SpectrumAnalyzer.silent
         present()
         // While recording the pill takes mouse input so it can be dragged to
         // a better spot and right-clicked for the quick menu. The transient
@@ -85,6 +110,9 @@ final class RecordingIndicatorPanel {
         levelTimer?.invalidate()
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             let level = levelProvider()
+            // No spectrum available (a caller that only has a level): every bar
+            // follows the one number, which is the old meter's behaviour.
+            let bands = bandsProvider?() ?? [Float](repeating: level, count: SpectrumAnalyzer.bandCount)
             Task { @MainActor in
                 guard let self else { return }
                 // Fast attack, slow release: raw RMS jitters frame to frame and
@@ -93,8 +121,18 @@ final class RecordingIndicatorPanel {
                 self.model.level = level > self.model.level
                     ? level
                     : self.model.level + (level - self.model.level) * 0.25
+                // Same curve per band — audio arrives in chunks slower than
+                // this timer, so without it the bars would step, not move.
+                self.model.bands = Self.smooth(self.model.bands, toward: bands)
                 self.updateStillListening(level: level)
             }
+        }
+    }
+
+    private static func smooth(_ current: [Float], toward target: [Float]) -> [Float] {
+        guard current.count == target.count else { return target }
+        return zip(current, target).map { now, next in
+            next > now ? next : now + (next - now) * 0.28
         }
     }
 
@@ -105,6 +143,7 @@ final class RecordingIndicatorPanel {
         model.isLocked = true
         panel?.ignoresMouseEvents = false
         lastVoiceTime = ProcessInfo.processInfo.systemUptime
+        lockedAt = lastVoiceTime
     }
 
     // The reminder latches: it appears once the session has been silent long
@@ -114,23 +153,50 @@ final class RecordingIndicatorPanel {
     // static pill.
     private func updateStillListening(level: Float) {
         let now = ProcessInfo.processInfo.systemUptime
-        if level > Self.voiceLevel {
-            lastVoiceTime = now
-            model.stillListening = false
-            return
+        let silentFor: TimeInterval
+        if let age = speechAgeProvider?() {
+            silentFor = age
+        } else {
+            if level > Self.voiceLevel { lastVoiceTime = now }
+            silentFor = now - lastVoiceTime
         }
-        guard model.isLocked else {
-            model.stillListening = false
-            return
+        model.stillListening = SilenceReminder.next(
+            showing: model.stillListening,
+            silentFor: silentFor,
+            lockedFor: now - lockedAt,
+            isLocked: model.isLocked,
+            // System-wide input idle: typing or mousing means the user is
+            // engaged, not absent — hold the reminder back. Read lazily; it's
+            // three syscalls that only matter at the moment of the decision.
+            inputIdle: {
+                min(CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown),
+                    CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown),
+                    CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved))
+            })
+    }
+
+    // Timings live on the panel; the rule itself is here so it can be tested
+    // without an AppKit window or a 30 Hz timer.
+    enum SilenceReminder {
+        static let showAfter: TimeInterval = 30
+        static let inputIdleGrace: TimeInterval = 6
+        static let recentSpeechWindow: TimeInterval = 0.5
+
+        // `silentFor` is seconds since speech, `lockedFor` seconds since the
+        // session was locked — the reminder waits out both, so locking a
+        // session that had already gone quiet still gets its full thirty
+        // seconds rather than an instant nudge.
+        static func next(showing: Bool,
+                         silentFor: TimeInterval,
+                         lockedFor: TimeInterval,
+                         isLocked: Bool,
+                         inputIdle: () -> TimeInterval) -> Bool {
+            guard silentFor >= recentSpeechWindow, isLocked else { return false }
+            guard !showing else { return true }
+            let quietFor = min(silentFor, lockedFor)
+            guard quietFor > showAfter else { return false }
+            return inputIdle() > inputIdleGrace
         }
-        guard !model.stillListening, now - lastVoiceTime > Self.silenceReminderAfter else { return }
-        // System-wide input idle: typing or mousing means the user is engaged,
-        // not absent — hold the reminder back.
-        let inputIdle = min(
-            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown),
-            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown),
-            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved))
-        if inputIdle > Self.inputIdleGrace { model.stillListening = true }
     }
 
     // Brief note inside a live recording pill (e.g. mic switched) — the meter
@@ -183,6 +249,7 @@ final class RecordingIndicatorPanel {
         levelTimer?.invalidate()
         levelTimer = nil
         model.level = 0   // let the meter drain rather than freeze mid-fade
+        model.bands = SpectrumAnalyzer.silent
         guard let panel, isShowing else { return }
         isShowing = false
         panel.ignoresMouseEvents = true
@@ -243,7 +310,8 @@ final class RecordingIndicatorPanel {
 
     private func ensurePanel() -> NSPanel {
         if let panel { return panel }
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 44),
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: Self.panelSize.width,
+                                                height: Self.panelSize.height),
                             styleMask: [.borderless, .nonactivatingPanel],
                             backing: .buffered, defer: false)
         panel.level = .statusBar
@@ -285,7 +353,7 @@ final class RecordingIndicatorPanel {
         guard let screen else { return }
         isRepositioning = true
         defer { isRepositioning = false }
-        panel.setContentSize(NSSize(width: 280, height: 44))
+        panel.setContentSize(Self.panelSize)
         let f = screen.visibleFrame
         if let saved = settings?.indicatorPosition {
             let fx = min(max(saved.x, 0), 1)
@@ -305,6 +373,8 @@ final class IndicatorModel: ObservableObject {
     enum Mode: Equatable { case recording, transcribing, hint }
     @Published var mode: Mode = .recording
     @Published var level: Float = 0
+    // Per-band levels (0…1), low frequency first — what the meter draws.
+    @Published var bands: [Float] = SpectrumAnalyzer.silent
     @Published var hint: String?
     @Published var isLocked = false
     @Published var stillListening = false
@@ -313,7 +383,11 @@ final class IndicatorModel: ObservableObject {
     @Published var notice: String?
     // Overrides the "Typing…" caption (e.g. "Polishing…" while a rewrite runs).
     @Published var transcribingLabel: String?
+    // Whether background noise is being filtered right now. Mirrored here
+    // rather than read from settings so the pill redraws the moment it changes.
+    @Published var noiseReduction = true
     var onStop: (() -> Void)?
+    var onToggleNoiseReduction: (() -> Void)?
     var onResetPosition: (() -> Void)?
     var settings: SettingsStore?
     // Which clean-up levels the quick menu offers (Concise only where the
@@ -323,6 +397,22 @@ final class IndicatorModel: ObservableObject {
 
 struct IndicatorView: View {
     @ObservedObject var model: IndicatorModel
+    // The pointer is over the pill. Everything optional on it appears on this,
+    // so the resting state stays a mic and a meter.
+    @State private var hovering = false
+    // 0 → 1: how far the border, and separately the tint, have spread out
+    // from the badge. Two values because the outline should arrive first and
+    // the colour fill in behind it — a line drawn, then the wash. Driven
+    // explicitly so turning the feature off plays the same journey backwards
+    // before the badge goes grey.
+    @State private var borderReveal: CGFloat = 0
+    @State private var tintReveal: CGFloat = 0
+    // The badge exists only while filtering is on. `lit` is its colour —
+    // Aloud blue while the feature is, grey for the moment after it is
+    // switched off, so the badge is seen to change before it leaves.
+    @State private var badgeVisible = false
+    @State private var badgeLit = false
+    @State private var badgeFadeOut: Task<Void, Never>?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -350,18 +440,21 @@ struct IndicatorView: View {
                     Text(notice)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        // The pill is a fixed width; a long note shrinks a
+                        // little rather than being cut off mid-word.
+                        .minimumScaleFactor(0.8)
                 } else if model.stillListening {
                     Text(loc("Still listening…"))
                         .foregroundStyle(.orange)
                         .frame(width: 90)
                 } else {
-                    LevelMeter(level: model.level)
+                    SpectrumMeter(bands: model.bands, tint: meterTint)
                         .frame(width: 90, height: 18)
                 }
                 if model.isLocked {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.orange)
+                    // No padlock: the close button is the thing that says this
+                    // session is running on its own and has to be ended, and
+                    // saying it twice in a row that narrow just crowds it.
                     Button {
                         model.onStop?()
                     } label: {
@@ -383,19 +476,146 @@ struct IndicatorView: View {
                 Text(model.hint ?? "")
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
         }
         .font(.system(size: 13, weight: .medium))
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background {
+            ZStack {
+                Capsule().fill(.ultraThinMaterial)
+                // Filtering on: the pill takes Aloud's own blue, as a tint
+                // through the material and a border around it. Both are
+                // revealed by a circle opening out from the badge, so the
+                // colour arrives from the thing that was just pressed and
+                // meets itself at the far end.
+                Capsule().fill(Color.aloud.opacity(0.22))
+                    .mask { revealMask(tintReveal) }
+                Capsule().strokeBorder(Color.aloud.opacity(0.85), lineWidth: 1.5)
+                    .mask { revealMask(borderReveal) }
+            }
+        }
         .overlay(Capsule().strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+        // The menu belongs to the pill, not to the badge sitting on its
+        // corner: attached out here it covers the badge too, and every click
+        // meant for the badge opens the menu instead. The badge goes on top,
+        // after this, so it gets its own clicks in every mode.
+        .contextMenu { quickMenu }
+        .overlay(alignment: .topTrailing) { noiseBadge.offset(x: 8, y: -8) }
+        .onAppear {
+            // A pill that opens with filtering already on shows it, rather
+            // than animating something the user didn't just do.
+            let on: CGFloat = model.noiseReduction ? 1 : 0
+            borderReveal = on
+            tintReveal = on
+            badgeVisible = model.noiseReduction
+            badgeLit = model.noiseReduction
+        }
+        .onChange(of: model.noiseReduction) { _, on in
+            if on {
+                badgeFadeOut?.cancel()
+                badgeVisible = true
+                badgeLit = true
+                // The outline runs round first and closes; the colour follows
+                // it in and settles a moment later.
+                withAnimation(.easeOut(duration: 0.3)) { borderReveal = 1 }
+                withAnimation(.easeOut(duration: 0.6)) { tintReveal = 1 }
+            } else {
+                withAnimation(.easeIn(duration: 0.3)) { borderReveal = 0 }
+                // The badge is the last thing to change, the way it was the
+                // first: only once the colour has drained all the way home
+                // does it go grey, hold long enough to be seen doing it, and
+                // then leave.
+                withAnimation(.easeIn(duration: 0.6), completionCriteria: .removed) {
+                    tintReveal = 0
+                } completion: {
+                    badgeLit = false
+                    badgeFadeOut = Task {
+                        try? await Task.sleep(nanoseconds: 450_000_000)
+                        guard !Task.isCancelled else { return }
+                        withAnimation(.easeOut(duration: 0.25)) { badgeVisible = false }
+                    }
+                }
+            }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.spring(duration: 0.25), value: model.mode)
         .animation(.spring(duration: 0.25), value: model.isLocked)
         .animation(.spring(duration: 0.25), value: model.stillListening)
         .animation(.spring(duration: 0.25), value: model.notice)
-        .contextMenu { quickMenu }
+        // The pill grows a touch under the pointer and settles back when it
+        // leaves — enough to say "this is a thing you can touch" without
+        // becoming a moving target while someone is talking.
+        .scaleEffect(hovering && model.mode == .recording ? 1.03 : 1)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hovering)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: model.noiseReduction)
+        .onHover { hovering = $0 }
+    }
+
+    // A circle centred on the badge, opening out until it covers the whole
+    // pill. Masking the tint and the border with it makes the colour appear to
+    // run around the capsule in both directions at once and close on the
+    // opposite side — one value to animate, and it reverses for free.
+    private func revealMask(_ progress: CGFloat) -> some View {
+        GeometryReader { geo in
+            let reach = 2 * sqrt(geo.size.width * geo.size.width
+                                 + geo.size.height * geo.size.height)
+            Circle()
+                .frame(width: reach * progress, height: reach * progress)
+                .position(x: geo.size.width - 4, y: 4)   // the badge's centre
+        }
+    }
+
+    // Background-noise filtering, as a badge on the pill.
+    //
+    // A badge rather than another item in the row, because the row already
+    // reads left to right as mode → am I being heard → end this session, and
+    // this is none of those: it is a standing fact about how the microphone is
+    // being listened to. Sitting proud of the top-right corner, the way a
+    // count sits on an app icon, it says so without taking a place in that
+    // sentence or crowding the meter.
+    //
+    // Filled and tinted when filtering is on, and always visible then — the
+    // point of it is that you can see the state at a glance. Off, it waits for
+    // the pointer and then fades in hollow: same corner, same shape, obviously
+    // the same control, obviously not doing anything. Either way one click
+    // flips it.
+    @ViewBuilder
+    private var noiseBadge: some View {
+        if model.mode == .recording, badgeVisible {
+            Button {
+                model.onToggleNoiseReduction?()
+            } label: {
+                Image(systemName: "waveform.badge.minus")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(badgeLit ? AnyShapeStyle(.white)
+                                              : AnyShapeStyle(.secondary))
+                    .frame(width: 24, height: 24)
+                    .background {
+                        // Off, the pill's own ultra-thin material would make
+                        // the badge disappear into it — a heavier backdrop is
+                        // what makes it read as a separate, pressable thing.
+                        Circle().fill(badgeLit ? AnyShapeStyle(Color.aloud)
+                                               : AnyShapeStyle(.regularMaterial))
+                    }
+                    // A hairline in the window's own backdrop, so the badge
+                    // reads as sitting on top of the pill rather than punched
+                    // out of it.
+                    .overlay(Circle().strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .contentShape(Circle())
+            .help(loc("Background noise is being filtered — click to stop"))
+            .transition(.scale(scale: 0.4).combined(with: .opacity))
+        }
+    }
+
+    // The meter agrees with the mic glyph in the two modes that have a colour
+    // of their own; plain dictation keeps the accent colour, which is quieter
+    // next to a red mic than a second red thing would be.
+    private var meterTint: Color {
+        model.isCommand ? .purple : model.isLocked ? .orange : .accentColor
     }
 
     // Right-click quick menu: the settings people flip mid-dictation, without
@@ -418,47 +638,43 @@ struct IndicatorView: View {
                     Text(level.displayName).tag(level)
                 }
             }
+            // The same switch the badge is, in words. During a held dictation
+            // the badge is a small target to hit one-handed, and this menu is
+            // already where the other capture settings live.
+            Toggle(loc("Reduce background noise"), isOn: Binding(
+                get: { model.noiseReduction },
+                set: { _ in model.onToggleNoiseReduction?() }))
             Divider()
             Button(loc("Reset Position")) { model.onResetPosition?() }
         }
     }
 }
 
-// A row of bars that follow the live input level — system-toned, no custom drawing
-// beyond simple rounded rectangles.
-struct LevelMeter: View {
-    var level: Float
-    private let barCount = 12
+// One bar per frequency band, low on the left, each rising with the energy the
+// mic is picking up there. Silence rests as a row of dots rather than an empty
+// gap, so the meter always says "the mic is on" even when nobody is talking.
+// System colours, rounded rectangles, no markings — nothing to read, only
+// something to recognise.
+struct SpectrumMeter: View {
+    var bands: [Float]
+    var tint: Color
+
+    private let barWidth: CGFloat = 3
+    private let spacing: CGFloat = 3
+    private let restHeight: CGFloat = 3
+    private let maxHeight: CGFloat = 18
 
     var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<barCount, id: \.self) { i in
-                ZStack {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(Color.secondary.opacity(0.3))
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(Color.accentColor)
-                        .opacity(barFill(i))
-                }
-                .frame(width: 3)
-                .frame(height: barHeight(i))
+        HStack(alignment: .bottom, spacing: spacing) {
+            ForEach(Array(bands.enumerated()), id: \.offset) { i, value in
+                let v = CGFloat(min(max(value, 0), 1))
+                RoundedRectangle(cornerRadius: barWidth / 2)
+                    .fill(tint.opacity(0.4 + 0.6 * Double(v)))
+                    .frame(width: barWidth, height: restHeight + (maxHeight - restHeight) * v)
             }
         }
-        .animation(.linear(duration: 0.08), value: level)
-    }
-
-    // A bar lights across its own width rather than snapping on: with a hard
-    // threshold the bar at the edge of the level strobed on every frame.
-    private func barFill(_ i: Int) -> Double {
-        let step = 1 / Double(barCount)
-        let past = Double(level) - Double(i) * step
-        return min(max(past / step, 0), 1)
-    }
-
-    private func barHeight(_ i: Int) -> CGFloat {
-        // Gentle center-weighted profile so the meter reads as a waveform.
-        let x = Double(i) / Double(barCount - 1)
-        let profile = 0.4 + 0.6 * sin(x * .pi)
-        return CGFloat(8 + 10 * profile)
+        .frame(maxWidth: .infinity, maxHeight: maxHeight, alignment: .bottom)
+        // Interpolates between audio frames, which land slower than the display.
+        .animation(.linear(duration: 0.05), value: bands)
     }
 }
