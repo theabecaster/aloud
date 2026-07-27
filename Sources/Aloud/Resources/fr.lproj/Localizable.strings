@@ -239,15 +239,25 @@
 "Basic dictation isn’t available right now — please wait for the download." = "La dictée basique n’est pas disponible pour le moment – veuillez attendre la fin du téléchargement.";
 "Less accurate. Aloud switches to full accuracy on its own when the download finishes." = "Moins précis. Aloud passe seul en précision complète à la fin du téléchargement.";
 "Try It" = "Essayez";
-"Click the box, hold %@ while you say something, then let go." = "Cliquez dans le champ, maintenez %@ pendant que vous dites quelque chose, puis relâchez.";
+"Hold %@ while you say something, then let go." = "Maintiens %@ pendant que tu parles, puis relâche.";
 "Your words will appear here" = "Vos mots apparaîtront ici";
 "You’re on basic dictation — accuracy improves on its own once setup finishes." = "Vous êtes en dictée basique : la précision s’améliore d’elle-même une fois la configuration terminée.";
-"That’s all there is to it" = "C’est tout";
+"That’s all there is to it — your words go wherever the cursor is." = "C’est tout : tes mots arrivent là où se trouve le curseur.";
+"Listening…" = "À l’écoute…";
+"One moment…" = "Un instant…";
 "Aloud lives in your menu bar — the " = "Aloud vit dans votre barre des menus : l’icône ";
 " icon at the top of your screen." = " en haut de l’écran.";
 "Tip: double-press %@ to keep listening hands-free. Esc finishes." = "Astuce : appuyez deux fois sur %@ pour continuer sans les mains. Esc termine.";
 "Done" = "Terminé";
 "Skip for now" = "Ignorer pour l’instant";
+
+/* Onboarding — Clean-up. The demo sentence stays English: the spoken
+   fixes it shows (fillers, “scratch that”) are English-only rules, so
+   the sample card is shown only for English dictation. */
+"Aloud tidies what you say as it types. Try the settings on the same sentence." = "Aloud met de l’ordre dans ce que tu dis en l’écrivant. Essaie les réglages sur la même phrase.";
+"You say" = "Tu dis";
+"Aloud types" = "Aloud écrit";
+"um send this to marketing scratch that what we really need is for somebody to please get it over to the sales team sometime before five p.m. today if at all possible" = "um send this to marketing scratch that what we really need is for somebody to please get it over to the sales team sometime before five p.m. today if at all possible";
 
 /* Hotkey names */
 "Mouse %ld" = "Souris %ld";

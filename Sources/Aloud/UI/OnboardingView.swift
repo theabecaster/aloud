@@ -17,7 +17,7 @@ struct OnboardingView: View {
     }
 
     enum Step: Int, CaseIterable {
-        case welcome, access, voice, tryIt, features
+        case welcome, access, voice, tryIt, cleanUp, features
 
         // Harness hook: ALOUD_ONBOARDING_STEP=tryIt opens the flow on a later
         // screen so a screen can be inspected without clicking through.
@@ -26,6 +26,7 @@ struct OnboardingView: View {
             case "access": return .access
             case "voice": return .voice
             case "tryIt": return .tryIt
+            case "cleanUp": return .cleanUp
             case "features": return .features
             default: return .welcome
             }
@@ -41,6 +42,9 @@ struct OnboardingView: View {
     @State private var startingBasic = false
     @State private var basicUnavailable = false
     @State private var openedAccessibility = false
+    // Concise's demo output: the real rewrite, fetched once per screen visit.
+    @State private var conciseSample: String?
+    @State private var conciseRunning = false
     // Which feature tile has its explanation open (one at a time).
     @State private var openFeature: String?
 
@@ -58,7 +62,7 @@ struct OnboardingView: View {
             dots
                 .padding(.bottom, 28)
         }
-        .frame(width: 560, height: 470)
+        .frame(width: 560, height: 520)
         .background(.background)
         .overlay(alignment: .bottomLeading) {
             if step != .welcome {
@@ -113,6 +117,7 @@ struct OnboardingView: View {
         case .access: access
         case .voice: voice
         case .tryIt: tryIt
+        case .cleanUp: cleanUpScreen
         case .features: features
         }
     }
@@ -307,54 +312,24 @@ struct OnboardingView: View {
         }
     }
 
-    // The one setting worth choosing before the first real dictation: how much
-    // Aloud tidies what you said. It sits here, under the words the user just
-    // spoke, because that's the only place the choice is concrete — and it's
-    // the same card as the permission rows, so the flow gains no new shape.
-    // Say it again after switching and the difference is right there.
-    private var cleanUp: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "wand.and.sparkles")
-                .font(.system(size: 17))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(loc("Clean-up"))
-                    .font(.callout.weight(.semibold))
-                // Reserved space: the row can't change height as the
-                // explanation changes underneath the picker.
-                Text(settings.polishLevel.explanation)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2, reservesSpace: true)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Picker("", selection: $settings.polishLevel) {
-                ForEach(controller.availableLevels) { level in
-                    Text(level.displayName).tag(level)
-                }
-            }
-            .labelsHidden()
-            .fixedSize()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10)
-            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
-        .frame(maxWidth: 380)
-    }
+    // Cards across the flow share an edge.
+    private let cardWidth: CGFloat = 380
 
+    // Two screens in one, and only ever one of them at a time:
+    //
+    //   before — one instruction, one thing to do, and it isn't a click. The
+    //            only clickable thing is a quiet way out, so it can't be
+    //            mistaken for the main path the way a full-size button was.
+    //   after  — the words are on screen and the loop is proven; the only
+    //            thing left is to move on.
     private var tryIt: some View {
         screen(symbol: "quote.bubble",
                title: loc("Try It"),
-               message: loc("Click the box, hold %@ while you say something, then let go.", settings.hotkey.displayName)) {
+               message: tryItDone
+                   ? loc("That’s all there is to it — your words go wherever the cursor is.")
+                   : loc("Hold %@ while you say something, then let go.", settings.hotkey.displayName)) {
             VStack(spacing: 14) {
-                TextField(loc("Your words will appear here"), text: .constant(controller.lastTranscription))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 300)
-                cleanUp
+                tryItStage
                 if controller.usingFallback {
                     // First impressions happen on the basic engine after a
                     // skip — make clear this isn't Aloud at full strength.
@@ -362,23 +337,212 @@ struct OnboardingView: View {
                         .font(.footnote)
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
+                        .frame(width: cardWidth)
                 }
-                if tryItDone {
-                    Label(loc("That’s all there is to it"), systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-                (Text(loc("Aloud lives in your menu bar — the "))
-                 + Text(Image(systemName: "waveform"))
-                 + Text(loc(" icon at the top of your screen.")))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
                 if tryItDone {
                     primaryButton(loc("Continue")) { advance() }
                 } else {
-                    secondaryButton(loc("Skip for now")) { advance() }
+                    // Deliberately not a button-shaped button: this screen's
+                    // action is spoken, and the escape hatch shouldn't be the
+                    // loudest thing on it.
+                    Button(loc("Skip for now")) { advance() }
+                        .buttonStyle(.link)
+                        .font(.callout)
                 }
             }
+        }
+    }
+
+    // What the box is showing right now. Live state, not an input: the words
+    // are injected into whatever has focus, and a text field the user can
+    // click into promises an editing cursor this screen doesn't have.
+    private enum TryStage {
+        case waiting, listening, thinking
+        case result(String)
+        case failed(String)
+    }
+
+    private var tryStage: TryStage {
+        switch controller.phase {
+        case .recording: return .listening
+        case .transcribing: return .thinking
+        case .error(let message): return .failed(message)
+        case .idle:
+            return controller.lastTranscription.isEmpty
+                ? .waiting
+                : .result(controller.lastTranscription)
+        }
+    }
+
+    private var tryItStage: some View {
+        HStack(spacing: 10) {
+            Group {
+                switch tryStage {
+                case .waiting:
+                    Image(systemName: "mic").foregroundStyle(.secondary)
+                case .listening:
+                    Image(systemName: "waveform")
+                        .foregroundStyle(Color.accentColor)
+                        .symbolEffect(.variableColor.iterative, options: .repeating)
+                case .thinking:
+                    ProgressView().controlSize(.small)
+                case .result:
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                case .failed:
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                }
+            }
+            .font(.system(size: 16))
+            .frame(width: 20)
+
+            Group {
+                switch tryStage {
+                case .waiting:
+                    Text(loc("Your words will appear here"))
+                        .foregroundStyle(.secondary)
+                case .listening:
+                    Text(loc("Listening…")).foregroundStyle(.secondary)
+                case .thinking:
+                    Text(loc("One moment…")).foregroundStyle(.secondary)
+                case .result(let text):
+                    Text(text).lineLimit(3)
+                case .failed(let message):
+                    Text(message).foregroundStyle(.orange).lineLimit(2)
+                }
+            }
+            .font(.callout)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        // Fixed height so the screen doesn't shift as the box fills.
+        .frame(width: cardWidth, height: 72, alignment: .leading)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+        .animation(.easeOut(duration: 0.15), value: controller.lastTranscription)
+    }
+
+    // MARK: clean-up
+
+    // Its own step, and not optional, because it's the setting that decides
+    // what everyone's dictation looks like — hanging it off a screen the user
+    // can skip meant the people most likely to want "exact words" were the
+    // ones least likely to hear the feature exists.
+    //
+    // Nobody can judge this from four words in a picker, so the screen shows
+    // it happening: one spoken sentence, run through the real polisher at the
+    // level in front of them. Switch levels and the typed line changes under
+    // your eyes. Nothing here is a mock-up — Concise runs the actual on-device
+    // rewrite, so what the screen promises is what the app does.
+    private var cleanUpScreen: some View {
+        screen(symbol: "wand.and.sparkles",
+               title: loc("Clean-up"),
+               message: loc("Aloud tidies what you say as it types. Try the settings on the same sentence.")) {
+            VStack(spacing: 14) {
+                Picker("", selection: $settings.polishLevel) {
+                    ForEach(controller.availableLevels) { level in
+                        Text(level.displayName).tag(level)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: cardWidth)
+
+                if showsSample {
+                    VStack(alignment: .leading, spacing: 8) {
+                        sampleRow(label: loc("You say"), muted: true) {
+                            Text(sampleSpoken)
+                        }
+                        Divider()
+                        sampleRow(label: loc("Aloud types"), muted: false) {
+                            if conciseRunning {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Text(sampleTyped)
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .frame(width: cardWidth, alignment: .leading)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+                }
+
+                Text(settings.polishLevel.explanation)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2, reservesSpace: true)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: cardWidth)
+
+                primaryButton(loc("Continue")) { advance() }
+            }
+            .onAppear { refreshConcisePreview() }
+            .onChange(of: settings.polishLevel) { _, _ in refreshConcisePreview() }
+        }
+    }
+
+    private func sampleRow(label: String, muted: Bool,
+                           @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .textCase(.uppercase)
+            content()
+                .font(.callout)
+                .foregroundStyle(muted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                // Reserved so switching levels never resizes the card.
+                .lineLimit(3, reservesSpace: true)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // The spoken fixes the demo shows off — fillers, "scratch that" — are
+    // English-only rules today, so a translated sample would promise a
+    // clean-up that never happens. Everywhere else the screen keeps the
+    // picker and the description and skips the demonstration.
+    private var showsSample: Bool {
+        (settings.declaredLanguages.first ?? "en").hasPrefix("en")
+    }
+
+    // Deliberately a mess: a filler, hedging, a spoken correction, and a
+    // spoken time, so every level has something visible to do with it —
+    // Light tidies, Standard obeys the correction, Concise tightens.
+    private var sampleSpoken: String {
+        loc("um send this to marketing scratch that what we really need is for somebody to please get it over to the sales team sometime before five p.m. today if at all possible")
+    }
+
+    // Vocabulary is empty on day one, so the demo passes none — what the
+    // screen shows is what this Mac would type for this sentence today.
+    private var samplePolished: String {
+        TextPolisher(level: settings.polishLevel.deterministicLevel,
+                     replacements: [],
+                     languages: settings.declaredLanguages)
+            .polish(sampleSpoken)
+    }
+
+    private var sampleTyped: String {
+        settings.polishLevel == .concise ? (conciseSample ?? samplePolished) : samplePolished
+    }
+
+    // The rewrite is a model call: run it once, off the main path, and keep
+    // the polished text on screen if it declines or takes too long — the same
+    // thing dictation itself does.
+    private func refreshConcisePreview() {
+        guard step == .cleanUp, settings.polishLevel == .concise else { return }
+        guard conciseSample == nil, !conciseRunning else { return }
+        let input = samplePolished
+        conciseRunning = true
+        Task {
+            conciseSample = await controller.previewRewrite(input)
+            conciseRunning = false
         }
     }
 
@@ -446,6 +610,14 @@ struct OnboardingView: View {
                         featureTile(feature)
                     }
                 }
+                // Where the window goes when it closes — the last thing worth
+                // knowing, on the last screen, next to the button that closes it.
+                (Text(loc("Aloud lives in your menu bar — the "))
+                 + Text(Image(systemName: "waveform"))
+                 + Text(loc(" icon at the top of your screen.")))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
                 primaryButton(loc("Start Using Aloud")) { onFinished() }
             }
         }
@@ -567,7 +739,7 @@ struct OnboardingView: View {
         switch s {
         case .access: return Permissions.allGranted
         case .voice: return controller.transcriberState == .ready
-        case .welcome, .tryIt, .features: return false
+        case .welcome, .tryIt, .cleanUp, .features: return false
         }
     }
 }

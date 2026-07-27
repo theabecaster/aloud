@@ -276,6 +276,26 @@ final class DictationController: ObservableObject {
         return rewritten
     }
 
+    // Onboarding's Clean-up demo runs the real rewrite over its sample
+    // sentence rather than showing a written-in-advance imitation of one.
+    // nil = show the polished text, exactly what dictation would type here.
+    func previewRewrite(_ text: String) async -> String? {
+        guard EnhancerOutputCheck.isWorthRewriting(text),
+              let enhancer, enhancer.isAvailable else { return nil }
+        let rewritten: String? = await withTaskGroup(of: String?.self) { group in
+            group.addTask { try? await enhancer.enhance(text, extraInstructions: nil) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        guard let rewritten, rewritten != text else { return nil }
+        return rewritten
+    }
+
     // What's already in the focused field helps the rewrite match the
     // conversation's spelling of names and its style. Reference only, short,
     // and explicitly fenced off from being read as instructions — field
