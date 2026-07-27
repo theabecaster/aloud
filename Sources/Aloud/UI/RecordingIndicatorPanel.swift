@@ -385,7 +385,7 @@ final class IndicatorModel: ObservableObject {
     @Published var transcribingLabel: String?
     // Whether background noise is being filtered right now. Mirrored here
     // rather than read from settings so the pill redraws the moment it changes.
-    @Published var noiseReduction = true
+    @Published var noiseReduction = false
     var onStop: (() -> Void)?
     var onToggleNoiseReduction: (() -> Void)?
     var onResetPosition: (() -> Void)?

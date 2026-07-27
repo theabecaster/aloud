@@ -40,7 +40,7 @@ final class SettingsStore: ObservableObject {
             : storedLanguages
         handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
         pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
-        noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? true
+        noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? false
     }
 
     private static func resolveDefaults() -> UserDefaults {
@@ -162,9 +162,12 @@ final class SettingsStore: ObservableObject {
     }
     // Run the mic through macOS voice processing: room noise, keyboard clatter
     // and whatever the Mac's own speakers are playing get attenuated before
-    // anything reaches the model. On by default — the failure mode it prevents
-    // (a café transcribing the next table) is far more common than the one it
-    // can cause (a studio mic sounding thinner than it needs to).
+    // anything reaches the model. Off until asked for: it changes how the user
+    // sounds, and a first dictation that comes back thinner than the room it
+    // was spoken in is confusing in a way that a first dictation carrying some
+    // background noise is not. Someone dictating in a café can turn it on from
+    // the pill the moment they want it; someone who never needed it never has
+    // to work out why their voice was being processed.
     @Published var noiseReduction: Bool {
         didSet { defaults.set(noiseReduction, forKey: Keys.noiseReduction) }
     }
