@@ -4,6 +4,18 @@ import Foundation
 // Entry: CLI verbs do their work and exit; no args runs the menu bar app.
 let cliArgs = Array(CommandLine.arguments.dropFirst())
 
+// The indicator demo is a CLI verb that needs the app loop: it puts the real
+// pill on screen with no microphone, model, or permissions so the indicator can
+// be looked at (or screenshotted) on a machine that hasn't granted anything.
+if cliArgs.first == "--indicator-demo" {
+    let code = CLI.prepareIndicatorDemo(path: cliArgs.count > 1 ? cliArgs[1] : nil)
+    if code != 0 { exit(code) }
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    app.run()
+    exit(0)
+}
+
 if let first = cliArgs.first, first.hasPrefix("--") {
     let code = await CLI.run(cliArgs)
     exit(code)

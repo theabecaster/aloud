@@ -20,6 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pendingUpdate: Updater.LatestRelease?
     private var phaseObservation: AnyCancellable?
     private var downloadObservation: AnyCancellable?
+    private var noiseObservation: AnyCancellable?
+    private var menuBarTintFade: Timer?
+    // What the menu bar glyph is currently drawing: which symbol, and what
+    // colour (nil = the menu bar's own, which is what a template image gets).
+    // Both are held here because either can change on its own — the symbol
+    // when a dictation starts, the colour when filtering is switched — and
+    // whichever changes must not drop the other.
+    private var iconSymbol = "waveform"
+    // How far Aloud's blue has risen through the glyph, 0…1 from the bottom.
+    private var iconFill: CGFloat = 0
 
     // File identity of our executable at launch. If the bundle on disk is
     // later replaced (manual update) or trashed, this instance is a zombie:
@@ -65,6 +75,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // percentage so progress is glanceable without opening the menu.
         downloadObservation = controller.$upgradeState.sink { [weak self] state in
             self?.refreshDownloadBadge(for: state)
+        }
+        // Filtering background noise is the one setting that changes how the
+        // app hears you, so it says so where the app always is: the menu bar
+        // glyph takes Aloud's blue while it's on, and fades back to the menu
+        // bar's own colour when it isn't.
+        setMenuBarTint(controller.settings.noiseReduction, animated: false)
+        noiseObservation = controller.settings.$noiseReduction.sink { [weak self] on in
+            self?.setMenuBarTint(on, animated: true)
         }
 
         // Settings › About owns the manual check now; the install flow still
@@ -118,24 +136,116 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "waveform",
-                                   accessibilityDescription: "Aloud")
-        }
+        applyIcon()
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
     }
 
     private func refreshIcon(for phase: DictationController.Phase) {
-        guard let button = statusItem.button else { return }
-        let name: String
         switch phase {
-        case .recording: name = "waveform.badge.mic"
-        case .transcribing: name = "waveform.badge.magnifyingglass"
-        default: name = "waveform"
+        case .recording: iconSymbol = "waveform.badge.mic"
+        case .transcribing: iconSymbol = "waveform.badge.magnifyingglass"
+        default: iconSymbol = "waveform"
         }
-        button.image = NSImage(systemSymbolName: name, accessibilityDescription: "Aloud")
+        applyIcon()
+    }
+
+    // A status item's button draws a template image in the menu bar's own
+    // colour and ignores `contentTintColor` — which is why tinting it that way
+    // produced a black glyph. Colour has to come from the symbol itself, as a
+    // palette configuration, and the image then has to stop being a template
+    // or the menu bar paints over it again.
+    //
+    // Filling, the blue is a *solid chip* behind the glyph rather than the
+    // glyph itself: a thin blue waveform against the menu bar all but
+    // disappears, where a filled shape with the mark knocked out of it in
+    // white reads at a glance. The chip rises from the bottom, so sliding the
+    // waterline up fills it like a glass and sliding it down empties it from
+    // the top, as if it were draining out underneath.
+    //
+    // Empty goes back to a plain template image, which is what keeps the icon
+    // correct in dark mode, in light mode, and inverted under an open menu —
+    // a baked-in colour would be wrong the moment the appearance changed.
+    private func applyIcon() {
+        guard let button = statusItem?.button else { return }
+        guard let base = NSImage(systemSymbolName: iconSymbol, accessibilityDescription: "Aloud")
+        else { return }
+        let level = min(max(iconFill, 0), 1)
+        guard level > 0.001 else {
+            base.isTemplate = true
+            button.image = base
+            return
+        }
+        let blue = NSColor(Color.aloud).usingColorSpace(.sRGB) ?? .systemBlue
+        // Above the waterline the glyph is drawn in a real colour rather than
+        // left as a template, so it is resolved against the menu bar's own
+        // appearance for the moment this frame is drawn.
+        var plain = base
+        var knockout = base
+        button.effectiveAppearance.performAsCurrentDrawingAppearance {
+            let label = NSColor.labelColor.usingColorSpace(.sRGB) ?? .labelColor
+            plain = base.withSymbolConfiguration(.init(paletteColors: [label])) ?? base
+            knockout = base.withSymbolConfiguration(.init(paletteColors: [.white])) ?? base
+        }
+        // The bubble is a circle as tall as the menu bar will allow, and the
+        // glyph draws down into it as it fills — from its natural size when
+        // empty to comfortably inside the circle when full, so there is no
+        // jump at either end of the animation.
+        let diameter = base.size.height
+        let size = NSSize(width: max(base.size.width, diameter), height: diameter)
+        let glyphScale = 1 - 0.36 * level
+        let composite = NSImage(size: size, flipped: false) { rect in
+            let glyphSize = NSSize(width: base.size.width * glyphScale,
+                                   height: base.size.height * glyphScale)
+            let glyph = NSRect(x: rect.midX - glyphSize.width / 2,
+                               y: rect.midY - glyphSize.height / 2,
+                               width: glyphSize.width, height: glyphSize.height)
+            plain.draw(in: glyph)
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(rect: NSRect(x: rect.minX, y: rect.minY,
+                                      width: rect.width, height: rect.height * level)).addClip()
+            blue.setFill()
+            NSBezierPath(ovalIn: NSRect(x: rect.midX - diameter / 2, y: rect.minY,
+                                        width: diameter, height: diameter)).fill()
+            knockout.draw(in: glyph)
+            NSGraphicsContext.restoreGraphicsState()
+            return true
+        }
+        composite.isTemplate = false
+        button.image = composite
+    }
+
+    // Fill the glyph with blue, or drain it, over time. Done by hand because
+    // nothing about a status item animates on its own, and a colour that
+    // snapped would read as a glitch rather than as something filling up.
+    // Ease-in-out so it starts and settles gently, the way a poured liquid
+    // does rather than a switch being thrown.
+    private func setMenuBarTint(_ on: Bool, animated: Bool) {
+        guard statusItem?.button != nil else { return }
+        menuBarTintFade?.invalidate()
+        guard animated else {
+            iconFill = on ? 1 : 0
+            applyIcon()
+            return
+        }
+        let from = iconFill
+        let to: CGFloat = on ? 1 : 0
+        let start = Date()
+        let duration = 0.7
+        menuBarTintFade = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else { timer.invalidate(); return }
+                let t = min(1, Date().timeIntervalSince(start) / duration)
+                let eased = t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
+                self.iconFill = from + (to - from) * eased
+                if t >= 1 {
+                    timer.invalidate()
+                    self.iconFill = to
+                }
+                self.applyIcon()
+            }
+        }
     }
 
     private func refreshDownloadBadge(for state: TranscriberState) {

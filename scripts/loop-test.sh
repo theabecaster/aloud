@@ -23,23 +23,43 @@ BUNDLE_ID="com.abrahamgonzalez.aloud"
 
 [ -x "$APP_BIN" ] || { echo "error: $APP_BIN not found — install the app first" >&2; exit 1; }
 
+TMP=""
+cleanup() {
+  [ -n "$TMP" ] && rm -rf "$TMP"
+  restore_pref noiseReduction "$PRIOR_NOISE"
+  [ "${LIVE:-0}" = "1" ] && restore_pref liveTyping "$PRIOR_LIVE"
+  return 0
+}
+
+restore_pref() {  # key, prior value ("absent" = was never set)
+  if [ "$2" = "absent" ]; then
+    defaults delete "$BUNDLE_ID" "$1" 2>/dev/null || true
+  else
+    defaults write "$BUNDLE_ID" "$1" -bool "$2"
+  fi
+}
+
+# Noise reduction has to be OFF for this test. It's on by default and enables
+# macOS echo cancellation, whose entire job is to remove sound coming from this
+# Mac's own speakers — which is precisely how this test delivers the phrase.
+# Leaving it on doesn't find a bug, it just makes the mic hear nothing.
+PRIOR_NOISE="$(defaults read "$BUNDLE_ID" noiseReduction 2>/dev/null || echo "absent")"
+defaults write "$BUNDLE_ID" noiseReduction -bool false
+
 # LIVE=1 runs the same loop with the live-typing beta enabled; the setting is
-# restored afterwards. Requires an app restart to pick up the changed default,
-# so we quit any running instance first.
+# restored afterwards.
+PRIOR_LIVE="absent"
 if [ "${LIVE:-0}" = "1" ]; then
   PRIOR_LIVE="$(defaults read "$BUNDLE_ID" liveTyping 2>/dev/null || echo "absent")"
   defaults write "$BUNDLE_ID" liveTyping -bool true
-  pkill -f "Aloud.app/Contents/MacOS/Aloud" 2>/dev/null || true
-  sleep 1
 fi
-restore_live() {
-  [ "${LIVE:-0}" = "1" ] || return 0
-  if [ "$PRIOR_LIVE" = "absent" ]; then
-    defaults delete "$BUNDLE_ID" liveTyping 2>/dev/null || true
-  else
-    defaults write "$BUNDLE_ID" liveTyping -bool "$PRIOR_LIVE"
-  fi
-}
+
+trap cleanup EXIT
+
+# Settings are read at launch, so a running instance has to be restarted to
+# pick either of those up.
+pkill -f "Aloud.app/Contents/MacOS/Aloud" 2>/dev/null || true
+sleep 1
 
 # 1. App running?
 if ! pgrep -qf "Aloud.app/Contents/MacOS/Aloud"; then
@@ -49,7 +69,6 @@ fi
 
 # 2. Synthesize the phrase to play through speakers.
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"; restore_live' EXIT
 say -v Samantha -o "$TMP/phrase.aiff" "$PHRASE"
 DUR="$(afinfo "$TMP/phrase.aiff" | awk '/estimated duration/ {print $3}')"
 HOLD="$(python3 -c "print(float('$DUR') + 1.2)")"

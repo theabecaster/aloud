@@ -87,6 +87,37 @@ enum CLI {
             }
             let speed = args.count >= 3 ? Double(args[2]) : nil
             return await transcribeLive(path: args[1], speed: speed)
+        case "--mic-check":
+            // Records for a couple of seconds and reports what the capture
+            // path actually did — including whether macOS voice processing
+            // engaged on this input device, which nothing else can tell you
+            // without a person listening. Needs the Microphone permission.
+            let seconds = args.count >= 2 ? (Double(args[1]) ?? 2.0) : 2.0
+            return await micCheck(seconds: seconds)
+        case "--speech-check":
+            // Headless probe of the speech detector: how much of a clip is
+            // actually speech, and where. The hands-free "Still listening…"
+            // reminder is built on this, and nothing about it shows up in a
+            // transcript. Downloads the detector if it isn't there yet.
+            guard args.count >= 2 else {
+                FileHandle.standardError.write(Data("usage: Aloud --speech-check <audio-file>…\n".utf8))
+                return 64
+            }
+            return await speechCheck(paths: Array(args.dropFirst()))
+        case "--spectrum":
+            // Prints what the recording indicator's meter would draw, as an
+            // ASCII spectrogram plus per-band coverage — the only way to check
+            // the bars actually respond to a voice, and stay down when nobody
+            // is talking, without a person watching the pill. With a file: no
+            // model and no permissions. With seconds instead: records live off
+            // the current input (needs Microphone), which is the only way to
+            // see it against a real room's noise floor.
+            guard args.count >= 2 else {
+                FileHandle.standardError.write(Data("usage: Aloud --spectrum <audio-file>|<seconds>\n".utf8))
+                return 64
+            }
+            if let seconds = Double(args[1]) { return await spectrumLive(seconds: seconds) }
+            return spectrum(path: args[1])
         case "--update-check":
             // Headless updater probe: prints current vs latest and whether an
             // update would apply. Never installs (the GUI owns that).
@@ -159,6 +190,10 @@ enum CLI {
             ],
             "model": [
                 "downloaded": transcriber.modelIsDownloaded,
+                // The small speech-detection model. False on an install
+                // upgrading from a version that predates it, until the
+                // background catch-up finishes.
+                "speechDetectorDownloaded": VoiceModels.isDownloaded,
             ],
             "settings": [
                 "hotkey": settings.hotkey.displayName,
@@ -167,11 +202,14 @@ enum CLI {
                 "onboardingComplete": settings.onboardingComplete,
                 "liveTyping": settings.liveTyping,
                 "handsFree": settings.handsFree,
+                "noiseReduction": settings.noiseReduction,
             ],
             "paths": [
                 "stateDir": AppPaths.stateDir.path,
             ],
-            "inputDevices": AudioDevices.inputDevices().map { $0.name },
+            // Name and UID: the UID is what Settings stores and what the
+            // noise-reduction blocklist keys on, so a support answer needs it.
+            "inputDevices": AudioDevices.inputDevices().map { ["name": $0.name, "uid": $0.uid] },
         ]
         if let data = try? JSONSerialization.data(withJSONObject: report,
                                                   options: [.prettyPrinted, .sortedKeys]),
@@ -206,6 +244,75 @@ enum CLI {
             FileHandle.standardError.write(Data("transcription failed: \(error.localizedDescription)\n".utf8))
             return 1
         }
+    }
+
+    // MARK: --mic-check
+
+    static func micCheck(seconds: Double) async -> Int32 {
+        let settings = SettingsStore.shared
+        let recorder = AudioRecorder()
+        // Same wiring the app uses, so the probe reports what a real dictation
+        // would do rather than a fresh-every-time approximation.
+        recorder.isDeviceDeafUnderVoiceProcessing = { settings.deafUnderNoiseReduction.contains($0) }
+        recorder.onVoiceProcessingWentDeaf = { settings.rememberDeafUnderNoiseReduction($0) }
+        do {
+            try recorder.start(deviceUID: settings.microphoneUID,
+                               noiseReduction: settings.noiseReduction)
+        } catch {
+            // The engine's own reason, not just ours — "couldn't start" on its
+            // own tells nobody anything.
+            let detail = recorder.lastStartError.map { " (\($0))" } ?? ""
+            FileHandle.standardError.write(Data(
+                "couldn't start capture: \(error.localizedDescription)\(detail)\n".utf8))
+            return 1
+        }
+        print("noise_reduction_requested=\(settings.noiseReduction) engaged=\(recorder.voiceProcessingActive)")
+        try? await Task.sleep(nanoseconds: UInt64(max(0.2, seconds) * 1_000_000_000))
+        let heard = recorder.heardAnything
+        let firstSignal = recorder.secondsToFirstSignal
+        let samples = recorder.stop()
+        let duration = Double(samples.count) / AudioRecorder.targetSampleRate
+        let rms = samples.isEmpty ? 0
+            : (samples.reduce(0) { $0 + $1 * $1 } / Float(samples.count)).squareRoot()
+        // Digital silence is the thing worth naming: a live microphone in a
+        // quiet room still has a noise floor, so all-zeros means the capture
+        // path is dead rather than the room being quiet.
+        print(String(format: "captured=%.2fs rms=%.6f heard_signal=%@ first_signal=%@ fell_back=%@",
+                     duration, rms, heard ? "yes" : "no",
+                     firstSignal.map { String(format: "%.2fs", $0) } ?? "never",
+                     recorder.voiceProcessingFellBack ? "yes" : "no"))
+        // No audio at all means the tap never delivered — a broken capture
+        // path, not a quiet room.
+        return samples.isEmpty ? 1 : 0
+    }
+
+    // MARK: --speech-check
+
+    static func speechCheck(paths: [String]) async -> Int32 {
+        do {
+            let progressPrinter = ProgressPrinter()
+            try await VoiceModels.shared.prepare { progressPrinter.report($0) }
+        } catch {
+            FileHandle.standardError.write(Data(
+                "speech detector unavailable: \(error.localizedDescription)\n".utf8))
+            return 1
+        }
+        for path in paths {
+            guard let samples = loadSamples16k(URL(fileURLWithPath: path)) else {
+                FileHandle.standardError.write(Data("couldn't read audio: \(path)\n".utf8))
+                return 2
+            }
+            let total = Double(samples.count) / AudioRecorder.targetSampleRate
+            let ranges = (try? await VoiceModels.shared.speechRanges(for: samples)) ?? []
+            let speech = ranges.reduce(0) { $0 + ($1.end - $1.start) }
+            print(String(format: "%@: audio=%.2fs speech=%.2fs (%.0f%%) stretches=%ld",
+                         (path as NSString).lastPathComponent, total, speech,
+                         total > 0 ? speech / total * 100 : 0, ranges.count))
+            for range in ranges {
+                print(String(format: "  %6.2f–%6.2fs", range.start, range.end))
+            }
+        }
+        return 0
     }
 
     // MARK: --transcribe-basic
@@ -276,6 +383,169 @@ enum CLI {
             FileHandle.standardError.write(Data("live transcription failed: \(error.localizedDescription)\n".utf8))
             return 1
         }
+    }
+
+    // MARK: --indicator-demo
+
+    // Schedules the pill through every state it has, driven by a file instead
+    // of the microphone, and returns — main.swift runs the app loop. It has to
+    // be that way round: the meter's own updates hop through the main actor,
+    // which never gets a turn if a CLI verb is still sitting on it.
+    //
+    // Each state prints as it is entered, so a script can time its screenshots.
+    @MainActor
+    static func prepareIndicatorDemo(path: String?) -> Int32 {
+        // Band levels for the whole clip up front, then played back in step
+        // with the clock so the bars move the way a real voice moves them.
+        var timeline: [[Float]] = []
+        var levels: [Float] = []
+        if let path, let samples = loadSamples16k(URL(fileURLWithPath: path)) {
+            let analyzer = SpectrumAnalyzer()
+            var i = 0
+            while i + 512 <= samples.count {
+                let frame = Array(samples[i..<(i + 512)])
+                timeline.append(analyzer.bands(frame: frame))
+                let rms = (frame.reduce(0) { $0 + $1 * $1 } / 512).squareRoot()
+                levels.append(min(1, rms * 12))
+                i += 512
+            }
+        }
+        guard !timeline.isEmpty else {
+            FileHandle.standardError.write(Data("usage: Aloud --indicator-demo <audio-file>\n".utf8))
+            return 64
+        }
+
+        let indicator = RecordingIndicatorPanel()
+        indicator.settings = SettingsStore.shared
+        let started = ProcessInfo.processInfo.systemUptime
+        let framesPerSecond = AudioRecorder.targetSampleRate / 512
+        func index() -> Int {
+            Int((ProcessInfo.processInfo.systemUptime - started) * framesPerSecond) % timeline.count
+        }
+
+        // The states, in order, with how long each is held. Scheduled on the
+        // run loop rather than driven by a blocking loop: the pill's own meter
+        // timer hops through the main actor, which never gets a turn if this
+        // function sits on it.
+        let script: [(name: String, seconds: Double, enter: @MainActor () -> Void)] = [
+            ("recording", 4, {
+                indicator.show(levelProvider: { levels[index()] },
+                               bandsProvider: { timeline[index()] })
+            }),
+            ("recording-basic", 3, { indicator.isBasic = true }),
+            ("hands-free", 4, {
+                indicator.isBasic = false
+                indicator.showLocked()
+            }),
+            ("command", 4, {
+                indicator.hide()
+                indicator.show(levelProvider: { levels[index()] },
+                               bandsProvider: { timeline[index()] },
+                               command: true)
+            }),
+            ("notice", 3, { indicator.showNotice(loc("Microphone changed — still listening")) }),
+            ("transcribing", 3, { indicator.showTranscribing() }),
+            ("hint", 3, { indicator.showHint(loc("Finish setup to start dictating")) }),
+        ]
+        var at: TimeInterval = 0
+        for step in script {
+            Timer.scheduledTimer(withTimeInterval: max(at, 0.001), repeats: false) { _ in
+                MainActor.assumeIsolated {
+                    print("state=\(step.name)")
+                    fflush(stdout)
+                    step.enter()
+                }
+            }
+            at += step.seconds
+        }
+        Timer.scheduledTimer(withTimeInterval: at, repeats: false) { _ in exit(0) }
+        return 0
+    }
+
+    // MARK: --spectrum
+
+    // Run a file through the indicator's analyser and draw the result: one
+    // column per 32 ms frame, low band at the bottom.
+    static func spectrum(path: String) -> Int32 {
+        let url = URL(fileURLWithPath: path)
+        guard let samples = loadSamples16k(url) else {
+            FileHandle.standardError.write(Data("couldn't read \(path)\n".utf8))
+            return 1
+        }
+        return report(samples: samples)
+    }
+
+    // Same report, from the live microphone — the room's own noise floor is
+    // what the meter has to stay quiet against, and no file can stand in for it.
+    static func spectrumLive(seconds: Double) async -> Int32 {
+        let settings = SettingsStore.shared
+        let recorder = AudioRecorder()
+        do {
+            try recorder.start(deviceUID: settings.microphoneUID,
+                               noiseReduction: settings.noiseReduction)
+        } catch {
+            FileHandle.standardError.write(Data("couldn't start capture: \(error.localizedDescription)\n".utf8))
+            return 1
+        }
+        FileHandle.standardError.write(Data("recording \(seconds)s…\n".utf8))
+        try? await Task.sleep(nanoseconds: UInt64(max(0.5, seconds) * 1_000_000_000))
+        let samples = recorder.stop()
+        guard !samples.isEmpty else {
+            FileHandle.standardError.write(Data("captured nothing\n".utf8))
+            return 1
+        }
+        let rms = (samples.reduce(0) { $0 + $1 * $1 } / Float(samples.count)).squareRoot()
+        print(String(format: "captured=%.2fs rms=%.4f (%.1f dBFS)",
+                     Double(samples.count) / AudioRecorder.targetSampleRate,
+                     rms, 20 * log10(max(rms, 1e-9))))
+        return report(samples: samples)
+    }
+
+    private static func report(samples: [Float]) -> Int32 {
+        let analyzer = SpectrumAnalyzer()
+        let frame = 512
+        var frames: [[Float]] = []
+        var i = 0
+        while i + frame <= samples.count {
+            frames.append(analyzer.bands(frame: Array(samples[i..<(i + frame)])))
+            i += frame
+        }
+        guard !frames.isEmpty else {
+            FileHandle.standardError.write(Data("file too short\n".utf8))
+            return 1
+        }
+        // Thin to a terminal's worth of columns, keeping each column's peak so
+        // a short syllable can't vanish into the averaging.
+        let columns = 72
+        let stride = max(1, frames.count / columns)
+        var thinned: [[Float]] = []
+        var f = 0
+        while f < frames.count {
+            let slice = frames[f..<min(f + stride, frames.count)]
+            thinned.append((0..<SpectrumAnalyzer.bandCount).map { b in slice.map { $0[b] }.max() ?? 0 })
+            f += stride
+        }
+        let ramp = Array(" .:-=+*#%@")
+        for band in (0..<SpectrumAnalyzer.bandCount).reversed() {
+            let row = thinned.map { column -> Character in
+                let v = min(max(column[band], 0), 1)
+                return ramp[min(ramp.count - 1, Int(v * Float(ramp.count - 1) + 0.5))]
+            }
+            print(String(row))
+        }
+        // Per-band summary: how often each bar was visibly up, and how high it
+        // reached. A band that never moves is a band the user never sees.
+        print("")
+        for band in 0..<SpectrumAnalyzer.bandCount {
+            let values = frames.map { $0[band] }
+            let active = Double(values.filter { $0 > 0.05 }.count) / Double(values.count)
+            let peak = values.max() ?? 0
+            let mean = values.reduce(0, +) / Float(values.count)
+            print(String(format: "band %2d  active=%.2f  peak=%.2f  mean=%.2f", band, active, peak, mean))
+        }
+        let silent = frames.filter { ($0.max() ?? 0) <= 0.001 }.count
+        print(String(format: "frames=%d  gated=%.2f", frames.count, Double(silent) / Double(frames.count)))
+        return 0
     }
 
     // Decode any readable audio file to 16 kHz mono Float32.
@@ -602,6 +872,26 @@ enum CLI {
                "numbers: spoken time becomes a written one")
         expect(numberPolisher.polish("one of them left") == "One of them left",
                "numbers: prose keeps its words")
+
+        // 6c. Speech detection — the part that needs no model. The detector
+        // itself is exercised by --speech-check.
+        let reminder = RecordingIndicatorPanel.SilenceReminder.self
+        expect(reminder.next(showing: false, silentFor: 45, lockedFor: 60,
+                             isLocked: true, inputIdle: { 60 }),
+               "silence: reminder appears after a long quiet while away")
+        expect(!reminder.next(showing: false, silentFor: 0.1, lockedFor: 60,
+                              isLocked: true, inputIdle: { 60 }),
+               "silence: speech keeps the reminder away")
+        expect(!reminder.next(showing: false, silentFor: 300, lockedFor: 300,
+                              isLocked: false, inputIdle: { 300 }),
+               "silence: unlocked sessions never remind")
+        expect(SpeechActivity().secondsSinceSpeech == nil,
+               "speech: no detector reports nothing rather than silence")
+        expect(ParakeetTranscriber.decodeWindow([Float](repeating: 0.2, count: 16_000)).count == 240_000,
+               "transcription: short audio fills the model's window")
+        expect(AudioRecorder.channelMap(forInputChannels: 3) == [0]
+               && AudioRecorder.channelMap(forInputChannels: 1) == nil,
+               "capture: a multi-channel microphone is given a channel to use")
 
         // 7. Updater semver.
         expect(Updater.semverLess("1.0.0", "1.0.1"), "updater: patch compare")

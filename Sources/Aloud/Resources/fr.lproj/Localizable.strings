@@ -99,6 +99,8 @@
 "Without both, Aloud can’t hear you or type for you." = "Sans les deux, Aloud ne peut ni vous entendre ni écrire pour vous.";
 "Microphone" = "Micro";
 "System default" = "Par défaut du système";
+"Reduce background noise" = "Réduire le bruit de fond";
+"Filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Turn it off if your voice sounds thin." = "Filtre le bruit de la pièce, le clavier et le son des haut-parleurs du Mac avant qu’Aloud n’écoute. Désactivez-le si votre voix semble étouffée.";
 "Sound when recording starts" = "Son au début de l’enregistrement";
 "Open Aloud at login" = "Ouvrir Aloud à l’ouverture de session";
 
@@ -311,3 +313,7 @@
 "Voice commands" = "Commandes vocales";
 "Say what to change" = "Dites quoi changer";
 "Set a command key in Settings, then hold it and say what to do: rewrite or translate the selected text, or write something new." = "Définissez une touche de commande dans les Réglages, maintenez-la et dites quoi faire : réécrire ou traduire le texte sélectionné, ou écrire du nouveau.";
+"Filtering background noise — click to stop" = "Filtrage du bruit de fond — cliquez pour arrêter";
+"Filter background noise" = "Filtrer le bruit de fond";
+"Background noise is being filtered — click to stop" = "Le bruit de fond est filtré — cliquez pour arrêter";
+"Filter out background noise" = "Filtrer le bruit de fond";

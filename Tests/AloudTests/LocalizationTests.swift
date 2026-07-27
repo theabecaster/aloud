@@ -19,6 +19,7 @@ final class LocalizationTests: XCTestCase {
         "Uninstall Aloud?",
         "Open Aloud at login",
         "%ld dictations",
+        "Reduce background noise",
     ]
 
     private let missingMarker = "\u{7F}missing\u{7F}"

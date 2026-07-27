@@ -171,7 +171,12 @@ struct GeneralSettings: View {
                         Text(d.name).tag(d.uid as String?)
                     }
                 }
+                Toggle(loc("Reduce background noise"), isOn: $settings.noiseReduction)
                 Toggle(loc("Sound when recording starts"), isOn: $settings.soundCues)
+            } footer: {
+                Text(loc("Filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Turn it off if your voice sounds thin."))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             SwiftUI.Section {

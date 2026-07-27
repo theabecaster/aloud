@@ -28,6 +28,11 @@ final class DictationController: ObservableObject {
     private let injector = TextInjector()
     private let hotkeyManager: HotkeyManager
     private let indicator = RecordingIndicatorPanel()
+    // Speech/silence detection for the running session. Only the hands-free
+    // reminder consumes it today; it runs for every session because the cost
+    // is a 256 ms model tick and the alternative is a threshold that a noisy
+    // room defeats.
+    private let speechActivity = SpeechActivity()
 
     // Live typing: active only while a dictation runs with the setting on.
     private var liveSession: StreamingTranscription?
@@ -94,9 +99,36 @@ final class DictationController: ObservableObject {
             self?.hotkeyManager.endHandsFree()
         }
         indicator.settings = settings
+        indicator.noiseReduction = settings.noiseReduction
+        // The badge on the pill is the same switch General holds: pressing it
+        // applies to the dictation in progress and is remembered for the next
+        // one. What the badge then shows is what capture actually did — a
+        // microphone that goes deaf under filtering is left unfiltered, and
+        // the badge should not claim otherwise.
+        indicator.onToggleNoiseReduction = { [weak self] in
+            guard let self else { return }
+            let enabled = !self.settings.noiseReduction
+            self.settings.noiseReduction = enabled
+            self.recorder.setNoiseReduction(enabled)
+            self.indicator.noiseReduction = self.recorder.isRecording
+                ? self.recorder.voiceProcessingActive
+                : enabled
+        }
+        settings.$noiseReduction
+            .sink { [weak self] on in self?.indicator.noiseReduction = on }
+            .store(in: &cancellables)
         indicator.levelsProvider = { [weak self] in self?.availableLevels ?? PolishLevel.allCases }
         recorder.onDeviceChange = { [weak self] in
             self?.indicator.showNotice(loc("Microphone changed — still listening"))
+        }
+        // Some microphones accept macOS voice processing and then deliver
+        // nothing at all. Capture notices and recovers on its own; this is
+        // what stops it happening twice on the same device.
+        recorder.isDeviceDeafUnderVoiceProcessing = { [weak settings] uid in
+            settings?.deafUnderNoiseReduction.contains(uid) ?? false
+        }
+        recorder.onVoiceProcessingWentDeaf = { [weak settings] uid in
+            settings?.rememberDeafUnderNoiseReduction(uid)
         }
         settings.dropCollidingKeys()
         settings.$handsFree
@@ -159,18 +191,50 @@ final class DictationController: ObservableObject {
     // the effective state stays .ready and the finished model takes over
     // silently on the next dictation).
     func prepareModel() async {
+        // Setup that still needs the speech model is one download as far as
+        // the user is concerned: the small voice models are pulled first and
+        // take the first few percent of the bar, the speech model the rest.
+        // Nobody has to know more than one file is involved.
+        let firstSetup = !transcriber.modelIsDownloaded
+        let voiceShare = firstSetup ? VoiceModels.downloadShare : 0
+        if firstSetup {
+            try? await VoiceModels.shared.prepare { [weak self] progress in
+                Task { @MainActor in self?.reportSetup(progress: progress * voiceShare) }
+            }
+        }
         do {
             try await transcriber.prepare { [weak self] progress in
                 Task { @MainActor in
-                    guard let self else { return }
-                    self.upgradeState = .downloading(progress: progress)
-                    if !self.usingFallback { self.transcriberState = .downloading(progress: progress) }
+                    self?.reportSetup(progress: voiceShare + progress * (1 - voiceShare))
                 }
             }
         } catch {
             // state already .failed inside the transcriber
         }
         refreshTranscriberState()
+        if !firstSetup { catchUpVoiceModels() }
+    }
+
+    private func reportSetup(progress: Double) {
+        upgradeState = .downloading(progress: progress)
+        if !usingFallback { transcriberState = .downloading(progress: progress) }
+    }
+
+    // Upgrading from a version that predates the voice models: the speech
+    // model is already on disk, dictation already works, and the ~14 MB that's
+    // left is fetched quietly in the background — no progress bar and no state
+    // change, because putting one up would read as "your app is broken again"
+    // to someone who finished setup months ago. Also the path that loads the
+    // detector on every later launch (files present, nothing to fetch). A
+    // failure is not surfaced or retried within the session: the next launch
+    // tries again, and everything works meanwhile.
+    private var voiceCatchUpStarted = false
+    private func catchUpVoiceModels() {
+        guard !voiceCatchUpStarted else { return }
+        voiceCatchUpStarted = true
+        Task.detached(priority: .background) {
+            try? await VoiceModels.shared.prepare { _ in }
+        }
     }
 
     // MARK: fallback ("basic dictation")
@@ -360,7 +424,9 @@ final class DictationController: ObservableObject {
             await MainActor.run { [weak self] in self?.sessionContext = snapshot }
         }
         do {
-            try recorder.start(deviceUID: settings.microphoneUID)
+            try recorder.start(deviceUID: settings.microphoneUID,
+                               noiseReduction: settings.noiseReduction)
+            startSpeechActivity()
             phase = .recording
             playCue("Tink")
             refreshTranscriberState()   // pick up a background engine switch
@@ -374,12 +440,31 @@ final class DictationController: ObservableObject {
                                                      rules: settings.appModes)
                 if decision.allowsRewrite { enhancer?.prewarm(extraInstructions: decision.extraInstructions) }
             }
-            indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 })
+            indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
+                           bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
             if settings.liveTyping { startLiveTyping() }
         } catch {
             phase = .error(error.localizedDescription)
             indicator.showHint(loc("Couldn’t access the microphone"))
         }
+    }
+
+    // MARK: speech detection
+
+    // Point the session's speech detector at the mic and let the pill ask it
+    // whether anyone is talking. Costs nothing when the detector isn't loaded
+    // (a fresh install mid-download): the provider returns nil and the pill
+    // falls back to its level threshold.
+    private func startSpeechActivity() {
+        let activity = speechActivity
+        activity.start()
+        recorder.onMonitorChunk = { [weak activity] chunk in activity?.append(samples: chunk) }
+        indicator.speechAgeProvider = { [weak activity] in activity?.secondsSinceSpeech }
+    }
+
+    private func stopSpeechActivity() {
+        speechActivity.stop()
+        indicator.speechAgeProvider = nil
     }
 
     // MARK: live typing
@@ -574,6 +659,7 @@ final class DictationController: ObservableObject {
     private func commitRecording() {
         guard phase == .recording, !isCommandSession else { return }
         let samples = recorder.stop()
+        stopSpeechActivity()
         if let session = liveSession {
             commitLive(session: session, samples: samples)
             return
@@ -650,12 +736,14 @@ final class DictationController: ObservableObject {
         let front = NSWorkspace.shared.frontmostApplication
         sessionApp = (front?.localizedName, front?.bundleIdentifier)
         do {
-            try recorder.start(deviceUID: settings.microphoneUID)
+            try recorder.start(deviceUID: settings.microphoneUID,
+                               noiseReduction: settings.noiseReduction)
             phase = .recording
             isCommandSession = true
             playCue("Tink")
             prewarmCommandEngine()
             indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
+                           bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent },
                            command: true)
         } catch {
             phase = .error(error.localizedDescription)
@@ -798,6 +886,7 @@ final class DictationController: ObservableObject {
     private func cancelRecording() {
         guard phase == .recording, !isCommandSession else { return }
         recorder.cancel()
+        stopSpeechActivity()
         if let session = liveSession {
             liveTyper.eraseAll()
             endLiveTyping()
