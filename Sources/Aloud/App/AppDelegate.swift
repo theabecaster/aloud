@@ -11,9 +11,12 @@ extension Notification.Name {
 // Menu bar app: NSStatusItem + menu, onboarding/settings windows, silent
 // update check. LSUIElement in Info.plist keeps us out of the Dock.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
+    private var statusPopover: NSPopover?
+    private var menuPreviewWindow: NSWindow?
     private let controller = DictationController()
+    private let settingsNavigation = SettingsNavigationModel()
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private let scratchpad = ScratchpadPanel()
@@ -52,8 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = launchExecutableID
         AppPaths.ensureStateDir()
         setupStatusItem()
+        let isUIPreview = ProcessInfo.processInfo.environment["ALOUD_UI_PREVIEW"] == "1"
 
-        if !controller.settings.onboardingComplete || !Permissions.allGranted {
+        if isUIPreview {
+            // Render-only harness: no permission prompts, event taps, model
+            // preparation, reachability monitor, or update network request.
+        } else if !controller.settings.onboardingComplete || !Permissions.allGranted {
             showOnboarding()
         } else {
             _ = controller.startListening()
@@ -65,7 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 await controller.prepareModel()
             }
         }
-        resumeDownloadWhenOnline()
+        if !isUIPreview {
+            resumeDownloadWhenOnline()
+        }
 
         // Mirror recording state in the menu bar icon.
         phaseObservation = controller.$phase.sink { [weak self] phase in
@@ -97,8 +106,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ProcessInfo.processInfo.environment["ALOUD_OPEN_SETTINGS"] == "1" {
             openSettings()
         }
+        // Companion harness for visual QA of the custom status popover. Wait
+        // one run-loop turn so AppKit has attached the status button to the
+        // menu bar before the popover asks for its anchor geometry.
+        if ProcessInfo.processInfo.environment["ALOUD_OPEN_MENU"] == "1" {
+            DispatchQueue.main.async { [weak self] in
+                if isUIPreview {
+                    self?.showStatusMenuPreviewWindow()
+                } else {
+                    self?.toggleStatusPopover()
+                }
+            }
+        }
 
-        silentUpdateCheck()
+        if !isUIPreview {
+            silentUpdateCheck()
+        }
     }
 
     // The one-time model download must survive network loss: whenever
@@ -137,9 +160,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         applyIcon()
-        let menu = NSMenu()
-        menu.delegate = self
-        statusItem.menu = menu
+        if let button = statusItem.button {
+            button.target = self
+            button.action = #selector(toggleStatusPopover)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.toolTip = "Aloud"
+        }
     }
 
     private func refreshIcon(for phase: DictationController.Phase) {
@@ -261,8 +287,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // Rebuild the menu each open so status lines are current.
-    func menuNeedsUpdate(_ menu: NSMenu) {
+    @objc private func toggleStatusPopover() {
+        if let statusPopover, statusPopover.isShown {
+            statusPopover.performClose(nil)
+            return
+        }
+
+        // Opening the popover activates Aloud, so remember who had focus:
+        // popover actions that type (retry, use exact words) must hand focus
+        // back first or their keystrokes land on the popover itself.
+        popoverPreviousApp = NSWorkspace.shared.frontmostApplication
+
         // The tap can be missing even though permissions read as granted —
         // e.g. Accessibility was granted after launch, or the grant is stale
         // after the app was replaced on disk. Retry cheaply on every open.
@@ -270,93 +305,142 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             _ = controller.startListening()
         }
 
-        menu.removeAllItems()
+        let popover = statusPopover ?? {
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.animates = true
+            popover.delegate = self
+            statusPopover = popover
+            return popover
+        }()
+        popover.contentSize = NSSize(width: 410, height: 560)
+        popover.contentViewController = NSHostingController(rootView: makeStatusMenuView())
 
-        let status = NSMenuItem(title: statusLine(), action: nil, keyEquivalent: "")
-        status.isEnabled = false
-        menu.addItem(status)
+        guard let button = statusItem.button else { return }
+        button.highlight(true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        statusItem.button?.highlight(false)
+    }
+
+    private func closeStatusPopover() {
+        statusPopover?.performClose(nil)
+    }
+
+    // The app that was frontmost before the popover stole activation.
+    private var popoverPreviousApp: NSRunningApplication?
+
+    // Close the popover, give focus back to that app, and only then run —
+    // synthetic keystrokes must not fire while Aloud is still frontmost.
+    // Activation is asynchronous, hence the beat before the action.
+    private func runRestoringFocus(_ action: @escaping () -> Void) {
+        closeStatusPopover()
+        guard let previous = popoverPreviousApp,
+              previous.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              !previous.isTerminated else {
+            action()
+            return
+        }
+        previous.activate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { action() }
+    }
+
+    private func makeStatusMenuView() -> StatusMenuView {
+        var attention: [StatusMenuView.AttentionAction] = []
 
         if bundleWasReplacedOnDisk {
-            menu.addItem(withTitle: loc("Relaunch to Finish Update"),
-                         action: #selector(relaunchFromDisk), keyEquivalent: "").target = self
+            attention.append(.init(
+                id: "relaunch",
+                title: loc("Relaunch to Finish Update"),
+                symbol: "arrow.clockwise",
+                action: { [weak self] in self?.relaunchFromDisk() }
+            ))
         }
 
         if !Permissions.allGranted || !controller.settings.onboardingComplete {
-            menu.addItem(withTitle: loc("Finish Setup"),
-                         action: #selector(openOnboarding), keyEquivalent: "").target = self
+            attention.append(.init(
+                id: "setup",
+                title: loc("Finish Setup"),
+                symbol: "checkmark.circle",
+                action: { [weak self] in
+                    self?.closeStatusPopover()
+                    self?.openOnboarding()
+                }
+            ))
         } else if case .modelMissing = controller.upgradeState {
-            menu.addItem(withTitle: loc("Download Voice Recognition"),
-                         action: #selector(downloadModel), keyEquivalent: "").target = self
+            attention.append(.init(
+                id: "download",
+                title: loc("Download Voice Recognition"),
+                symbol: "arrow.down.circle",
+                action: { [weak self] in
+                    self?.closeStatusPopover()
+                    self?.downloadModel()
+                }
+            ))
         } else if case .failed = controller.upgradeState {
-            menu.addItem(withTitle: loc("Retry Voice Download"),
-                         action: #selector(downloadModel), keyEquivalent: "").target = self
-        } else if controller.usingFallback {
-            // Dictation already works (basic); the accuracy upgrade is still
-            // landing in the background. Informational only.
-            let title: String
-            if case .downloading(let p) = controller.upgradeState {
-                title = loc("Improving accuracy… %ld%%", Int(p * 100))
-            } else {
-                title = loc("Improving accuracy…")
-            }
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
+            attention.append(.init(
+                id: "retry-download",
+                title: loc("Retry Voice Download"),
+                symbol: "arrow.clockwise.circle",
+                action: { [weak self] in
+                    self?.closeStatusPopover()
+                    self?.downloadModel()
+                }
+            ))
         }
 
-        // An update is news, not a chore: it sits with the other attention
-        // lines under the status. Routine checking lives in Settings › About.
         if let update = pendingUpdate {
-            menu.addItem(withTitle: loc("Update Available (%@)", update.tag),
-                         action: #selector(applyUpdate), keyEquivalent: "").target = self
+            attention.append(.init(
+                id: "update",
+                title: loc("Update Available (%@)", update.tag),
+                symbol: "arrow.down.app",
+                action: { [weak self] in
+                    self?.closeStatusPopover()
+                    self?.applyUpdate()
+                }
+            ))
         }
 
-        // Two groups, always in this order: what to do with the words you just
-        // said, then the app itself. Anything unavailable is simply absent —
-        // a menu of dimmed rows is longer without being more useful.
-        menu.addItem(.separator())
-        if !controller.lastTranscription.isEmpty {
-            menu.addItem(withTitle: loc("Copy Last Text"),
-                         action: #selector(copyLastDictation), keyEquivalent: "").target = self
-        }
-        if controller.retryAvailable {
-            menu.addItem(withTitle: loc("Type It Again"),
-                         action: #selector(retryLastDictation), keyEquivalent: "").target = self
-        }
-        if controller.undoEnhancementAvailable {
-            menu.addItem(withTitle: loc("Use Exact Words"),
-                         action: #selector(undoEnhancement), keyEquivalent: "").target = self
-        }
-        let scratchItem = NSMenuItem(title: loc("Scratchpad"),
-                                     action: #selector(toggleScratchpad), keyEquivalent: "")
-        scratchItem.target = self
-        scratchItem.state = scratchpad.isVisible ? .on : .off
-        menu.addItem(scratchItem)
-
-        menu.addItem(.separator())
-        // No ⌘, here: Aloud has no app menu to own that shortcut, so it only
-        // fires while this menu is already open — a promise the rest of the
-        // Mac can't keep.
-        menu.addItem(withTitle: loc("Settings"),
-                     action: #selector(openSettings), keyEquivalent: "").target = self
-        menu.addItem(withTitle: loc("Quit Aloud"),
-                     action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        return StatusMenuView(
+            controller: controller,
+            attentionActions: attention,
+            scratchpadVisible: scratchpad.isVisible,
+            onOpenHistory: { [weak self] in self?.showSettings(.history) },
+            onOpenSettings: { [weak self] in self?.showSettings(.general) },
+            onToggleScratchpad: { [weak self] in
+                self?.closeStatusPopover()
+                self?.toggleScratchpad()
+            },
+            onCopyLast: { [weak self] in self?.copyLastDictation() },
+            onRetryLast: { [weak self] in
+                self?.runRestoringFocus { self?.retryLastDictation() }
+            },
+            onUseExactWords: { [weak self] in
+                self?.runRestoringFocus { self?.undoEnhancement() }
+            },
+            onQuit: { NSApp.terminate(nil) }
+        )
     }
 
-    private func statusLine() -> String {
-        if Permissions.microphone != .granted { return loc("Microphone access needed") }
-        if Permissions.accessibility != .granted { return loc("Accessibility access needed") }
-        switch controller.transcriberState {
-        case .modelMissing: return loc("Voice setup needed")
-        case .downloading(let p): return loc("Downloading voice recognition… %ld%%", Int(p * 100))
-        case .loading: return loc("Warming up…")
-        case .failed: return loc("Voice download didn’t finish")
-        case .ready:
-            if controller.settings.onboardingComplete, !controller.isListening {
-                return loc("Dictation key isn’t working — try reopening Aloud")
-            }
-            return loc("Hold %@ to dictate", controller.settings.hotkey.displayName)
+    /// A normal window only for automated visual inspection. Computer-control
+    /// harnesses can inspect windows reliably but don't expose transient
+    /// menu-bar popovers. The hosted SwiftUI content is exactly the same.
+    private func showStatusMenuPreviewWindow() {
+        if let menuPreviewWindow {
+            present(menuPreviewWindow)
+            return
         }
+        let window = NSWindow(contentViewController:
+            NSHostingController(rootView: makeStatusMenuView()))
+        window.title = "Aloud Menu Preview"
+        window.styleMask = [.titled, .closable]
+        window.setContentSize(NSSize(width: 410, height: 560))
+        window.isReleasedWhenClosed = false
+        menuPreviewWindow = window
+        present(window)
     }
 
     // MARK: windows
@@ -436,12 +520,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSettings() {
+        showSettings(.general)
+    }
+
+    private func showSettings(_ section: SettingsView.Section) {
+        closeStatusPopover()
         controller.stopSessionForSettings()
+        settingsNavigation.section = section
         if let settingsWindow { present(settingsWindow); return }
         let window = NSWindow(contentViewController:
-            NSHostingController(rootView: SettingsView(controller: controller)))
+            NSHostingController(rootView: SettingsView(controller: controller,
+                                                       navigation: settingsNavigation)))
         window.title = loc("Aloud Settings")
-        window.styleMask = [.titled, .closable, .resizable]
+        window.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.isMovableByWindowBackground = true
+        window.tabbingMode = .disallowed
+        window.setContentSize(NSSize(width: 820, height: 620))
+        window.minSize = NSSize(width: 760, height: 540)
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         settingsWindow = window

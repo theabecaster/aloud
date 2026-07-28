@@ -88,6 +88,18 @@
 "App Rules" = "App Rules";
 "History" = "History";
 "About" = "About";
+"Recent Dictations" = "Recent Dictations";
+"On this Mac" = "On this Mac";
+"More" = "More";
+"Copied" = "Copied";
+"Permissions, microphone, and startup." = "Permissions, microphone, and startup.";
+"Choose how you start dictating." = "Choose how you start dictating.";
+"Control how Aloud hears and writes." = "Control how Aloud hears and writes.";
+"Teach Aloud the words that matter to you." = "Teach Aloud the words that matter to you.";
+"Turn short phrases into text you use often." = "Turn short phrases into text you use often.";
+"Choose how Aloud writes in specific apps." = "Choose how Aloud writes in specific apps.";
+"Find, copy, and correct your recent dictations." = "Find, copy, and correct your recent dictations.";
+"Version, updates, and privacy." = "Version, updates, and privacy.";
 
 /* Settings — general */
 "Stopped listening so you can change settings" = "Stopped listening so you can change settings";
@@ -317,3 +329,7 @@
 "Filter background noise" = "Filter background noise";
 "Background noise is being filtered — click to stop" = "Background noise is being filtered — click to stop";
 "Filter out background noise" = "Filter out background noise";
+"%@ isn’t taking text right now" = "%@ isn’t taking text right now";
+"%@ didn’t take the text — it’s in History" = "%@ didn’t take the text — it’s in History";
+"The front app" = "The front app";
+"That app" = "That app";
