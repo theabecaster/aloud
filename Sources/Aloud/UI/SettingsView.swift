@@ -105,13 +105,6 @@ struct SettingsView: View {
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
-
-                Label(loc("On this Mac"), systemImage: "lock.fill")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(.ultraThinMaterial)
             .navigationSplitViewColumnWidth(min: 190, ideal: 205, max: 230)
@@ -181,12 +174,8 @@ struct SettingsView: View {
     private func sidebarIcon(_ section: Section) -> some View {
         Image(systemName: section.symbol)
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(navigation.section == section ? Color.aloud : Color.secondary)
+            .foregroundStyle(navigation.section == section ? Color.white : Color.secondary)
             .frame(width: 22, height: 22)
-            .background(
-                navigation.section == section ? Color.aloud.opacity(0.12) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-            )
     }
 }
 
@@ -196,13 +185,6 @@ private struct SettingsPaneHeader: View {
 
     var body: some View {
         HStack(spacing: 13) {
-            Image(systemName: section.symbol)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Color.aloud)
-                .frame(width: 36, height: 36)
-                .background(Color.aloud.opacity(0.11),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
             VStack(alignment: .leading, spacing: 2) {
                 Text(section.title)
                     .font(.title2.weight(.semibold))

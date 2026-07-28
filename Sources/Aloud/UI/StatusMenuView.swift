@@ -88,13 +88,6 @@ struct StatusMenuView: View {
 
             Spacer(minLength: 8)
 
-            Label(loc("On this Mac"), systemImage: "lock.fill")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(.quaternary, in: Capsule())
-
             Button(action: onOpenSettings) {
                 Image(systemName: "gearshape")
                     .frame(width: 20, height: 20)
