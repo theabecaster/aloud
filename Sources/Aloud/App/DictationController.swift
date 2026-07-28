@@ -812,6 +812,10 @@ final class DictationController: ObservableObject {
         }
         let front = NSWorkspace.shared.frontmostApplication
         sessionApp = (front?.localizedName, front?.bundleIdentifier)
+        // A command hold is a new session too: orphan any dictation probe
+        // still in flight so its verdict can't flash over this recording.
+        sessionGeneration += 1
+        sessionTypingBlocked = false
         do {
             try recorder.start(deviceUID: settings.microphoneUID,
                                noiseReduction: settings.noiseReduction)
