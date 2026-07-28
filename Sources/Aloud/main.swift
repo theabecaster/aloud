@@ -21,9 +21,14 @@ if let first = cliArgs.first, first.hasPrefix("--") {
     exit(code)
 }
 
-// One-time clean slate for upgrades over any previous version — must run
-// before the state dir, lock file, and SettingsStore touch old state.
-Migration.runCleanSlateIfNeeded()
+// One-time clean slate for installed-app upgrades only. A bare `swift build`
+// binary is a development harness, and a UI preview is deliberately isolated;
+// neither may ever reset the installed app's history, preferences, model, or
+// TCC grants.
+let isUIPreview = ProcessInfo.processInfo.environment["ALOUD_UI_PREVIEW"] == "1"
+if !isUIPreview, Bundle.main.bundleURL.pathExtension == "app" {
+    Migration.runCleanSlateIfNeeded()
+}
 
 // Singleton: a second GUI launch hands off to the running one and exits.
 // flock on a file in the state dir — crash-safe (the lock dies with the pid).

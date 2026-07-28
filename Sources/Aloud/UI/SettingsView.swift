@@ -1,18 +1,32 @@
 import Carbon.HIToolbox
 import SwiftUI
 
+final class SettingsNavigationModel: ObservableObject {
+    @Published var section: SettingsView.Section
+
+    init(section: SettingsView.Section = .general) {
+        self.section = section
+    }
+}
+
 // One calm window, System Settings-style sidebar. Eight panes in three
 // clusters: how Aloud runs (General, Keys, Dictation), what it does with your
 // words (Vocabulary, Snippets, App Rules), and the record (History, About).
 // Every pane answers one question, so nothing needs a second glance.
 struct SettingsView: View {
     @ObservedObject var controller: DictationController
+    @ObservedObject var navigation: SettingsNavigationModel
     // Watched here too: the sidebar dims a pane when the clean-up level makes
     // its contents inert, and that lives on the settings store.
     @ObservedObject private var settings: SettingsStore
+    // The sidebar's selection highlight goes from accent to gray when the
+    // window resigns key; the icon color has to follow or white washes out.
+    @Environment(\.controlActiveState) private var controlActiveState
 
-    init(controller: DictationController) {
+    init(controller: DictationController,
+         navigation: SettingsNavigationModel = SettingsNavigationModel()) {
         self.controller = controller
+        self.navigation = navigation
         _settings = ObservedObject(wrappedValue: controller.settings)
     }
 
@@ -27,6 +41,18 @@ struct SettingsView: View {
         case about = "About"
         var id: String { rawValue }
         var title: String { loc(rawValue) }
+        var subtitle: String {
+            switch self {
+            case .general: return loc("Permissions, microphone, and startup.")
+            case .keys: return loc("Choose how you start dictating.")
+            case .dictation: return loc("Control how Aloud hears and writes.")
+            case .vocabulary: return loc("Teach Aloud the words that matter to you.")
+            case .snippets: return loc("Turn short phrases into text you use often.")
+            case .appRules: return loc("Choose how Aloud writes in specific apps.")
+            case .history: return loc("Find, copy, and correct your recent dictations.")
+            case .about: return loc("Version, updates, and privacy.")
+            }
+        }
         var symbol: String {
             switch self {
             case .general: return "gearshape"
@@ -41,8 +67,6 @@ struct SettingsView: View {
         }
     }
 
-    @State private var section: Section = .general
-
     // Headerless clusters: the grouping reads as rhythm in the sidebar
     // without inventing category names the user has to learn.
     private let clusters: [[Section]] = [
@@ -53,30 +77,51 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $section) {
-                ForEach(clusters.indices, id: \.self) { i in
-                    SwiftUI.Section {
-                        ForEach(clusters[i]) { s in
-                            sidebarRow(s).tag(s)
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(Color.aloud, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Aloud")
+                            .font(.headline)
+                        Text(loc("On this Mac"))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 30)
+                .padding(.bottom, 12)
+
+                List(selection: $navigation.section) {
+                    ForEach(clusters.indices, id: \.self) { i in
+                        SwiftUI.Section {
+                            ForEach(clusters[i]) { s in
+                                sidebarRow(s).tag(s)
+                            }
                         }
                     }
                 }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
             }
-            .navigationSplitViewColumnWidth(min: 158, ideal: 168, max: 200)
+            .background(.ultraThinMaterial)
+            .navigationSplitViewColumnWidth(min: 190, ideal: 205, max: 230)
         } detail: {
-            switch section {
-            case .general: GeneralSettings(controller: controller)
-            case .keys: KeysSettings(controller: controller)
-            case .dictation: DictationSettings(controller: controller)
-            case .vocabulary: VocabularySettings(settings: controller.settings)
-            case .snippets: SnippetsSettings(settings: controller.settings)
-            case .appRules: AppRulesSettings(settings: controller.settings)
-            case .history: HistorySettings(history: controller.history, settings: controller.settings)
-            case .about: AboutSettings()
+            VStack(spacing: 0) {
+                SettingsPaneHeader(section: navigation.section,
+                                   historyCount: controller.history.entries.count)
+                Divider()
+                detail
             }
+            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(minWidth: 680, idealWidth: 700, maxWidth: 900,
-               minHeight: 460, idealHeight: 520, maxHeight: 900)
+        .frame(minWidth: 760, idealWidth: 820, maxWidth: 1040,
+               minHeight: 540, idealHeight: 620, maxHeight: 920)
         .overlay(alignment: .top) {
             if controller.showSettingsStopBanner {
                 Label(loc("Stopped listening so you can change settings"), systemImage: "mic.slash")
@@ -90,7 +135,21 @@ struct SettingsView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.spring(duration: 0.3), value: controller.showSettingsStopBanner)
+        .animation(.easeOut(duration: 0.2), value: controller.showSettingsStopBanner)
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch navigation.section {
+        case .general: GeneralSettings(controller: controller)
+        case .keys: KeysSettings(controller: controller)
+        case .dictation: DictationSettings(controller: controller)
+        case .vocabulary: VocabularySettings(settings: controller.settings)
+        case .snippets: SnippetsSettings(settings: controller.settings)
+        case .appRules: AppRulesSettings(settings: controller.settings)
+        case .history: HistorySettings(history: controller.history, settings: controller.settings)
+        case .about: AboutSettings()
+        }
     }
 
     // A pane whose contents currently do nothing reads as dimmed, with the
@@ -98,8 +157,9 @@ struct SettingsView: View {
     @ViewBuilder
     private func sidebarRow(_ s: Section) -> some View {
         if s == .vocabulary, !settings.polishLevel.appliesVocabulary {
-            HStack(spacing: 0) {
-                Label(s.title, systemImage: s.symbol)
+            HStack(spacing: 9) {
+                sidebarIcon(s)
+                Text(s.title)
                 Spacer(minLength: 6)
                 Image(systemName: "exclamationmark.circle")
                     .imageScale(.small)
@@ -107,8 +167,54 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
             .help(loc("Not in use — Clean-up is set to %@.", settings.polishLevel.displayName))
         } else {
-            Label(s.title, systemImage: s.symbol)
+            HStack(spacing: 9) {
+                sidebarIcon(s)
+                Text(s.title)
+            }
         }
+    }
+
+    private func sidebarIcon(_ section: Section) -> some View {
+        let selected = navigation.section == section
+        return Image(systemName: section.symbol)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(selected && controlActiveState != .inactive
+                             ? Color.white : Color.secondary)
+            .frame(width: 22, height: 22)
+    }
+}
+
+private struct SettingsPaneHeader: View {
+    let section: SettingsView.Section
+    let historyCount: Int
+
+    var body: some View {
+        HStack(spacing: 13) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(section.title)
+                    .font(.title2.weight(.semibold))
+                Text(section.subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 12)
+
+            if section == .history, historyCount > 0 {
+                Text("\(historyCount)")
+                    .font(.callout.weight(.medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(.quaternary, in: Capsule())
+                    .accessibilityLabel(loc("%ld dictations", historyCount))
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 28)
+        .padding(.bottom, 16)
+        .background(.bar)
     }
 }
 
@@ -1180,6 +1286,8 @@ struct HistoryRow: View {
     @ObservedObject var settings: SettingsStore
     @State private var showRaw = false
     @State private var showFix = false
+    @State private var hovering = false
+    @State private var copied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -1205,6 +1313,16 @@ struct HistoryRow: View {
                 Spacer(minLength: 8)
 
                 HStack(spacing: 12) {
+                    Button(action: copy) {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(copied ? Color.aloud : Color.secondary)
+                    .opacity(hovering || copied ? 1 : 0)
+                    .allowsHitTesting(hovering || copied)
+                    .help(copied ? loc("Copied") : loc("Copy"))
+                    .accessibilityLabel(copied ? loc("Copied") : loc("Copy"))
                     if let raw = entry.rawText {
                         // A quiet popover, like the ⓘ next to Experimental —
                         // inline expansion made rows jump around.
@@ -1229,11 +1347,10 @@ struct HistoryRow: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .contextMenu {
-            Button(loc("Copy")) {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(entry.text, forType: .string)
-            }
+            Button(loc("Copy"), action: copy)
             if let raw = entry.rawText {
                 Button(loc("Copy Original")) {
                     NSPasteboard.general.clearContents()
@@ -1241,6 +1358,16 @@ struct HistoryRow: View {
                 }
             }
             Button(loc("Fix")) { showFix = true }
+        }
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(entry.text, forType: .string)
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            copied = false
         }
     }
 

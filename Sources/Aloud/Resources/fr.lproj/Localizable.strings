@@ -88,6 +88,18 @@
 "App Rules" = "Règles par app";
 "History" = "Historique";
 "About" = "À propos";
+"Recent Dictations" = "Dictées récentes";
+"On this Mac" = "Sur ce Mac";
+"More" = "Plus";
+"Copied" = "Copié";
+"Permissions, microphone, and startup." = "Autorisations, microphone et démarrage.";
+"Choose how you start dictating." = "Choisissez comment démarrer la dictée.";
+"Control how Aloud hears and writes." = "Contrôlez la façon dont Aloud écoute et écrit.";
+"Teach Aloud the words that matter to you." = "Apprenez à Aloud les mots qui comptent pour vous.";
+"Turn short phrases into text you use often." = "Transformez des phrases courtes en texte que vous utilisez souvent.";
+"Choose how Aloud writes in specific apps." = "Choisissez comment Aloud écrit dans certaines apps.";
+"Find, copy, and correct your recent dictations." = "Recherchez, copiez et corrigez vos dictées récentes.";
+"Version, updates, and privacy." = "Version, mises à jour et confidentialité.";
 
 /* Settings — general */
 "Stopped listening so you can change settings" = "Écoute interrompue pour vous laisser modifier les réglages";
@@ -317,3 +329,7 @@
 "Filter background noise" = "Filtrer le bruit de fond";
 "Background noise is being filtered — click to stop" = "Le bruit de fond est filtré — cliquez pour arrêter";
 "Filter out background noise" = "Filtrer le bruit de fond";
+"%@ isn’t taking text right now" = "%@ n’accepte pas de texte pour le moment";
+"%@ didn’t take the text — it’s in History" = "%@ n’a pas reçu le texte — il est dans l’historique";
+"The front app" = "L’app au premier plan";
+"That app" = "Cette app";
