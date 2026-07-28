@@ -1,6 +1,11 @@
 import AppKit
 import ApplicationServices
 
+// Best-effort verdict on whether the focused UI element accepts typed text.
+enum FieldEditability: Equatable {
+    case editable, notEditable, unknown
+}
+
 // What the user was focused on when dictation started: the frontmost app and,
 // when the Accessibility API will say, the text already in the focused field.
 // Captured once per session and kept in memory only — nothing here is ever
@@ -21,6 +26,11 @@ struct FocusSnapshot: Equatable {
     // Selection start/length in the field's own character units, when the
     // field reports one cheaply.
     var selectedRange: Range<Int>?
+    // Whether the focused element looks like it can take typed text. Only
+    // `.notEditable` is ever acted on (typing is suppressed) — anything the
+    // probe can't classify stays `.unknown` and types as before, because a
+    // wrongly withheld dictation is far worse than a stray system beep.
+    var editability: FieldEditability = .unknown
 
     static let textCap = 2000
 
@@ -40,12 +50,20 @@ struct FocusSnapshot: Equatable {
         let systemWide = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(systemWide, perCallTimeout)
         var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString,
-                                            &focusedRef) == .success,
+        let focusErr = AXUIElementCopyAttributeValue(systemWide,
+                                                     kAXFocusedUIElementAttribute as CFString,
+                                                     &focusedRef)
+        guard focusErr == .success,
               let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
-        else { return snapshot }
+        else {
+            // A definitive "nothing has focus" means keystrokes have nowhere
+            // to go; timeouts and other errors stay unknown.
+            if focusErr == .noValue { snapshot.editability = .notEditable }
+            return snapshot
+        }
         let focused = focusedRef as! AXUIElement
         AXUIElementSetMessagingTimeout(focused, perCallTimeout)
+        snapshot.editability = editability(of: focused)
 
         // Range first: it's the cheapest read and anchors the text window.
         if let range = copyRange(focused, kAXSelectedTextRangeAttribute) {
@@ -74,6 +92,37 @@ struct FocusSnapshot: Equatable {
         if start < 0 { start = 0; end = cap }
         if end > chars.count { end = chars.count; start = end - cap }
         return String(chars[start..<end])
+    }
+
+    // MARK: editability
+
+    // Roles that plainly take text; a settable AXValue counts the same way.
+    private static let textRoles: Set<String> = [
+        kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole, "AXSearchField",
+    ]
+    // Roles that plainly don't. Deliberately short: web areas, groups, and the
+    // odd things Electron reports stay unknown rather than risk a false block.
+    private static let inertRoles: Set<String> = [
+        kAXButtonRole, kAXCheckBoxRole, kAXRadioButtonRole, kAXPopUpButtonRole,
+        kAXMenuButtonRole, kAXStaticTextRole, kAXImageRole, kAXListRole,
+        kAXTableRole, kAXOutlineRole, kAXScrollAreaRole, kAXToolbarRole,
+        kAXMenuItemRole, kAXSliderRole, kAXDisclosureTriangleRole,
+    ]
+
+    private static func editability(of element: AXUIElement) -> FieldEditability {
+        var role: String?
+        var ref: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &ref) == .success {
+            role = ref as? String
+        }
+        if let role, textRoles.contains(role) { return .editable }
+        var settable = DarwinBoolean(false)
+        if AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString,
+                                          &settable) == .success, settable.boolValue {
+            return .editable
+        }
+        if let role, inertRoles.contains(role) { return .notEditable }
+        return .unknown
     }
 
     // MARK: AX helpers

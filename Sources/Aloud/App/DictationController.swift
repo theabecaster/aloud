@@ -51,6 +51,14 @@ final class DictationController: ObservableObject {
     // phase — nothing reads it yet, and it never leaves memory.
     private var sessionContext: FocusSnapshot?
 
+    // Dictating with one of our own windows focused (onboarding's "Try It",
+    // settings): the words show up in our UI, so keystrokes must not also be
+    // fired at a window with no text field — each one lands as a system beep.
+    private var sessionTargetIsSelf = false
+    // The AX probe found the focused element can't take text. Typing is
+    // withheld (the transcript still lands in History) and the pill says why.
+    private var sessionTypingBlocked = false
+
     // A failed dictation's audio is on disk and can be retried (menu item).
     @Published private(set) var retryAvailable = AudioBackup.exists
 
@@ -394,12 +402,28 @@ final class DictationController: ObservableObject {
         undoEnhancementAvailable = false
     }
 
-    private func playCue(_ name: String) {
+    // Aloud's own cues, not the system alert set: the alert sounds double as
+    // macOS's "that input went nowhere" beep, so reusing them made the start
+    // chime indistinguishable from an error.
+    enum SoundCue: String {
+        case listening = "cue-listening"    // recording started
+        case error = "cue-error"            // something didn't land
+    }
+    private var cueSounds: [SoundCue: NSSound] = [:]
+
+    private func playCue(_ cue: SoundCue) {
         guard settings.soundCues else { return }
-        if let sound = NSSound(named: NSSound.Name(name)) {
-            sound.volume = 0.3
-            sound.play()
+        if cueSounds[cue] == nil,
+           let url = Bundle.module.url(forResource: cue.rawValue, withExtension: "wav",
+                                       subdirectory: "Sounds")
+               ?? Bundle.module.url(forResource: cue.rawValue, withExtension: "wav"),
+           let sound = NSSound(contentsOf: url, byReference: true) {
+            sound.volume = 0.55
+            cueSounds[cue] = sound
         }
+        guard let sound = cueSounds[cue] else { return }
+        sound.stop()
+        sound.play()
     }
 
     private func beginRecording() {
@@ -413,6 +437,8 @@ final class DictationController: ObservableObject {
         }
         let front = NSWorkspace.shared.frontmostApplication
         sessionApp = (front?.localizedName, front?.bundleIdentifier)
+        sessionTargetIsSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+        sessionTypingBlocked = false
         // Off the critical path: AX reads can stall tens of milliseconds, and
         // recording start must stay instant (a slow start also delays event
         // processing enough to eat quick taps). Best-effort by commit time.
@@ -421,14 +447,23 @@ final class DictationController: ObservableObject {
         let appBundleID = front?.bundleIdentifier
         Task.detached(priority: .userInitiated) { [weak self] in
             let snapshot = FocusSnapshot.capture(appName: appName, appBundleID: appBundleID)
-            await MainActor.run { [weak self] in self?.sessionContext = snapshot }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.sessionContext = snapshot
+                if snapshot.editability == .notEditable, !self.sessionTargetIsSelf,
+                   self.phase == .recording {
+                    self.sessionTypingBlocked = true
+                    self.indicator.showNotice(loc("%@ isn’t taking text right now",
+                                                  self.sessionApp.name ?? loc("The front app")))
+                }
+            }
         }
         do {
             try recorder.start(deviceUID: settings.microphoneUID,
                                noiseReduction: settings.noiseReduction)
             startSpeechActivity()
             phase = .recording
-            playCue("Tink")
+            playCue(.listening)
             refreshTranscriberState()   // pick up a background engine switch
             indicator.isBasic = usingFallback
             // Load the rewrite model while the user is still talking so the
@@ -442,7 +477,10 @@ final class DictationController: ObservableObject {
             }
             indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
                            bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
-            if settings.liveTyping { startLiveTyping() }
+            // Never live-type at our own windows: the transcript shows up in
+            // the UI itself (Try It box, history), and the keystrokes would
+            // only bounce off a window with no text field as repeated beeps.
+            if settings.liveTyping, !sessionTargetIsSelf { startLiveTyping() }
         } catch {
             phase = .error(error.localizedDescription)
             indicator.showHint(loc("Couldn’t access the microphone"))
@@ -518,6 +556,9 @@ final class DictationController: ObservableObject {
         liveUpdatesTask = Task { [weak self] in
             for await transcript in session.updates {
                 guard let self, self.liveSession === session, !Task.isCancelled else { break }
+                // The focus probe said keystrokes have nowhere to land — every
+                // one would just be a system beep. History still gets the text.
+                if self.sessionTypingBlocked { continue }
                 // Skip previews while the user is mid-edit; the transcript is
                 // cumulative, so the next quiet update catches everything up.
                 if let last = self.lastUserKeystroke,
@@ -622,6 +663,23 @@ final class DictationController: ObservableObject {
                 let duration = max(result.audioDuration,
                                    Double(samples.count) / AudioRecorder.targetSampleRate)
                 if !text.isEmpty {
+                    if sessionTypingBlocked {
+                        // Nothing was typed to settle; the dictation survives
+                        // in History instead of vanishing.
+                        history.append(HistoryEntry(text: text, rawText: raw, duration: duration,
+                                                    appName: sessionApp.name, appBundleID: sessionApp.bundleID,
+                                                    languageCode: LanguageDetection.code(for: raw)),
+                                       limit: settings.historyLimit)
+                        lastTranscription = text
+                        clearAudioBackup()
+                        endLiveTyping()
+                        polishingCue.cancel()
+                        playCue(.error)
+                        indicator.showHint(loc("%@ didn’t take the text — it’s in History",
+                                               sessionApp.name ?? loc("That app")))
+                        phase = .idle
+                        return
+                    }
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
                     recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: sendReturn)
@@ -647,7 +705,7 @@ final class DictationController: ObservableObject {
                 keepAudioBackup(samples)
                 endLiveTyping()
                 polishingCue.cancel()
-                playCue("Basso")
+                playCue(.error)
                 indicator.showHint(loc("Couldn’t finish that dictation"))
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -687,11 +745,21 @@ final class DictationController: ObservableObject {
                     text = expansion
                 }
                 if !text.isEmpty {
-                    // Return goes out only after the paste has been serviced.
-                    injector.inject(text) {
-                        if sendReturn { TextInjector.postReturn() }
+                    if sessionTargetIsSelf {
+                        // Our own window (onboarding's Try It, settings): the
+                        // words appear in the UI itself — pasting at a window
+                        // with no text field would only beep.
+                    } else if sessionTypingBlocked {
+                        playCue(.error)
+                        indicator.showHint(loc("%@ didn’t take the text — it’s in History",
+                                               sessionApp.name ?? loc("That app")))
+                    } else {
+                        // Return goes out only after the paste has been serviced.
+                        injector.inject(text) {
+                            if sendReturn { TextInjector.postReturn() }
+                        }
+                        recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: sendReturn)
                     }
-                    recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: sendReturn)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID,
                                                 languageCode: LanguageDetection.code(for: raw)),
@@ -703,11 +771,12 @@ final class DictationController: ObservableObject {
                 } else if sendReturn {
                     TextInjector.postReturn()
                 }
-                indicator.hide()
+                // The blocked hint is showing — hiding now would wipe it.
+                if !(sessionTypingBlocked && !text.isEmpty) { indicator.hide() }
                 phase = .idle
             } catch {
                 keepAudioBackup(samples)
-                playCue("Basso")
+                playCue(.error)
                 indicator.showHint(loc("Couldn’t transcribe that — try again"))
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -740,7 +809,7 @@ final class DictationController: ObservableObject {
                                noiseReduction: settings.noiseReduction)
             phase = .recording
             isCommandSession = true
-            playCue("Tink")
+            playCue(.listening)
             prewarmCommandEngine()
             indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
                            bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent },
@@ -774,7 +843,7 @@ final class DictationController: ObservableObject {
                 await performCommand(spoken)
                 phase = .idle
             } catch {
-                playCue("Basso")
+                playCue(.error)
                 indicator.showHint(loc("Couldn’t hear that — try again"))
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -799,7 +868,7 @@ final class DictationController: ObservableObject {
     // guess pasted over a selection would be worse than doing nothing.
     private func performCommand(_ spoken: String) async {
         guard let interpreter = commandInterpreter, interpreter.isAvailable else {
-            playCue("Basso")
+            playCue(.error)
             indicator.showHint(loc("Couldn’t do that — try again"))
             return
         }
@@ -820,7 +889,7 @@ final class DictationController: ObservableObject {
             return first
         }
         guard let result, !result.isEmpty else {
-            playCue("Basso")
+            playCue(.error)
             indicator.showHint(loc("Couldn’t do that — try again"))
             return
         }
@@ -874,7 +943,7 @@ final class DictationController: ObservableObject {
                 indicator.hide()
                 phase = .idle
             } catch {
-                playCue("Basso")
+                playCue(.error)
                 indicator.showHint(loc("Couldn’t transcribe that — try again"))
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
