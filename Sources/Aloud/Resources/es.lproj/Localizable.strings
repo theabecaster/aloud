@@ -88,6 +88,18 @@
 "App Rules" = "Reglas por app";
 "History" = "Historial";
 "About" = "Información";
+"Recent Dictations" = "Dictados recientes";
+"On this Mac" = "En este Mac";
+"More" = "Más";
+"Copied" = "Copiado";
+"Permissions, microphone, and startup." = "Permisos, micrófono e inicio.";
+"Choose how you start dictating." = "Elige cómo empezar a dictar.";
+"Control how Aloud hears and writes." = "Controla cómo Aloud escucha y escribe.";
+"Teach Aloud the words that matter to you." = "Enséñale a Aloud las palabras que te importan.";
+"Turn short phrases into text you use often." = "Convierte frases cortas en texto que usas a menudo.";
+"Choose how Aloud writes in specific apps." = "Elige cómo escribe Aloud en apps específicas.";
+"Find, copy, and correct your recent dictations." = "Busca, copia y corrige tus dictados recientes.";
+"Version, updates, and privacy." = "Versión, actualizaciones y privacidad.";
 
 /* Settings — general */
 "Stopped listening so you can change settings" = "Se dejó de escuchar para que cambies los ajustes";

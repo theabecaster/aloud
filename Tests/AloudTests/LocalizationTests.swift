@@ -20,6 +20,8 @@ final class LocalizationTests: XCTestCase {
         "Open Aloud at login",
         "%ld dictations",
         "Reduce background noise",
+        "Recent Dictations",
+        "On this Mac",
     ]
 
     private let missingMarker = "\u{7F}missing\u{7F}"
