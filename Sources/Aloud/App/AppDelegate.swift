@@ -293,6 +293,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             return
         }
 
+        // Opening the popover activates Aloud, so remember who had focus:
+        // popover actions that type (retry, use exact words) must hand focus
+        // back first or their keystrokes land on the popover itself.
+        popoverPreviousApp = NSWorkspace.shared.frontmostApplication
+
         // The tap can be missing even though permissions read as granted —
         // e.g. Accessibility was granted after launch, or the grant is stale
         // after the app was replaced on disk. Retry cheaply on every open.
@@ -323,6 +328,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func closeStatusPopover() {
         statusPopover?.performClose(nil)
+    }
+
+    // The app that was frontmost before the popover stole activation.
+    private var popoverPreviousApp: NSRunningApplication?
+
+    // Close the popover, give focus back to that app, and only then run —
+    // synthetic keystrokes must not fire while Aloud is still frontmost.
+    // Activation is asynchronous, hence the beat before the action.
+    private func runRestoringFocus(_ action: @escaping () -> Void) {
+        closeStatusPopover()
+        guard let previous = popoverPreviousApp,
+              previous.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              !previous.isTerminated else {
+            action()
+            return
+        }
+        previous.activate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { action() }
     }
 
     private func makeStatusMenuView() -> StatusMenuView {
@@ -392,8 +415,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 self?.toggleScratchpad()
             },
             onCopyLast: { [weak self] in self?.copyLastDictation() },
-            onRetryLast: { [weak self] in self?.retryLastDictation() },
-            onUseExactWords: { [weak self] in self?.undoEnhancement() },
+            onRetryLast: { [weak self] in
+                self?.runRestoringFocus { self?.retryLastDictation() }
+            },
+            onUseExactWords: { [weak self] in
+                self?.runRestoringFocus { self?.undoEnhancement() }
+            },
             onQuit: { NSApp.terminate(nil) }
         )
     }

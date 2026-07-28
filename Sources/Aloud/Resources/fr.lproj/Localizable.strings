@@ -329,3 +329,7 @@
 "Filter background noise" = "Filtrer le bruit de fond";
 "Background noise is being filtered — click to stop" = "Le bruit de fond est filtré — cliquez pour arrêter";
 "Filter out background noise" = "Filtrer le bruit de fond";
+"%@ isn’t taking text right now" = "%@ n’accepte pas de texte pour le moment";
+"%@ didn’t take the text — it’s in History" = "%@ n’a pas reçu le texte — il est dans l’historique";
+"The front app" = "L’app au premier plan";
+"That app" = "Cette app";

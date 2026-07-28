@@ -58,6 +58,10 @@ final class DictationController: ObservableObject {
     // The AX probe found the focused element can't take text. Typing is
     // withheld (the transcript still lands in History) and the pill says why.
     private var sessionTypingBlocked = false
+    // Ties the detached AX probe to the session that spawned it: a probe from
+    // a discarded quick tap can land after the next hold has already begun,
+    // and must not stamp its verdict (or its field snapshot) on that session.
+    private var sessionGeneration = 0
 
     // A failed dictation's audio is on disk and can be retried (menu item).
     @Published private(set) var retryAvailable = AudioBackup.exists
@@ -439,16 +443,18 @@ final class DictationController: ObservableObject {
         sessionApp = (front?.localizedName, front?.bundleIdentifier)
         sessionTargetIsSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
         sessionTypingBlocked = false
+        sessionGeneration += 1
         // Off the critical path: AX reads can stall tens of milliseconds, and
         // recording start must stay instant (a slow start also delays event
         // processing enough to eat quick taps). Best-effort by commit time.
         sessionContext = nil
         let appName = front?.localizedName
         let appBundleID = front?.bundleIdentifier
+        let generation = sessionGeneration
         Task.detached(priority: .userInitiated) { [weak self] in
             let snapshot = FocusSnapshot.capture(appName: appName, appBundleID: appBundleID)
             await MainActor.run { [weak self] in
-                guard let self else { return }
+                guard let self, self.sessionGeneration == generation else { return }
                 self.sessionContext = snapshot
                 if snapshot.editability == .notEditable, !self.sessionTargetIsSelf,
                    self.phase == .recording {
@@ -671,6 +677,8 @@ final class DictationController: ObservableObject {
                                                     languageCode: LanguageDetection.code(for: raw)),
                                        limit: settings.historyLimit)
                         lastTranscription = text
+                        settings.recordDictation(words: text.split(whereSeparator: \.isWhitespace).count,
+                                                 seconds: duration)
                         clearAudioBackup()
                         endLiveTyping()
                         polishingCue.cancel()

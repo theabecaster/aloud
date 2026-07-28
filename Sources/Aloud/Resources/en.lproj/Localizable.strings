@@ -329,3 +329,7 @@
 "Filter background noise" = "Filter background noise";
 "Background noise is being filtered — click to stop" = "Background noise is being filtered — click to stop";
 "Filter out background noise" = "Filter out background noise";
+"%@ isn’t taking text right now" = "%@ isn’t taking text right now";
+"%@ didn’t take the text — it’s in History" = "%@ didn’t take the text — it’s in History";
+"The front app" = "The front app";
+"That app" = "That app";

@@ -19,6 +19,9 @@ struct SettingsView: View {
     // Watched here too: the sidebar dims a pane when the clean-up level makes
     // its contents inert, and that lives on the settings store.
     @ObservedObject private var settings: SettingsStore
+    // The sidebar's selection highlight goes from accent to gray when the
+    // window resigns key; the icon color has to follow or white washes out.
+    @Environment(\.controlActiveState) private var controlActiveState
 
     init(controller: DictationController,
          navigation: SettingsNavigationModel = SettingsNavigationModel()) {
@@ -172,9 +175,11 @@ struct SettingsView: View {
     }
 
     private func sidebarIcon(_ section: Section) -> some View {
-        Image(systemName: section.symbol)
+        let selected = navigation.section == section
+        return Image(systemName: section.symbol)
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(navigation.section == section ? Color.white : Color.secondary)
+            .foregroundStyle(selected && controlActiveState != .inactive
+                             ? Color.white : Color.secondary)
             .frame(width: 22, height: 22)
     }
 }
