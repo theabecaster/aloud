@@ -284,7 +284,7 @@ struct GeneralSettings: View {
                     }
                 }
                 Toggle(loc("Reduce background noise"), isOn: $settings.noiseReduction)
-                Toggle(loc("Sound when recording starts"), isOn: $settings.soundCues)
+                Toggle(loc("Play sound effects"), isOn: $settings.soundCues)
                 Toggle(loc("Animate the recording pill"), isOn: $settings.indicatorEntrance)
             } footer: {
                 Text(loc("Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on."))
@@ -466,7 +466,9 @@ struct KeysSettings: View {
                                  hotkey.displayName, owner.displayName, taken.name)
         }
         refusedSlot = slot
-        NSSound.beep()
+        // The shake and the footer carry the refusal on their own; the beep
+        // joins in only when the user hasn't silenced app sounds.
+        if settings.soundCues { NSSound.beep() }
         shake = 0
         withAnimation(.linear(duration: 0.35)) { shake = 1 }
         Task {
@@ -589,7 +591,8 @@ private struct HotkeyCaptureButton: View {
                         break
                     case .tooManyKeys:
                         overLimit = true
-                        NSSound.beep()
+                        // Same silence switch as every other sound the app makes.
+                        if SettingsStore.shared.soundCues { NSSound.beep() }
                         limitShake = 0
                         withAnimation(.linear(duration: 0.35)) { limitShake = 1 }
                         Task {
