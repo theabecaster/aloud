@@ -22,5 +22,7 @@
   {"id": "code-1", "task": "code",
    "transcript": "Add a function called get user by ID that takes a user ID string and returns an optional user model, then call it from the fetch profile method."},
   {"id": "tone-1", "task": "formal",
-   "transcript": "Hey just wanted to check if you got my last email about the contract. Lemme know when you can."}
+   "transcript": "Hey just wanted to check if you got my last email about the contract. Lemme know when you can."},
+  {"id": "question-1", "task": "concise",
+   "transcript": "In the Mac menu what do I have to type into the terminal to see the logs or the tmux or whatever session?"}
 ]
