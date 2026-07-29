@@ -126,36 +126,25 @@ final class DictationController: ObservableObject {
             guard let self else { return }
             let enabled = !self.settings.noiseReduction
             self.settings.noiseReduction = enabled
-            // The cue rides the badge animation — same switch as the start
-            // chime, so "Sound when recording starts" silences it too.
-            self.playCue(enabled ? .noiseOn : .noiseOff)
+            // Enabling: the cue rides the badge animation from the press.
+            if enabled { self.playCue(.noiseOn) }
             // The badge animates to this the instant the press asks for it —
-            // rebuilding capture underneath runs off the main thread and can
-            // take the better part of a second, so the animation isn't
-            // waiting on it. The completion corrects the badge afterward if
-            // capture didn't end up where this expected (a mic that goes deaf
-            // under filtering, say).
-            //
-            // Disabling waits out the cue first: tearing voice processing
-            // down reconfigures this process's audio output and cuts any
-            // in-flight sound dead — the off cue was inaudible in practice.
-            // A third of a second more filtering is imperceptible; enabling
-            // never had the problem and stays immediate.
-            // Applies whatever the settings say *at run time*, not what they
-            // said when scheduled — a re-toggle inside the delay would
-            // otherwise be overridden by the stale value.
-            let applyChange: @MainActor @Sendable () -> Void = { [weak self] in
+            // rebuilding capture underneath runs off the main thread and
+            // starts right away in both directions; deferring the disable
+            // rebuild to protect its cue (a previous attempt) parked engine
+            // work in the middle of the drain animation and read as a hitch.
+            // The completion corrects the badge afterward if capture didn't
+            // end up where this expected (a mic that goes deaf under
+            // filtering, say).
+            self.recorder.setNoiseReduction(enabled) { [weak self] active in
                 guard let self else { return }
-                let want = self.settings.noiseReduction
-                self.recorder.setNoiseReduction(want) { [weak self] active in
-                    guard let self else { return }
-                    self.indicator.noiseReduction = self.recorder.isRecording ? active : want
-                }
-            }
-            if enabled || !self.settings.soundCues {
-                applyChange()
-            } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: applyChange)
+                self.indicator.noiseReduction = self.recorder.isRecording ? active : enabled
+                // Disabling: tearing voice processing down reconfigures this
+                // process's audio output and cuts any in-flight sound dead,
+                // so the off cue waits here, where the engine has settled —
+                // the wind-down arriving on the animation's tail. Skipped if
+                // a re-toggle already flipped the switch back.
+                if !enabled, !self.settings.noiseReduction { self.playCue(.noiseOff) }
             }
         }
         settings.$noiseReduction
