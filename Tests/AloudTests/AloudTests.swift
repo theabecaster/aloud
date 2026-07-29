@@ -265,6 +265,26 @@ final class HotkeyEngineTests: XCTestCase {
             "Paris is the capital of France.", original: "so what's the capital of France is it Paris"))
     }
 
+    // Observed live: the speaker's "three main topics. First… then… finally…"
+    // came back flattened into a plain clause list — summarized, not tightened.
+    func testDroppedEnumerationStructureIsRejected() {
+        let original = "We need to cover three main topics. First the quarterly budget, then hiring plan, and finally the roadmap."
+        XCTAssertNil(EnhancerOutputCheck.validate(
+            "We need to cover the quarterly budget, the hiring plan, and the roadmap.",
+            original: original))
+        // Keeping the structure passes…
+        XCTAssertNotNil(EnhancerOutputCheck.validate(
+            "We need to cover three main topics. First the quarterly budget, then hiring plan, and finally the roadmap.",
+            original: original))
+        // …and so does restructuring into an actual list.
+        XCTAssertNotNil(EnhancerOutputCheck.validate(
+            "We need to cover three main topics:\n- Quarterly budget\n- Hiring plan\n- Roadmap",
+            original: original))
+        // One lone "then" is not an enumeration; tightening it away is fine.
+        XCTAssertNotNil(EnhancerOutputCheck.validate(
+            "Grab the keys and lock up.", original: "um grab the keys and then lock up"))
+    }
+
     // The transcript is sent inside <TRANSCRIPT> tags; a model that echoes
     // them back around an otherwise good rewrite is unwrapped, not rejected.
     func testEchoedTranscriptTagsAreUnwrapped() {
