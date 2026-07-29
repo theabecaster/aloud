@@ -432,6 +432,8 @@ enum CLI {
                 indicator.show(levelProvider: { levels[index()] },
                                bandsProvider: { timeline[index()] })
             }),
+            ("recording-noise-on", 3, { indicator.noiseReduction = true }),
+            ("recording-noise-off", 3, { indicator.noiseReduction = false }),
             ("recording-basic", 3, { indicator.isBasic = true }),
             ("hands-free", 4, {
                 indicator.isBasic = false

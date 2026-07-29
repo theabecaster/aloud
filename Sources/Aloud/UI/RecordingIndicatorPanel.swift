@@ -266,6 +266,11 @@ final class RecordingIndicatorPanel {
     private func fadeOut(_ generation: Int) {
         guard hideGeneration == generation, let panel, panel.isVisible else { return }
         isFadingOut = true
+        // The drain plays inside the alpha fade's window; ease-in mirrors the
+        // entrance the way the badge's exit mirrors its arrival.
+        if entranceEnabled {
+            withAnimation(.easeIn(duration: Self.fadeDuration)) { model.revealed = false }
+        }
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = Self.fadeDuration
             panel.animator().alphaValue = 0
@@ -274,9 +279,14 @@ final class RecordingIndicatorPanel {
                 guard let self, self.hideGeneration == generation else { return }
                 self.isFadingOut = false
                 panel.orderOut(nil)
+                self.model.revealed = true   // rest state for the next show
             }
         })
     }
+
+    // Whether the pill plays its entrance/exit. Read at each transition so
+    // flipping the setting applies to the very next show.
+    private var entranceEnabled: Bool { settings?.indicatorEntrance ?? true }
 
     private func present() {
         hideGeneration += 1   // cancel any pending or in-flight hide
@@ -290,12 +300,29 @@ final class RecordingIndicatorPanel {
         // is what made every state change blink and occasionally jump displays.
         guard !panel.isVisible else {
             if isFadingOut || panel.alphaValue < 1 { fadeIn(panel) }
+            // A show that caught an exit mid-drain springs the pill back up
+            // from wherever the drain had it.
+            if !model.revealed { reveal() }
             return
         }
         position(panel)
         panel.alphaValue = 0
+        // Start shrunk while still invisible, then bloom on the next turn —
+        // same-turn would render the resting state straight away.
+        model.revealed = !entranceEnabled
         panel.orderFrontRegardless()
         fadeIn(panel)
+        if !model.revealed {
+            DispatchQueue.main.async { [weak self] in self?.reveal() }
+        }
+    }
+
+    private func reveal() {
+        if entranceEnabled {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.72)) { model.revealed = true }
+        } else {
+            model.revealed = true
+        }
     }
 
     // Ramps from wherever alpha is now, so catching a fade-out mid-flight
@@ -386,6 +413,11 @@ final class IndicatorModel: ObservableObject {
     // Whether background noise is being filtered right now. Mirrored here
     // rather than read from settings so the pill redraws the moment it changes.
     @Published var noiseReduction = false
+    // Entrance/exit: false renders the pill shrunk and dropped, true at rest.
+    // The panel drives it inside withAnimation so an interrupted exit springs
+    // back from wherever it was, and leaves it un-animated when the user has
+    // turned the effect off.
+    @Published var revealed = true
     var onStop: (() -> Void)?
     var onToggleNoiseReduction: (() -> Void)?
     var onResetPosition: (() -> Void)?
@@ -523,11 +555,14 @@ struct IndicatorView: View {
             noiseGeneration += 1
             let generation = noiseGeneration
             if on {
-                badgeVisible = true
-                badgeLit = true
-                // The outline runs round first and closes; the colour follows
-                // it in and settles a moment later.
-                withAnimation(.easeOut(duration: 0.3)) { borderReveal = 1 }
+                // The badge appears and the outline runs round together, in
+                // the same breath as the press; the colour follows behind and
+                // settles a moment later.
+                withAnimation(.easeOut(duration: 0.3)) {
+                    badgeVisible = true
+                    badgeLit = true
+                    borderReveal = 1
+                }
                 withAnimation(.easeOut(duration: 0.6)) { tintReveal = 1 }
             } else {
                 withAnimation(.easeIn(duration: 0.3)) { borderReveal = 0 }
@@ -562,6 +597,11 @@ struct IndicatorView: View {
         .scaleEffect(hovering && model.mode == .recording ? 1.03 : 1)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hovering)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: model.noiseReduction)
+        // Entrance/exit, in the badge's family: the pill blooms up into place
+        // and drains back down. Purely a render of `revealed` — the panel
+        // decides when and whether it animates.
+        .scaleEffect(model.revealed ? 1 : 0.72)
+        .offset(y: model.revealed ? 0 : 12)
         .onHover { hovering = $0 }
     }
 
@@ -619,7 +659,12 @@ struct IndicatorView: View {
             .buttonStyle(.plain)
             .contentShape(Circle())
             .help(loc("Background noise is being filtered — click to stop"))
-            .transition(.scale(scale: 0.4).combined(with: .opacity))
+            // Scale only, no opacity: the badge's own background is a
+            // translucent material off, solid on — fading its alpha in on top
+            // of the tint/border reveal sweeping in behind it let that sweep
+            // show through the badge itself, like a seam cutting across it.
+            // Fully opaque throughout, it just grows in instead.
+            .transition(.scale(scale: 0.4))
         }
     }
 

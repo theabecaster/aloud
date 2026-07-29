@@ -28,6 +28,7 @@ final class SettingsStore: ObservableObject {
         appModes = (defaults.data(forKey: Keys.appModes))
             .flatMap { try? JSONDecoder().decode([AppModeRule].self, from: $0) } ?? []
         soundCues = defaults.object(forKey: Keys.soundCues) as? Bool ?? true
+        indicatorEntrance = defaults.object(forKey: Keys.indicatorEntrance) as? Bool ?? true
         indicatorPosition = (defaults.data(forKey: Keys.indicatorPosition))
             .flatMap { try? JSONDecoder().decode(CGPoint.self, from: $0) }
         statsWords = defaults.object(forKey: Keys.statsWords) as? Int ?? 0
@@ -62,6 +63,7 @@ final class SettingsStore: ObservableObject {
         static let snippets = "snippets"
         static let appModes = "appModes"
         static let soundCues = "soundCues"
+        static let indicatorEntrance = "indicatorEntrance"
         static let indicatorPosition = "indicatorPosition"
         static let statsWords = "statsWords"
         static let statsSeconds = "statsSeconds"
@@ -126,6 +128,10 @@ final class SettingsStore: ObservableObject {
     }
     @Published var soundCues: Bool {
         didSet { defaults.set(soundCues, forKey: Keys.soundCues) }
+    }
+    // The recording pill blooms in and drains out instead of plain-fading.
+    @Published var indicatorEntrance: Bool {
+        didSet { defaults.set(indicatorEntrance, forKey: Keys.indicatorEntrance) }
     }
     // Where the user parked the recording pill, as fractions (0…1) of the
     // screen's visible frame — survives display size changes. nil = default
