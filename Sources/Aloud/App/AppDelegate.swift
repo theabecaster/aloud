@@ -313,8 +313,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             statusPopover = popover
             return popover
         }()
-        popover.contentSize = NSSize(width: 410, height: 560)
-        popover.contentViewController = NSHostingController(rootView: makeStatusMenuView())
+        // No fixed contentSize: the hosting controller publishes the SwiftUI
+        // fitting size so the popover hugs its content and grows/shrinks live.
+        let host = NSHostingController(rootView: makeStatusMenuView())
+        host.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = host
 
         guard let button = statusItem.button else { return }
         button.highlight(true)
@@ -437,7 +440,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             NSHostingController(rootView: makeStatusMenuView()))
         window.title = "Aloud Menu Preview"
         window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 410, height: 560))
         window.isReleasedWhenClosed = false
         menuPreviewWindow = window
         present(window)
