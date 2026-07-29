@@ -101,18 +101,19 @@ final class AudioRecorder {
     // began dictating was both wrong and, since the note takes the pill's
     // meter slot, in the way.
     private var sessionDeviceID: AudioDeviceID = 0
-    // Set for the span of a noise-reduction-triggered rebuild, main-thread
-    // only (set and cleared from setNoiseReduction's main-queue callers).
-    // Reconfiguring voice processing posts the same configuration-change
-    // notification a real device swap does; without this, that self-fired
-    // echo would try to rebuild again on an engineQueue still busy with the
-    // rebuild that caused it, and block main waiting its turn.
-    private var isRebuildingForNoiseReduction = false
-    // A configuration change arrived while that flag was up. Almost always
-    // the echo — but a microphone really unplugged in that sub-second window
+    // How many capture rebuilds are queued or running, main-thread only.
+    // Every rebuild reconfigures the engine, and reconfiguring the engine
+    // posts the same configuration-change notification a real device swap
+    // does — so a rebuild that reacts to every notification it causes is a
+    // feedback loop. While anything is in flight, arriving notifications
+    // are coalesced into the flag below instead of queueing more rebuilds;
+    // one storm of notifications becomes at most one follow-up rebuild,
+    // and only if the device really moved.
+    private var rebuildsInFlight = 0
+    // A configuration change arrived while a rebuild was in flight. Almost
+    // always our own echo — but a microphone really unplugged in that window
     // posts the identical notification, and dropping *that* would leave a
-    // dead tap. Once the rebuild settles, this remembers there is something
-    // to double-check; the device ID says whether it was real.
+    // dead tap. Once the rebuild settles, the device ID says which it was.
     private var sawConfigChangeDuringRebuild = false
 
     // Which device the engine's input unit is pointed at right now.
@@ -193,16 +194,7 @@ final class AudioRecorder {
             // No notice: the microphone did not change and nothing the user
             // did caused this. It recovers inside a second, and the only
             // honest thing to say about it is nothing.
-            // Same shape as the toggle's rebuild: off main (so nothing on
-            // screen freezes while the engine restarts), with the flag up so
-            // the reconfiguration's own configuration-change echo doesn't
-            // trigger a second rebuild on its heels.
-            self.isRebuildingForNoiseReduction = true
-            self.engineQueue.async { [weak self] in
-                guard let self else { return }
-                _ = self.rebuildCapture()
-                DispatchQueue.main.async { self.settleRebuildEcho() }
-            }
+            self.rebuildAsync(notifyDeviceChange: false)
         }
         silenceWatchdog = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.silenceGrace, execute: work)
@@ -249,36 +241,58 @@ final class AudioRecorder {
             return
         }
         noiseReduction = allowed
-        // Reconfiguring voice processing fires the same
-        // AVAudioEngineConfigurationChange notification a real device change
-        // does. With the rebuild off the main thread, that echo now arrives
-        // while this one is still running and its handler would block main
-        // waiting its turn on engineQueue — the stutter this flag prevents.
-        isRebuildingForNoiseReduction = true
-        engineQueue.async { [weak self] in
-            guard let self else { return }
-            _ = self.rebuildCapture()
-            let active = self.voiceProcessingActive
-            DispatchQueue.main.async {
-                self.startSilenceWatchdog()
-                completion?(active)
-                self.settleRebuildEcho()
-            }
+        rebuildAsync(notifyDeviceChange: false) { [weak self] active in
+            self?.startSilenceWatchdog()
+            completion?(active)
         }
     }
 
-    // A noise-reduction rebuild just finished (main thread). Drop the guard,
-    // and decide whether the configuration change it swallowed was real: the
-    // device ID answers cheaply — the rebuild's own echo leaves it alone, a
-    // microphone unplugged inside that window does not. Only a genuine swap
-    // re-enters recovery.
-    private func settleRebuildEcho() {
-        isRebuildingForNoiseReduction = false
-        guard sawConfigChangeDuringRebuild else { return }
-        sawConfigChangeDuringRebuild = false
-        if isRecording,
-           engineQueue.sync(execute: { self.currentInputDeviceID() }) != sessionDeviceID {
-            recoverFromConfigurationChange()
+    // The one way capture gets rebuilt mid-session. Runs the rebuild on the
+    // engine's queue — main never waits on it — and settles on main when
+    // done: report the voice-processing verdict, surface a device change if
+    // asked, and decide whether notifications that arrived mid-rebuild were
+    // our own reconfiguration echoing back (device unchanged — drop them) or
+    // a microphone really moving (device differs — go around once more).
+    // Comparing device IDs is what makes the loop converge: an echo can
+    // re-arm the flag forever, but it can never change the device.
+    private func rebuildAsync(notifyDeviceChange: Bool,
+                              retriesLeft: Int = 1,
+                              completion: ((Bool) -> Void)? = nil) {
+        rebuildsInFlight += 1
+        engineQueue.async { [weak self] in
+            guard let self else { return }
+            let rebuilt = self.isRecording && self.rebuildCapture()
+            let deviceNow = self.currentInputDeviceID()
+            let active = self.voiceProcessingActive
+            DispatchQueue.main.async {
+                self.rebuildsInFlight -= 1
+                completion?(active)
+                guard self.isRecording else {
+                    self.sawConfigChangeDuringRebuild = false
+                    return
+                }
+                let deviceChanged = rebuilt && deviceNow != self.sessionDeviceID
+                if deviceChanged {
+                    self.sessionDeviceID = deviceNow
+                    if notifyDeviceChange { self.onDeviceChange?() }
+                }
+                let saw = self.sawConfigChangeDuringRebuild
+                self.sawConfigChangeDuringRebuild = false
+                if saw, deviceChanged, self.rebuildsInFlight == 0 {
+                    self.rebuildAsync(notifyDeviceChange: notifyDeviceChange)
+                } else if !rebuilt, retriesLeft > 0, self.rebuildsInFlight == 0 {
+                    // The device was mid-transition and the rebuild bailed.
+                    // No further notification is promised once the
+                    // transition has already ended, so one short-fused retry
+                    // stands capture back up rather than leaving a live
+                    // session silently deaf.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                        guard let self, self.isRecording, self.rebuildsInFlight == 0 else { return }
+                        self.rebuildAsync(notifyDeviceChange: notifyDeviceChange,
+                                          retriesLeft: retriesLeft - 1)
+                    }
+                }
+            }
         }
     }
 
@@ -337,33 +351,17 @@ final class AudioRecorder {
 
     private func recoverFromConfigurationChange() {
         guard isRecording else { return }
-        // A rebuild already in flight for noise reduction will leave capture
-        // in the right state on its own; this notification is almost surely
-        // its own reconfiguration echoing back. Remember it rather than act:
-        // the rebuild's completion re-checks the device in case a microphone
-        // really did vanish inside that window.
-        if isRebuildingForNoiseReduction {
+        // With a rebuild in flight this notification is almost surely that
+        // rebuild's own reconfiguration echoing back — every engine restart
+        // posts one, so reacting to each would be a feedback loop of
+        // rebuilds (the storm behind the v2.5.0 installTap crash). Coalesce
+        // it; the rebuild's settle step re-checks the device in case a
+        // microphone really did move inside the window.
+        if rebuildsInFlight > 0 {
             sawConfigChangeDuringRebuild = true
             return
         }
-        // The rebuild happens on the engine's own queue, never inline: this
-        // handler runs on main, and CoreAudio is free to post the
-        // notification whenever it likes — including a beat after a
-        // noise-reduction rebuild has already finished and dropped its
-        // guard (enabling voice processing settles late). Blocking main here
-        // was the stutter that froze the badge animation halfway.
-        engineQueue.async { [weak self] in
-            guard let self, self.isRecording, self.rebuildCapture() else { return }
-            // Only a real change of device is worth telling the user about;
-            // the rebuild above happens either way, because the tap is dead
-            // either way.
-            let now = self.currentInputDeviceID()
-            DispatchQueue.main.async {
-                guard self.isRecording, now != self.sessionDeviceID else { return }
-                self.sessionDeviceID = now
-                self.onDeviceChange?()
-            }
-        }
+        rebuildAsync(notifyDeviceChange: true)
     }
 
     // Tear the running capture down and stand it back up on whatever the
@@ -386,7 +384,12 @@ final class AudioRecorder {
     private func installCapture() -> Bool {
         let input = engine.inputNode
         let hwFormat = input.outputFormat(forBus: 0)
-        guard hwFormat.sampleRate > 0,
+        // Zero sample rate or zero channels is a device mid-transition —
+        // handing that format to installTap raises an ObjC exception Swift
+        // cannot catch (the v2.5.0 SIGABRT). Fail the rebuild instead; the
+        // configuration-change notification that follows the transition's
+        // end brings capture back.
+        guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0,
               let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                                sampleRate: Self.targetSampleRate,
                                                channels: 1, interleaved: false),
