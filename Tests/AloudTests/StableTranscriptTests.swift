@@ -41,19 +41,34 @@ final class StableTranscriptTests: XCTestCase {
         XCTAssertEqual(s.accept("ice cream cones today"), "ice cream cones")
     }
 
-    // The decoder re-punctuates the whole utterance as it hears more. That is
-    // not new information and must not retype anything.
+    // The decoder re-punctuates the whole utterance as it hears more. A
+    // one-off flip is not new information and must not retype anything; a
+    // rendering two consecutive decodes agree on is the decoder's settled
+    // opinion and does update the screen.
     func testPunctuationFlapIsNotAChange() {
         var s = StableTranscript()
         _ = s.accept("three main topics first the")
         XCTAssertEqual(s.accept("three main topics first the"), "three main topics first the")
-        XCTAssertNil(s.accept("three main topics. First the"))
-        XCTAssertNil(s.accept("three main topics first the"))
+        XCTAssertNil(s.accept("three main topics. First the"))  // one-off flip: ignored
+        XCTAssertNil(s.accept("three main topics first the"))   // …and it flapped back
         XCTAssertEqual(s.text, "three main topics first the")
-        // New words still arrive normally, keeping the spelling already typed.
+        // Two decodes in a row rendering "topics." adopt it; "First," vs
+        // "First" is still dithering, so that word keeps waiting.
         XCTAssertNil(s.accept("three main topics. First, the quarterly"))
         XCTAssertEqual(s.accept("three main topics. First the quarterly budget"),
-                       "three main topics first the quarterly")
+                       "three main topics. first the quarterly")
+    }
+
+    // The observed pain: a spurious period released mid-sentence used to sit
+    // there, visibly wrong, until commit. Once the decoder firmly drops it —
+    // two consecutive decodes without it — the screen heals.
+    func testStrayPunctuationHeals() {
+        var s = StableTranscript()
+        _ = s.accept("we cover topics. First")
+        XCTAssertEqual(s.accept("we cover topics. First"), "we cover topics. First")
+        XCTAssertNil(s.accept("we cover topics first thing"))
+        XCTAssertEqual(s.accept("we cover topics first thing today"),
+                       "we cover topics first thing")
     }
 
     // Silence decodes to nothing; that is not a signal to erase.

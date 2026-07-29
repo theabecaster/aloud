@@ -244,6 +244,48 @@ final class HotkeyEngineTests: XCTestCase {
             "Of course, that works for me.", original: "of course uh that works for me"))
     }
 
+    // Observed live in Ghostty: the model answered the dictated question,
+    // rebuilding it from the question's own words — short enough to pass the
+    // length net, overlapping enough to pass the content-word net, and opening
+    // with none of the listed reply openers.
+    func testAnsweredQuestionIsRejected() {
+        let question = "In the Mac menu what do I have to type into the terminal to see the logs or the tmux or whatever session?"
+        XCTAssertNil(EnhancerOutputCheck.validate(
+            "To see the logs or the tmux session, you need to type `tman` into the terminal.",
+            original: question))
+        // The question kept as a question passes.
+        XCTAssertNotNil(EnhancerOutputCheck.validate(
+            "What do I have to type into the terminal to see the tmux session?",
+            original: question))
+        // A wh-question the ASR left without a "?" still convicts its answer.
+        XCTAssertNil(EnhancerOutputCheck.validate(
+            "The logs go in the terminal.", original: "um where do the logs go"))
+        // Contracted wh-openers and leading discourse words don't hide one.
+        XCTAssertNil(EnhancerOutputCheck.validate(
+            "Paris is the capital of France.", original: "so what's the capital of France is it Paris"))
+    }
+
+    // The transcript is sent inside <TRANSCRIPT> tags; a model that echoes
+    // them back around an otherwise good rewrite is unwrapped, not rejected.
+    func testEchoedTranscriptTagsAreUnwrapped() {
+        XCTAssertEqual(EnhancerOutputCheck.validate(
+            "<TRANSCRIPT>\nMove the launch back a week.\n</TRANSCRIPT>",
+            original: "We should move the launch back a week because testing is not done."),
+            "Move the launch back a week.")
+    }
+
+    // The other face of the same failure: the rewrite addresses a "you" the
+    // speaker never spoke to.
+    func testSecondPersonFromNowhereIsRejected() {
+        XCTAssertNil(EnhancerOutputCheck.validate(
+            "You should check the printer before the meeting.",
+            original: "um I should check the printer uh before the meeting"))
+        // A "you" the speaker actually said survives.
+        XCTAssertNotNil(EnhancerOutputCheck.validate(
+            "Can you check the printer before the meeting?",
+            original: "um can you check the printer uh before the meeting"))
+    }
+
     // Observed live: "insert my email" came back as example #3 from the
     // model's own instructions — words the speaker never said.
     func testEchoedInstructionExamplesAreRejected() {
