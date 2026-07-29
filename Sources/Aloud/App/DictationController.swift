@@ -474,9 +474,11 @@ final class DictationController: ObservableObject {
         sessionContext = nil
         let appName = front?.localizedName
         let appBundleID = front?.bundleIdentifier
+        let appPID = front?.processIdentifier
         let generation = sessionGeneration
         Task.detached(priority: .userInitiated) { [weak self] in
-            let snapshot = FocusSnapshot.capture(appName: appName, appBundleID: appBundleID)
+            let snapshot = FocusSnapshot.capture(appName: appName, appBundleID: appBundleID,
+                                                 appPID: appPID)
             await MainActor.run { [weak self] in
                 guard let self, self.sessionGeneration == generation else { return }
                 self.sessionContext = snapshot
