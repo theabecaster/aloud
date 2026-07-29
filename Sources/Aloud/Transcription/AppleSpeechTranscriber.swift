@@ -149,8 +149,9 @@ final class AppleSpeechTranscriber: Transcriber {
                              processingTime: Date().timeIntervalSince(start))
     }
 
-    // Same whole-buffer re-decode strategy as the primary engine: every update
-    // is a full-context pass identical to what a commit would produce.
+    // Same windowed re-decode strategy as the primary engine — and the bounded
+    // window matters twice here, because every pass also rewrites its audio to
+    // a temp WAV before decoding.
     func makeStreamingTranscription() -> StreamingTranscription? {
         guard state == .ready else { return nil }
         return RedecodeStreamingTranscription { [weak self] samples in

@@ -43,9 +43,9 @@ struct FocusSnapshot: Equatable {
     // Callable off the main actor on purpose: the AX reads can stall for tens
     // of milliseconds, and recording start must never wait on them. The AX C
     // API has no main-thread requirement.
-    static func capture(appName: String?, appBundleID: String?) -> FocusSnapshot {
+    static func capture(appName: String?, appBundleID: String?,
+                        appPID: pid_t? = nil) -> FocusSnapshot {
         var snapshot = FocusSnapshot(appName: appName, appBundleID: appBundleID)
-        let deadline = Date().addingTimeInterval(budget)
 
         let systemWide = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(systemWide, perCallTimeout)
@@ -53,15 +53,22 @@ struct FocusSnapshot: Equatable {
         let focusErr = AXUIElementCopyAttributeValue(systemWide,
                                                      kAXFocusedUIElementAttribute as CFString,
                                                      &focusedRef)
-        guard focusErr == .success,
-              let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
-        else {
+        var resolved: AXUIElement?
+        if focusErr == .success,
+           let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() {
+            resolved = (focusedRef as! AXUIElement)
+        } else if let appPID {
+            resolved = wakeFocusedElement(appPID: appPID)
+        }
+        guard let focused = resolved else {
             // A definitive "nothing has focus" means keystrokes have nowhere
             // to go; timeouts and other errors stay unknown.
             if focusErr == .noValue { snapshot.editability = .notEditable }
             return snapshot
         }
-        let focused = focusedRef as! AXUIElement
+        // Started only now: the wake path above has its own bound, and this
+        // budget exists to cap the text reads below.
+        let deadline = Date().addingTimeInterval(budget)
         AXUIElementSetMessagingTimeout(focused, perCallTimeout)
         snapshot.editability = editability(of: focused)
 
@@ -92,6 +99,44 @@ struct FocusSnapshot: Equatable {
         if start < 0 { start = 0; end = cap }
         if end > chars.count { end = chars.count; start = end - cap }
         return String(chars[start..<end])
+    }
+
+    // MARK: dormant accessibility trees
+
+    // Chromium keeps its accessibility tree switched off until an assistive
+    // client announces itself, so Arc, Chrome, and Electron apps report
+    // "nothing has focus" while the user sits in a perfectly good text field —
+    // and the probe would wrongly block typing. Announcing via the Chromium
+    // family's AXManualAccessibility attribute makes the app build the tree;
+    // that takes a moment, so poll for the focused element to appear. Apps
+    // without the attribute refuse the write, which keeps the cost to one
+    // round-trip everywhere else — and once set, the flag holds for the app's
+    // lifetime, so later sessions resolve on the first read.
+    private static let treeWakeBudget: TimeInterval = 1.0
+    private static let treeWakePoll: TimeInterval = 0.05
+
+    private static func wakeFocusedElement(appPID: pid_t) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(appPID)
+        AXUIElementSetMessagingTimeout(app, perCallTimeout)
+        // The system-wide read can fail while the app-scoped one answers.
+        if let focused = copyFocusedElement(of: app) { return focused }
+        guard AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString,
+                                           kCFBooleanTrue) == .success else { return nil }
+        let deadline = Date().addingTimeInterval(treeWakeBudget)
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: treeWakePoll)
+            if let focused = copyFocusedElement(of: app) { return focused }
+        }
+        return nil
+    }
+
+    private static func copyFocusedElement(of app: AXUIElement) -> AXUIElement? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString,
+                                            &ref) == .success,
+              let ref, CFGetTypeID(ref) == AXUIElementGetTypeID()
+        else { return nil }
+        return (ref as! AXUIElement)
     }
 
     // MARK: editability

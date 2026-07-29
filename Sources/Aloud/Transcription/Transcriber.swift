@@ -37,9 +37,11 @@ extension Transcriber {
     func makeStreamingTranscription() -> StreamingTranscription? { nil }
 }
 
-// Snapshot of an in-progress transcript. `confirmed` is stable and only ever
-// grows; `volatile` is the engine's current best guess for the most recent
-// audio and may be rewritten by the next update.
+// Snapshot of an in-progress transcript. `confirmed` is stable and almost
+// always only grows — an engine may still revise its tail when a sustained
+// disagreement or a decode-window boundary settles differently; `volatile` is
+// the engine's current best guess for the most recent audio and may be
+// rewritten by the next update.
 struct LiveTranscript: Equatable, Sendable {
     var confirmed: String
     var volatile: String
