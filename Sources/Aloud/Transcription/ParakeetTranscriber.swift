@@ -41,10 +41,15 @@ final class ParakeetTranscriber: Transcriber {
     func prepare(onProgress: @escaping @Sendable (Double) -> Void) async throws {
         try await prepareLock.run { [self] in
             if manager != nil { state = .ready; return }
-            state = modelIsDownloaded ? .loading : .downloading(progress: 0)
+            let needsDownload = !modelIsDownloaded
+            state = needsDownload ? .downloading(progress: 0) : .loading
             do {
+                // The SDK fires the progress handler even when the files are
+                // already on disk (load/verify stages); surfacing those as
+                // download percentages makes every launch flash a phantom
+                // progress badge. Only forward when a download is happening.
                 let models = try await AsrModels.downloadAndLoad(version: .v3) { progress in
-                    onProgress(progress.fractionCompleted)
+                    if needsDownload { onProgress(progress.fractionCompleted) }
                 }
                 state = .loading
                 let asr = AsrManager(config: .default)
