@@ -50,6 +50,14 @@ struct StatusMenuView: View {
         self.onQuit = onQuit
     }
 
+    /// Rows shown in the popover; the full list lives in Settings → History.
+    private static let maxVisibleEntries = 30
+
+    /// Tallest the history list gets before it scrolls instead of growing.
+    private static let maxHistoryHeight: CGFloat = 320
+
+    @State private var historyContentHeight: CGFloat = 0
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -64,7 +72,7 @@ struct StatusMenuView: View {
             Divider()
             footer
         }
-        .frame(width: 410, height: 560)
+        .frame(width: 360)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
@@ -123,33 +131,26 @@ struct StatusMenuView: View {
         .padding(.bottom, 10)
     }
 
+    @ViewBuilder
     private var historyHeader: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(loc("Recent Dictations"))
-                .font(.subheadline.weight(.semibold))
-            if !history.entries.isEmpty {
-                Text("\(history.entries.count)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+        if !history.entries.isEmpty {
+            HStack(alignment: .firstTextBaseline) {
+                Text(loc("Recent Dictations"))
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
             }
-            Spacer()
-            Button(action: onOpenHistory) {
-                Label(loc("History"), systemImage: "clock")
-                    .font(.caption)
-            }
-            .buttonStyle(.borderless)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
     }
 
     @ViewBuilder
     private var historyContent: some View {
         if history.entries.isEmpty {
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 Image(systemName: "quote.bubble")
-                    .font(.system(size: 24, weight: .light))
+                    .font(.system(size: 20, weight: .light))
                     .foregroundStyle(.tertiary)
                 Text(loc("No Dictations Yet"))
                     .font(.subheadline.weight(.medium))
@@ -158,21 +159,32 @@ struct StatusMenuView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 44)
+            .padding(.vertical, 22)
         } else {
+            let visible = Array(history.entries.prefix(Self.maxVisibleEntries))
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(history.entries) { entry in
+                VStack(spacing: 0) {
+                    ForEach(visible) { entry in
                         RecentDictationRow(entry: entry)
-                        if entry.id != history.entries.last?.id {
+                        if entry.id != visible.last?.id {
                             Divider()
                                 .padding(.leading, 42)
                         }
                     }
                 }
                 .padding(.horizontal, 8)
+                .padding(.bottom, 4)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: HistoryHeightKey.self,
+                                               value: proxy.size.height)
+                    }
+                )
             }
+            .onPreferenceChange(HistoryHeightKey.self) { historyContentHeight = $0 }
+            .frame(height: min(max(historyContentHeight, 1), Self.maxHistoryHeight))
         }
     }
 
@@ -200,6 +212,7 @@ struct StatusMenuView: View {
                     || controller.undoEnhancementAvailable {
                     Divider()
                 }
+                Button(loc("History"), action: onOpenHistory)
                 Button(loc("Settings"), action: onOpenSettings)
                 Button(loc("Quit Aloud"), action: onQuit)
             } label: {
@@ -265,6 +278,13 @@ struct StatusMenuView: View {
             }
             return loc("Hold %@ to dictate", settings.hotkey.displayName)
         }
+    }
+}
+
+private struct HistoryHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
