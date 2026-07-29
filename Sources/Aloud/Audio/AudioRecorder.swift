@@ -11,6 +11,13 @@ final class AudioRecorder {
     private var converter: AVAudioConverter?
     private var samples: [Float] = []
     private let lock = NSLock()
+    // Every touch of `engine` (start, stop, a mid-session rebuild, a device
+    // configuration change) runs serialized through here. A noise-reduction
+    // toggle's rebuild is the one caller that dispatches to it asynchronously
+    // — reconfiguring the engine can take the better part of a second, and it
+    // has no reason to hold the main thread hostage while it does. Everyone
+    // else still calls in with `sync`, so from their side nothing changed.
+    private let engineQueue = DispatchQueue(label: "com.abrahamgonzalez.aloud.audiorecorder.engine")
     private(set) var isRecording = false
     // Remembered for the mid-session rebuild below, which starts a fresh
     // engine and has to re-apply the same processing.
@@ -45,8 +52,18 @@ final class AudioRecorder {
 
     // Whether macOS voice processing was actually engaged for this session —
     // some interfaces (aggregate devices, a few USB mics) refuse it, and we
-    // record raw rather than fail the dictation.
-    private(set) var voiceProcessingActive = false
+    // record raw rather than fail the dictation. Written on engineQueue
+    // (applyVoiceProcessing runs there), read from main; goes through `lock`
+    // like every other cross-thread field here.
+    private var _voiceProcessingActive = false
+    var voiceProcessingActive: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _voiceProcessingActive
+    }
+    private func noteVoiceProcessingActive(_ active: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        _voiceProcessingActive = active
+    }
     // Set when voice processing was engaged, produced nothing but digital
     // silence, and capture was rebuilt without it. Reported by --mic-check.
     private(set) var voiceProcessingFellBack = false
@@ -84,6 +101,19 @@ final class AudioRecorder {
     // began dictating was both wrong and, since the note takes the pill's
     // meter slot, in the way.
     private var sessionDeviceID: AudioDeviceID = 0
+    // Set for the span of a noise-reduction-triggered rebuild, main-thread
+    // only (set and cleared from setNoiseReduction's main-queue callers).
+    // Reconfiguring voice processing posts the same configuration-change
+    // notification a real device swap does; without this, that self-fired
+    // echo would try to rebuild again on an engineQueue still busy with the
+    // rebuild that caused it, and block main waiting its turn.
+    private var isRebuildingForNoiseReduction = false
+    // A configuration change arrived while that flag was up. Almost always
+    // the echo — but a microphone really unplugged in that sub-second window
+    // posts the identical notification, and dropping *that* would leave a
+    // dead tap. Once the rebuild settles, this remembers there is something
+    // to double-check; the device ID says whether it was real.
+    private var sawConfigChangeDuringRebuild = false
 
     // Which device the engine's input unit is pointed at right now.
     private func currentInputDeviceID() -> AudioDeviceID {
@@ -121,18 +151,18 @@ final class AudioRecorder {
     private func applyVoiceProcessing(_ enabled: Bool) {
         let input = engine.inputNode
         guard input.isVoiceProcessingEnabled != enabled else {
-            voiceProcessingActive = enabled
+            noteVoiceProcessingActive(enabled)
             return
         }
         do {
             try input.setVoiceProcessingEnabled(enabled)
             if enabled { input.isVoiceProcessingAGCEnabled = false }
-            voiceProcessingActive = enabled
+            noteVoiceProcessingActive(enabled)
         } catch {
             // Not every input device supports it. Recording raw is a worse
             // experience than recording processed, but a far better one than
             // not recording at all.
-            voiceProcessingActive = false
+            noteVoiceProcessingActive(false)
         }
     }
 
@@ -163,7 +193,16 @@ final class AudioRecorder {
             // No notice: the microphone did not change and nothing the user
             // did caused this. It recovers inside a second, and the only
             // honest thing to say about it is nothing.
-            _ = self.rebuildCapture()
+            // Same shape as the toggle's rebuild: off main (so nothing on
+            // screen freezes while the engine restarts), with the flag up so
+            // the reconfiguration's own configuration-change echo doesn't
+            // trigger a second rebuild on its heels.
+            self.isRebuildingForNoiseReduction = true
+            self.engineQueue.async { [weak self] in
+                guard let self else { return }
+                _ = self.rebuildCapture()
+                DispatchQueue.main.async { self.settleRebuildEcho() }
+            }
         }
         silenceWatchdog = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.silenceGrace, execute: work)
@@ -196,17 +235,51 @@ final class AudioRecorder {
     // Turn background-noise filtering on or off in the middle of a session —
     // the badge on the recording pill. Rebuilding capture costs a fraction of
     // a second of audio, which is the honest price of the switch doing what it
-    // says the moment it is pressed rather than at some later dictation.
+    // says the moment it is pressed rather than at some later dictation. Runs
+    // off the main thread so whatever animated the badge to its optimistic
+    // state keeps rendering while the engine catches up, instead of freezing
+    // mid-animation; `completion` reports what actually happened, on the main
+    // queue, once it has.
     // Ignored when the microphone has already proved it goes deaf under it.
-    func setNoiseReduction(_ enabled: Bool) {
+    func setNoiseReduction(_ enabled: Bool, completion: ((Bool) -> Void)? = nil) {
         let allowed = enabled && !(sessionDeviceUID.map { isDeviceDeafUnderVoiceProcessing?($0) ?? false } ?? false)
         guard isRecording, allowed != voiceProcessingActive else {
             noiseReduction = allowed
+            completion?(voiceProcessingActive)
             return
         }
         noiseReduction = allowed
-        rebuildCapture()
-        startSilenceWatchdog()
+        // Reconfiguring voice processing fires the same
+        // AVAudioEngineConfigurationChange notification a real device change
+        // does. With the rebuild off the main thread, that echo now arrives
+        // while this one is still running and its handler would block main
+        // waiting its turn on engineQueue — the stutter this flag prevents.
+        isRebuildingForNoiseReduction = true
+        engineQueue.async { [weak self] in
+            guard let self else { return }
+            _ = self.rebuildCapture()
+            let active = self.voiceProcessingActive
+            DispatchQueue.main.async {
+                self.startSilenceWatchdog()
+                completion?(active)
+                self.settleRebuildEcho()
+            }
+        }
+    }
+
+    // A noise-reduction rebuild just finished (main thread). Drop the guard,
+    // and decide whether the configuration change it swallowed was real: the
+    // device ID answers cheaply — the rebuild's own echo leaves it alone, a
+    // microphone unplugged inside that window does not. Only a genuine swap
+    // re-enters recovery.
+    private func settleRebuildEcho() {
+        isRebuildingForNoiseReduction = false
+        guard sawConfigChangeDuringRebuild else { return }
+        sawConfigChangeDuringRebuild = false
+        if isRecording,
+           engineQueue.sync(execute: { self.currentInputDeviceID() }) != sessionDeviceID {
+            recoverFromConfigurationChange()
+        }
     }
 
     // nil leaves the converter's own mapping alone, which is right for the
@@ -217,11 +290,16 @@ final class AudioRecorder {
 
     func start(deviceUID: String?, noiseReduction: Bool) throws {
         guard !isRecording else { return }
+        // Under the lock: the previous session's tap can still deliver a
+        // last buffer or two until its queued teardown runs, and these are
+        // the fields it touches.
+        lock.lock()
         samples.removeAll(keepingCapacity: true)
-        currentLevel = 0
-        resetSpectrum()
         sawSignal = false
         firstSignalUptime = nil
+        lock.unlock()
+        currentLevel = 0
+        resetSpectrum()
         voiceProcessingFellBack = false
         // Which microphone this will actually be — "system default" is a
         // moving target, and the answer decides whether voice processing is
@@ -229,16 +307,19 @@ final class AudioRecorder {
         sessionDeviceUID = deviceUID ?? AudioDevices.uid(forDeviceID: currentInputDeviceID())
         let deviceIsDeaf = sessionDeviceUID.map { isDeviceDeafUnderVoiceProcessing?($0) ?? false } ?? false
         self.noiseReduction = noiseReduction && !deviceIsDeaf
-        applyVoiceProcessing(self.noiseReduction)
-        applyInputDevice(uid: deviceUID)
 
-        guard engine.inputNode.outputFormat(forBus: 0).sampleRate > 0 else {
-            throw NSError(domain: "Aloud", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
-        }
-        guard installCapture() else {
-            throw NSError(domain: "Aloud", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "Couldn’t start listening"])
+        try engineQueue.sync {
+            applyVoiceProcessing(self.noiseReduction)
+            applyInputDevice(uid: deviceUID)
+
+            guard engine.inputNode.outputFormat(forBus: 0).sampleRate > 0 else {
+                throw NSError(domain: "Aloud", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
+            }
+            guard installCapture() else {
+                throw NSError(domain: "Aloud", code: 2,
+                              userInfo: [NSLocalizedDescriptionKey: "Couldn’t start listening"])
+            }
         }
         isRecording = true
         captureStartUptime = ProcessInfo.processInfo.systemUptime
@@ -255,13 +336,34 @@ final class AudioRecorder {
     }
 
     private func recoverFromConfigurationChange() {
-        guard isRecording, rebuildCapture() else { return }
-        // Only a real change of device is worth telling the user about; the
-        // rebuild above happens either way, because the tap is dead either way.
-        let now = currentInputDeviceID()
-        guard now != sessionDeviceID else { return }
-        sessionDeviceID = now
-        onDeviceChange?()
+        guard isRecording else { return }
+        // A rebuild already in flight for noise reduction will leave capture
+        // in the right state on its own; this notification is almost surely
+        // its own reconfiguration echoing back. Remember it rather than act:
+        // the rebuild's completion re-checks the device in case a microphone
+        // really did vanish inside that window.
+        if isRebuildingForNoiseReduction {
+            sawConfigChangeDuringRebuild = true
+            return
+        }
+        // The rebuild happens on the engine's own queue, never inline: this
+        // handler runs on main, and CoreAudio is free to post the
+        // notification whenever it likes — including a beat after a
+        // noise-reduction rebuild has already finished and dropped its
+        // guard (enabling voice processing settles late). Blocking main here
+        // was the stutter that froze the badge animation halfway.
+        engineQueue.async { [weak self] in
+            guard let self, self.isRecording, self.rebuildCapture() else { return }
+            // Only a real change of device is worth telling the user about;
+            // the rebuild above happens either way, because the tap is dead
+            // either way.
+            let now = self.currentInputDeviceID()
+            DispatchQueue.main.async {
+                guard self.isRecording, now != self.sessionDeviceID else { return }
+                self.sessionDeviceID = now
+                self.onDeviceChange?()
+            }
+        }
     }
 
     // Tear the running capture down and stand it back up on whatever the
@@ -348,11 +450,20 @@ final class AudioRecorder {
                                                      heardAfterFallback: heardAnything) {
             reportDeafDevice()
         }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        // Leave the graph as raw capture found it, so a session that never
-        // wanted voice processing never opens an output device.
-        engine.disconnectNodeOutput(engine.inputNode)
+        // Teardown queues behind any in-flight noise-reduction rebuild and
+        // runs without this thread waiting on it — a release that lands right
+        // after a toggle would otherwise stall main for the rest of that
+        // rebuild. Nothing below needs the engine actually stopped: the
+        // samples are snapshotted here, the few milliseconds the tap may
+        // still deliver land in the old array, and the next start() clears it
+        // after its own engineQueue turn — which FIFO puts after this one.
+        engineQueue.async { [engine] in
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            // Leave the graph as raw capture found it, so a session that never
+            // wanted voice processing never opens an output device.
+            engine.disconnectNodeOutput(engine.inputNode)
+        }
         isRecording = false
         converter = nil
         onChunk = nil

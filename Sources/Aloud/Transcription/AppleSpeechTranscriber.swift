@@ -123,7 +123,12 @@ final class AppleSpeechTranscriber: Transcriber {
     }
 
     func transcribe(samples: [Float]) async throws -> Transcription {
-        let url = try Self.writeTempWav(samples: samples)
+        // Detached: this is called from main-actor contexts, and the WAV
+        // write is synchronous disk I/O — off the caller's actor so a slow
+        // disk moment never holds up the UI.
+        let url = try await Task.detached(priority: .userInitiated) {
+            try Self.writeTempWav(samples: samples)
+        }.value
         defer { try? FileManager.default.removeItem(at: url) }
         return try await transcribe(file: url)
     }

@@ -121,18 +121,15 @@ final class DictationController: ObservableObject {
             guard let self else { return }
             let enabled = !self.settings.noiseReduction
             self.settings.noiseReduction = enabled
-            // The badge should animate the instant the press asks for it —
-            // rebuilding capture underneath can take the better part of a
-            // second, and waiting for it to confirm before animating reads as
-            // an unresponsive switch. Deferring the actual rebuild lets this
-            // turn's optimistic state reach the screen first; the follow-up
-            // corrects the badge if capture didn't end up where this expected
-            // (a mic that goes deaf under filtering, say).
-            DispatchQueue.main.async {
-                self.recorder.setNoiseReduction(enabled)
-                self.indicator.noiseReduction = self.recorder.isRecording
-                    ? self.recorder.voiceProcessingActive
-                    : enabled
+            // The badge animates to this the instant the press asks for it —
+            // rebuilding capture underneath runs off the main thread and can
+            // take the better part of a second, so the animation isn't
+            // waiting on it. The completion corrects the badge afterward if
+            // capture didn't end up where this expected (a mic that goes deaf
+            // under filtering, say).
+            self.recorder.setNoiseReduction(enabled) { [weak self] active in
+                guard let self else { return }
+                self.indicator.noiseReduction = self.recorder.isRecording ? active : enabled
             }
         }
         settings.$noiseReduction
