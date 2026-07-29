@@ -144,7 +144,7 @@ final class DictationController: ObservableObject {
             // Applies whatever the settings say *at run time*, not what they
             // said when scheduled — a re-toggle inside the delay would
             // otherwise be overridden by the stale value.
-            let applyChange = { [weak self] in
+            let applyChange: @MainActor @Sendable () -> Void = { [weak self] in
                 guard let self else { return }
                 let want = self.settings.noiseReduction
                 self.recorder.setNoiseReduction(want) { [weak self] active in
