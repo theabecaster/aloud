@@ -150,6 +150,16 @@ enum EnhancerOutputCheck {
         // rewrite does — the model turned the speaker into the person being
         // told what to do ("what do I have to type" → "you need to type").
         if addressesSecondPerson(trimmed), !addressesSecondPerson(original) { return nil }
+        // A speaker who organized their speech keeps that organization.
+        // Observed live: "three main topics. First… then… finally…" came back
+        // as a flat clause list — meaning kept, structure summarized away. A
+        // rewrite that drops every sequence marker without producing an actual
+        // list has summarized, not tightened.
+        if sequenceMarkers(in: original).count >= 2,
+           !trimmed.contains("\n- "), !trimmed.hasPrefix("- "),
+           sequenceMarkers(in: trimmed).isEmpty {
+            return nil
+        }
         // A rewrite should be at most modestly longer than what was said — big
         // growth means the model composed instead of cleaned. The floor is what
         // a short line needs for punctuation and a dropped filler, no more: a
@@ -186,6 +196,14 @@ enum EnhancerOutputCheck {
         guard let first = words.first, words.count > 1 else { return false }
         let bare = first.split(separator: "'").first.map(String.init) ?? first
         return whOpeners.contains(bare)
+    }
+
+    // The words a speaker sequences their points with. "then" alone appears in
+    // plenty of non-enumerative speech, which is why the net above needs two
+    // distinct markers before it convicts.
+    private static func sequenceMarkers(in text: String) -> Set<String> {
+        let markers: Set<String> = ["first", "second", "third", "then", "finally", "next", "lastly"]
+        return Set(text.lowercased().split { !$0.isLetter }.map(String.init).filter { markers.contains($0) })
     }
 
     // Whether the text speaks to a "you" (including how ASR renders casual
@@ -297,7 +315,9 @@ final class FoundationModelEnhancer: Enhancer, @unchecked Sendable {
     and rambling. Apply the speaker's self-corrections (phrases like "actually no wait X" \
     or "scratch that") so only the final intent remains. If the transcript clearly \
     enumerates items or steps, format them as a short markdown list. Keep the speaker's \
-    meaning, key details, numbers, and natural first-person voice. Never add words, \
+    meaning, key details, numbers, and natural first-person voice, including the \
+    structure words they used to organize their speech ("three topics", "first", \
+    "then", "finally"). Never add words, \
     names, sentences, or facts the transcript does not contain, and never reuse content \
     from the examples below — they only show the style. Never write code, greetings, \
     subject lines, or sign-offs. Reply with the rewritten text only, with no tags.
