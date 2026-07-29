@@ -26,6 +26,9 @@ final class LocalizationTests: XCTestCase {
         "%@ didn’t take the text — it’s in History",
         "The front app",
         "That app",
+        "%ld suggested fixes",
+        "Suggest fixes from your edits",
+        "Aloud noticed a fix — review it in the menu bar",
     ]
 
     private let missingMarker = "\u{7F}missing\u{7F}"

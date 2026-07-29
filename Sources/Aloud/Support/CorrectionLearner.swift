@@ -139,6 +139,19 @@ final class CorrectionLearner: ObservableObject {
         return kept
     }
 
+    /// A dismissal means "stop asking about this word" — but a user who later
+    /// adds a replacement for that very word by hand has plainly changed their
+    /// mind, and the old "no" must not keep future suggestions for it buried.
+    func resetDismissals(matchingPattern pattern: String) {
+        let before = suggestions.count
+        suggestions.removeAll {
+            $0.status == .dismissed
+                && $0.from.caseInsensitiveCompare(pattern) == .orderedSame
+        }
+        guard suggestions.count != before else { return }
+        persist()
+    }
+
     private func markDismissed(from: String, to: String) {
         let now = Date()
         if let idx = suggestions.firstIndex(where: {

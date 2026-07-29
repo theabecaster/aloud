@@ -333,3 +333,14 @@
 "%@ didn’t take the text — it’s in History" = "%@ didn’t take the text — it’s in History";
 "The front app" = "The front app";
 "That app" = "That app";
+
+/* Correction suggestions (menu bar cells + Settings — vocabulary) */
+"%ld suggested fixes" = "%ld suggested fixes";
+"Accept All" = "Accept All";
+"Deny All" = "Deny All";
+"Fix it automatically next time" = "Fix it automatically next time";
+"Never suggest this fix" = "Never suggest this fix";
+"Suggest fixes from your edits" = "Suggest fixes from your edits";
+"Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac." = "Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac.";
+"Learned from your edits" = "Learned from your edits";
+"Aloud noticed a fix — review it in the menu bar" = "Aloud noticed a fix — review it in the menu bar";

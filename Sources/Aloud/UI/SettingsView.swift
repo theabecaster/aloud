@@ -945,6 +945,10 @@ struct MappingRow: View {
     let from: String
     let to: String
     var toLineLimit: Int = 1
+    // A rule Aloud proposed from the user's own edits, as opposed to one they
+    // typed in — a quiet mark, because "where did this come from?" is a fair
+    // question about a list the user didn't fill in entirely by hand.
+    var learned: Bool = false
     let onRemove: () -> Void
 
     var body: some View {
@@ -959,6 +963,13 @@ struct MappingRow: View {
                 .lineLimit(toLineLimit)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
+            if learned {
+                Image(systemName: "wand.and.sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help(loc("Learned from your edits"))
+                    .accessibilityLabel(loc("Learned from your edits"))
+            }
             Button(action: onRemove) {
                 Image(systemName: "minus.circle.fill")
                     .foregroundStyle(.secondary)
@@ -983,7 +994,7 @@ struct VocabularySettings: View {
             isEmpty: settings.replacements.isEmpty
         ) {
             ForEach(settings.replacements) { r in
-                MappingRow(from: r.pattern, to: r.replacement) {
+                MappingRow(from: r.pattern, to: r.replacement, learned: r.learned) {
                     settings.replacements.removeAll { $0.id == r.id }
                 }
             }
@@ -1013,6 +1024,13 @@ struct VocabularySettings: View {
                     settings.polishLevel = .standard
                 }
             }
+            SwiftUI.Section {
+                Toggle(loc("Suggest fixes from your edits"), isOn: $settings.learnCorrections)
+            } footer: {
+                Text(loc("Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac."))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1026,6 +1044,9 @@ struct VocabularySettings: View {
         let r = newReplacement.trimmingCharacters(in: .whitespaces)
         guard !p.isEmpty, !r.isEmpty else { return }
         settings.replacements.append(Replacement(pattern: p, replacement: r))
+        // Adding this word by hand is a change of mind: an earlier "never
+        // suggest this" for the same pattern shouldn't outlive it.
+        CorrectionLearner.shared.resetDismissals(matchingPattern: p)
         newPattern = ""; newReplacement = ""
     }
 }

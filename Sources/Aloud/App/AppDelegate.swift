@@ -409,6 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         return StatusMenuView(
             controller: controller,
+            learner: CorrectionLearner.shared,
             attentionActions: attention,
             scratchpadVisible: scratchpad.isVisible,
             onOpenHistory: { [weak self] in self?.showSettings(.history) },

@@ -333,3 +333,14 @@
 "%@ didn’t take the text — it’s in History" = "%@ hat den Text nicht übernommen – er ist im Verlauf";
 "The front app" = "Die aktive App";
 "That app" = "Diese App";
+
+/* Correction suggestions (menu bar cells + Settings — vocabulary) */
+"%ld suggested fixes" = "%ld vorgeschlagene Korrekturen";
+"Accept All" = "Alle übernehmen";
+"Deny All" = "Alle ablehnen";
+"Fix it automatically next time" = "Beim nächsten Mal automatisch korrigieren";
+"Never suggest this fix" = "Diese Korrektur nie wieder vorschlagen";
+"Suggest fixes from your edits" = "Korrekturen aus deinen Änderungen vorschlagen";
+"Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac." = "Aloud bemerkt, wenn du ein Diktat direkt im Text korrigierst, und bietet an, es beim nächsten Mal automatisch zu korrigieren. Nichts verlässt diesen Mac.";
+"Learned from your edits" = "Aus deinen Änderungen gelernt";
+"Aloud noticed a fix — review it in the menu bar" = "Aloud hat eine Korrektur bemerkt – prüfe sie im Menüleisten-Menü";

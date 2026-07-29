@@ -168,6 +168,34 @@ final class CorrectionLearnerTests: XCTestCase {
                        "the oldest pending pair was shed")
     }
 
+    func testResetDismissalsForgetsOnlyMatchingDismissedPairs() {
+        let learner = CorrectionLearner(fileURL: fileURL)
+        learner.observe([candidate("jon", "Jon"), candidate("acme", "ACME")], settings: settings)
+        learner.observe([candidate("jon", "Jon"), candidate("acme", "ACME")], settings: settings)
+        for ready in learner.readySuggestions { learner.dismiss(ready) }
+        learner.observe([candidate("bob", "Bob")], settings: settings)
+
+        // Case-insensitive on the pattern, like every other `from` match.
+        learner.resetDismissals(matchingPattern: "JON")
+
+        XCTAssertFalse(learner.suggestions.contains { $0.from == "jon" },
+                       "the matching dismissal is forgotten")
+        XCTAssertEqual(learner.suggestions.first { $0.from == "acme" }?.status, .dismissed,
+                       "an unrelated dismissal stays dismissed")
+        XCTAssertEqual(learner.suggestions.first { $0.from == "bob" }?.status, .pending,
+                       "a live pair with a different pattern is untouched")
+
+        // A pattern matching only non-dismissed pairs removes nothing.
+        learner.resetDismissals(matchingPattern: "bob")
+        XCTAssertEqual(learner.suggestions.first { $0.from == "bob" }?.status, .pending)
+
+        // The removal survives a reload.
+        waitForPersist()
+        let reloaded = CorrectionLearner(fileURL: fileURL)
+        XCTAssertFalse(reloaded.suggestions.contains { $0.from == "jon" })
+        XCTAssertEqual(reloaded.suggestions.first { $0.from == "acme" }?.status, .dismissed)
+    }
+
     // async persist — same wait as HistoryStoreTests
     private func waitForPersist() {
         let deadline = Date().addingTimeInterval(2)

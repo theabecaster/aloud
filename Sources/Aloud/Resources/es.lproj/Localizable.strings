@@ -333,3 +333,14 @@
 "%@ didn’t take the text — it’s in History" = "%@ no recibió el texto — está en el historial";
 "The front app" = "La app en primer plano";
 "That app" = "Esa app";
+
+/* Correction suggestions (menu bar cells + Settings — vocabulary) */
+"%ld suggested fixes" = "%ld correcciones sugeridas";
+"Accept All" = "Aceptar todas";
+"Deny All" = "Rechazar todas";
+"Fix it automatically next time" = "Corregirlo automáticamente la próxima vez";
+"Never suggest this fix" = "No volver a sugerir esta corrección";
+"Suggest fixes from your edits" = "Sugerir correcciones a partir de tus cambios";
+"Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac." = "Aloud nota cuando corriges un dictado donde quedó escrito y ofrece corregirlo automáticamente la próxima vez. Nada sale de este Mac.";
+"Learned from your edits" = "Aprendida de tus cambios";
+"Aloud noticed a fix — review it in the menu bar" = "Aloud detectó una corrección — revísala en la barra de menús";
