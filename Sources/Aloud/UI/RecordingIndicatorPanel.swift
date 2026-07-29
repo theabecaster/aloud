@@ -413,6 +413,11 @@ struct IndicatorView: View {
     @State private var badgeVisible = false
     @State private var badgeLit = false
     @State private var badgeFadeOut: Task<Void, Never>?
+    // Bumped on every noiseReduction change. A rapid re-toggle starts a new
+    // generation before the previous one's fade-out completion fires, so that
+    // stale completion can tell it no longer describes the current state and
+    // bail instead of forcing the badge back off underneath the new state.
+    @State private var noiseGeneration = 0
 
     var body: some View {
         HStack(spacing: 10) {
@@ -513,8 +518,11 @@ struct IndicatorView: View {
             badgeLit = model.noiseReduction
         }
         .onChange(of: model.noiseReduction) { _, on in
+            badgeFadeOut?.cancel()
+            badgeFadeOut = nil
+            noiseGeneration += 1
+            let generation = noiseGeneration
             if on {
-                badgeFadeOut?.cancel()
                 badgeVisible = true
                 badgeLit = true
                 // The outline runs round first and closes; the colour follows
@@ -530,10 +538,14 @@ struct IndicatorView: View {
                 withAnimation(.easeIn(duration: 0.6), completionCriteria: .removed) {
                     tintReveal = 0
                 } completion: {
+                    // A re-toggle before this fires started a fresh
+                    // generation above; a stale completion must not force
+                    // the badge back off underneath the state it since moved to.
+                    guard generation == noiseGeneration else { return }
                     badgeLit = false
                     badgeFadeOut = Task {
                         try? await Task.sleep(nanoseconds: 450_000_000)
-                        guard !Task.isCancelled else { return }
+                        guard !Task.isCancelled, generation == noiseGeneration else { return }
                         withAnimation(.easeOut(duration: 0.25)) { badgeVisible = false }
                     }
                 }
