@@ -147,22 +147,24 @@ final class ParakeetTranscriber: Transcriber {
     }
 }
 
-// Live transcription by whole-buffer re-decode: a few times a second, run the
-// SAME batch transcription the commit path uses over ALL audio captured so far
-// (fresh decoder state each pass; >15 s audio auto-chunks internally exactly
-// like a committed dictation would). Each update is therefore a full-context
-// best hypothesis — later speech genuinely revises earlier words, and the
-// preview converges on the batch result by construction. Those revisions are
+// Live transcription by re-decode: a few times a second, run the SAME batch
+// transcription the commit path uses over the current live window (fresh
+// decoder state each pass). Each update is a full-context hypothesis for that
+// window — later speech genuinely revises earlier words in it. Revisions are
 // not published raw: StableTranscript holds each word back until two
-// consecutive decodes agree on it, so what reaches the screen only grows.
+// consecutive decodes agree on it, so what reaches the screen grows steadily.
 // Engine-agnostic: any Transcriber can stream this way by handing over its
 // decode function.
+//
+// The window is bounded by ChunkedLivePreview: once it fills (~11–14.5 s) its
+// text freezes and the window restarts, so a tick costs one model-window
+// inference (~0.1 s on Apple silicon) no matter how long the session runs —
+// it never decodes the whole recording. The commit path still does, once, so
+// the final text keeps full context.
 //
 // Chosen over the SDK's SlidingWindowAsrManager, whose small-chunk streaming
 // path proved fragile (cross-window token dedup drops words; the decoder's
 // time index can run past short windows and starve, silently losing the tail).
-// Re-decode costs one inference per tick (~0.1 s on Apple silicon for ≤15 s of
-// audio) which comfortably outruns the update cadence.
 final class RedecodeStreamingTranscription: StreamingTranscription, @unchecked Sendable {
     // The model's floor: shorter audio than this can't be decoded at all.
     private static let minSamples = 4_800             // 0.3 s
@@ -172,6 +174,10 @@ final class RedecodeStreamingTranscription: StreamingTranscription, @unchecked S
     // pump awaits each decode, so it can never outrun the hardware.
     private static let minNewSamples = 3_200          // 0.2 s
     private static let tickInterval: UInt64 = 150_000_000   // 0.15 s poll
+    // ALOUD_LIVE_TIMING=1 prints each tick's window size and decode time to
+    // stderr — how the flat-per-tick-cost claim gets measured, nothing more.
+    private static let timingEnabled =
+        ProcessInfo.processInfo.environment["ALOUD_LIVE_TIMING"] == "1"
 
     private let decode: @Sendable ([Float]) async throws -> String
     private let lock = NSLock()
@@ -187,24 +193,33 @@ final class RedecodeStreamingTranscription: StreamingTranscription, @unchecked S
         (updateStream, updateContinuation) = AsyncStream.makeStream(of: LiveTranscript.self)
         pumpTask = Task { [weak self] in
             var decodedCount = 0
-            var stable = StableTranscript()
+            var preview = ChunkedLivePreview()
             while let self {
-                let (snapshot, done) = self.snapshotBuffer()
-                if snapshot.count >= Self.minSamples,
-                   snapshot.count - decodedCount >= Self.minNewSamples {
-                    decodedCount = snapshot.count
-                    // A preview that is nothing but a filler is withheld: two
+                let (window, total, done) = self.snapshotWindow(from: preview.windowStart)
+                let windowEnd = preview.windowStart + window.count
+                if window.count >= Self.minSamples,
+                   total - decodedCount >= Self.minNewSamples {
+                    decodedCount = windowEnd
+                    // Filler-only windows are withheld inside the preview: two
                     // consecutive decodes of the same room tone agree on
                     // "Yeah." as readily as on a real word, so without this the
                     // preview types a phantom and the commit has to take it
                     // back. No confidence to weigh here (a decode pass returns
                     // text only), and none is needed — either speech follows
-                    // and the filler stops being the whole transcript, or the
+                    // and the filler stops being the whole window, or the
                     // commit re-decodes and rules on it with PhantomFilter.
-                    if let text = try? await self.decode(snapshot),
-                       !PhantomFilter.isFillerOnly(text),
-                       let confirmed = stable.accept(text), !confirmed.isEmpty {
-                        self.updateContinuation.yield(LiveTranscript(confirmed: confirmed, volatile: ""))
+                    let started = Self.timingEnabled ? Date() : nil
+                    let text = try? await self.decode(window)
+                    if let started {
+                        let line = String(format: "tick: buffered %.1fs window %.1fs decode %.0fms\n",
+                                          Double(total) / 16_000, Double(window.count) / 16_000,
+                                          -started.timeIntervalSinceNow * 1_000)
+                        FileHandle.standardError.write(Data(line.utf8))
+                    }
+                    if let text,
+                       let display = preview.accept(text, decodedEnd: windowEnd,
+                                                    tailQuiet: ChunkedLivePreview.tailIsQuiet(window)) {
+                        self.updateContinuation.yield(LiveTranscript(confirmed: display, volatile: ""))
                     }
                 }
                 if done { break }
@@ -226,6 +241,16 @@ final class RedecodeStreamingTranscription: StreamingTranscription, @unchecked S
     private func snapshotBuffer() -> ([Float], Bool) {
         lock.lock(); defer { lock.unlock() }
         return (buffer, finished)
+    }
+
+    // The live window plus where the buffer ends — one lock so the two agree.
+    // The window is clipped to the chunk cap: when appends have outrun decodes
+    // (a file fed faster than realtime, a slow decode moment), each tick still
+    // decodes one bounded chunk and the cap-roll walks the backlog.
+    private func snapshotWindow(from start: Int) -> ([Float], Int, Bool) {
+        lock.lock(); defer { lock.unlock() }
+        let end = min(buffer.count, start + ChunkedLivePreview.hardCapSamples)
+        return (Array(buffer[start..<end]), buffer.count, finished)
     }
 
     private func markFinished() {
