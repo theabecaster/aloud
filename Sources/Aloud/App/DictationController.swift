@@ -110,6 +110,11 @@ final class DictationController: ObservableObject {
         indicator.onStopHandsFree = { [weak self] in
             self?.hotkeyManager.endHandsFree()
         }
+        // The reminder is for someone not looking at the screen; the sound
+        // is what actually reaches them. Same cue switch as everything else.
+        indicator.onStillListening = { [weak self] in
+            self?.playCue(.stillListening)
+        }
         indicator.settings = settings
         indicator.noiseReduction = settings.noiseReduction
         // The badge on the pill is the same switch General holds: pressing it
@@ -130,9 +135,27 @@ final class DictationController: ObservableObject {
             // waiting on it. The completion corrects the badge afterward if
             // capture didn't end up where this expected (a mic that goes deaf
             // under filtering, say).
-            self.recorder.setNoiseReduction(enabled) { [weak self] active in
+            //
+            // Disabling waits out the cue first: tearing voice processing
+            // down reconfigures this process's audio output and cuts any
+            // in-flight sound dead — the off cue was inaudible in practice.
+            // A third of a second more filtering is imperceptible; enabling
+            // never had the problem and stays immediate.
+            // Applies whatever the settings say *at run time*, not what they
+            // said when scheduled — a re-toggle inside the delay would
+            // otherwise be overridden by the stale value.
+            let applyChange: @MainActor @Sendable () -> Void = { [weak self] in
                 guard let self else { return }
-                self.indicator.noiseReduction = self.recorder.isRecording ? active : enabled
+                let want = self.settings.noiseReduction
+                self.recorder.setNoiseReduction(want) { [weak self] active in
+                    guard let self else { return }
+                    self.indicator.noiseReduction = self.recorder.isRecording ? active : want
+                }
+            }
+            if enabled || !self.settings.soundCues {
+                applyChange()
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: applyChange)
             }
         }
         settings.$noiseReduction
@@ -419,10 +442,11 @@ final class DictationController: ObservableObject {
     // macOS's "that input went nowhere" beep, so reusing them made the start
     // chime indistinguishable from an error.
     enum SoundCue: String, CaseIterable {
-        case listening = "cue-listening"    // recording started
-        case error = "cue-error"            // something didn't land
-        case noiseOn = "cue-noise-on"       // filtering engaged — glides up with the reveal
-        case noiseOff = "cue-noise-off"     // filtering off — the same glide back down
+        case listening = "cue-listening"            // recording started
+        case error = "cue-error"                    // something didn't land
+        case noiseOn = "cue-noise-on"               // filtering engaged — glides up with the reveal
+        case noiseOff = "cue-noise-off"             // filtering off — the same glide back down
+        case stillListening = "cue-still-listening" // hands-free reminder — two soft taps
     }
     private var cueSounds: [SoundCue: NSSound] = [:]
 
