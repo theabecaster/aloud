@@ -160,8 +160,9 @@ final class RecordingIndicatorPanel {
             if level > Self.voiceLevel { lastVoiceTime = now }
             silentFor = now - lastVoiceTime
         }
+        let wasShowing = model.stillListening
         model.stillListening = SilenceReminder.next(
-            showing: model.stillListening,
+            showing: wasShowing,
             silentFor: silentFor,
             lockedFor: now - lockedAt,
             isLocked: model.isLocked,
@@ -173,7 +174,15 @@ final class RecordingIndicatorPanel {
                     CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown),
                     CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved))
             })
+        // The reminder exists because the user's eyes are elsewhere — a
+        // pill quietly swapping its caption may never be seen at all. One
+        // gentle sound at the moment it latches; the latch itself keeps it
+        // from repeating until speech resets it.
+        if model.stillListening, !wasShowing { onStillListening?() }
     }
+
+    // Fires once each time the still-listening reminder appears.
+    var onStillListening: (() -> Void)?
 
     // Timings live on the panel; the rule itself is here so it can be tested
     // without an AppKit window or a 30 Hz timer.
