@@ -459,6 +459,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         } else {
             window.center()
         }
+        // A window's very first orderFront can race the hosting view's initial
+        // layout: the switches' knobs are placed during that first display
+        // pass, and when the window reaches the screen before it finishes —
+        // seen on the settings window right after install — every toggle
+        // draws as an empty track until clicked. Finish layout and drawing
+        // before the window is ever visible.
+        if !window.isVisible {
+            window.layoutIfNeeded()
+            window.displayIfNeeded()
+        }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }
