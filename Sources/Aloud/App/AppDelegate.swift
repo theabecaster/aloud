@@ -465,14 +465,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // layout: the switches' knobs are placed during that first display
         // pass, and when the window reaches the screen before it finishes —
         // seen on the settings window right after install — every toggle
-        // draws as an empty track until clicked. Finish layout and drawing
-        // before the window is ever visible.
-        if !window.isVisible {
-            window.layoutIfNeeded()
-            window.displayIfNeeded()
-        }
+        // draws as an empty track until clicked, or until the window resigns
+        // and reclaims key (which forces AppKit to redraw every NSSwitch).
+        // Forcing layout while the window is still off-screen doesn't help —
+        // WindowServer has nothing to composite yet — so the fix has to run
+        // once the window is actually visible.
+        let firstPresentation = !window.isVisible
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        if firstPresentation {
+            DispatchQueue.main.async {
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+            }
+        }
     }
 
     private func showOnboarding() {

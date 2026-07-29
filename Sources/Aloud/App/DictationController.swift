@@ -121,10 +121,19 @@ final class DictationController: ObservableObject {
             guard let self else { return }
             let enabled = !self.settings.noiseReduction
             self.settings.noiseReduction = enabled
-            self.recorder.setNoiseReduction(enabled)
-            self.indicator.noiseReduction = self.recorder.isRecording
-                ? self.recorder.voiceProcessingActive
-                : enabled
+            // The cue rides the badge animation — same switch as the start
+            // chime, so "Sound when recording starts" silences it too.
+            self.playCue(enabled ? .noiseOn : .noiseOff)
+            // The badge animates to this the instant the press asks for it —
+            // rebuilding capture underneath runs off the main thread and can
+            // take the better part of a second, so the animation isn't
+            // waiting on it. The completion corrects the badge afterward if
+            // capture didn't end up where this expected (a mic that goes deaf
+            // under filtering, say).
+            self.recorder.setNoiseReduction(enabled) { [weak self] active in
+                guard let self else { return }
+                self.indicator.noiseReduction = self.recorder.isRecording ? active : enabled
+            }
         }
         settings.$noiseReduction
             .sink { [weak self] on in self?.indicator.noiseReduction = on }
@@ -412,6 +421,8 @@ final class DictationController: ObservableObject {
     enum SoundCue: String, CaseIterable {
         case listening = "cue-listening"    // recording started
         case error = "cue-error"            // something didn't land
+        case noiseOn = "cue-noise-on"       // filtering engaged — glides up with the reveal
+        case noiseOff = "cue-noise-off"     // filtering off — the same glide back down
     }
     private var cueSounds: [SoundCue: NSSound] = [:]
 

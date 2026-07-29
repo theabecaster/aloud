@@ -230,7 +230,13 @@ struct GeneralSettings: View {
     @State private var micAccess = Permissions.microphone
     @State private var axAccess = Permissions.accessibility
 
-    private let poll = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
+    // @State so one publisher survives re-renders instead of a new timer per
+    // body evaluation; the host window reference is what lets the poll stop
+    // doing work once the window closes — the window outlives its closes
+    // (isReleasedWhenClosed = false), so this view never unmounts and
+    // onDisappear can't be trusted to fire.
+    @State private var poll = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
+    @State private var hostWindow: NSWindow?
 
     init(controller: DictationController) {
         self.controller = controller
@@ -279,6 +285,7 @@ struct GeneralSettings: View {
                 }
                 Toggle(loc("Reduce background noise"), isOn: $settings.noiseReduction)
                 Toggle(loc("Sound when recording starts"), isOn: $settings.soundCues)
+                Toggle(loc("Animate the recording pill"), isOn: $settings.indicatorEntrance)
             } footer: {
                 Text(loc("Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on."))
                     .font(.footnote)
@@ -298,8 +305,14 @@ struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+        .background(HostWindowReader(window: $hostWindow))
         .onAppear { devices = AudioDevices.inputDevices() }
         .onReceive(poll) { _ in
+            // The poll exists so a grant flipped in System Settings shows up
+            // here while this window sits in the background — so it must run
+            // whenever the window is on screen, key or not, and only rest
+            // once the window is actually closed.
+            guard hostWindow?.isVisible ?? true else { return }
             micAccess = Permissions.microphone
             axAccess = Permissions.accessibility
         }
@@ -1555,5 +1568,26 @@ struct AboutSettings: View {
             .padding(12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Host window access
+
+// Hands the hosting NSWindow to SwiftUI code that needs to know whether the
+// window is actually on screen. The settings window outlives its closes
+// (isReleasedWhenClosed = false keeps it, and its view tree, alive), so
+// onAppear/onDisappear can't tell "closed" from "still open behind another
+// window" — the window's own isVisible can.
+struct HostWindowReader: NSViewRepresentable {
+    @Binding var window: NSWindow?
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { window = view.window }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { window = nsView.window }
     }
 }

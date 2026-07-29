@@ -50,13 +50,28 @@ final class TextInjector {
     // short enough that the user won't notice their clipboard "flicker".
     static let restoreDelay: TimeInterval = 0.8
 
+    // Injections can overlap: two quick dictations land closer together than
+    // the restore delay. Only the newest call's restore may run — an earlier
+    // one firing late would clobber the newer paste mid-flight — and the
+    // snapshot carried forward is the user's *real* clipboard, not the
+    // previous injection's text, which is what the board holds while a
+    // restore is still pending. Main-thread confined, like inject itself.
+    private var restoreGeneration = 0
+    private var pendingOriginal: Snapshot?
+
     func inject(_ text: String, completion: (() -> Void)? = nil) {
-        let saved = snapshot()
+        let saved = pendingOriginal ?? snapshot()
+        pendingOriginal = saved
+        restoreGeneration += 1
+        let generation = restoreGeneration
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         if postEvents { Self.postCmdV() }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.restoreDelay) { [weak self] in
-            self?.restore(saved)
+            if let self, generation == self.restoreGeneration {
+                self.restore(saved)
+                self.pendingOriginal = nil
+            }
             completion?()
         }
     }

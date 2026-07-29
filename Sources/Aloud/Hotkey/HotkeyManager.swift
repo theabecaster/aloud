@@ -355,16 +355,22 @@ final class HotkeyManager {
             (1 << CGEventType.otherMouseDown.rawValue) |
             (1 << CGEventType.otherMouseUp.rawValue)
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        // An active (not listen-only) tap so the Esc that ends a held or
+        // hands-free session can be swallowed rather than also reaching
+        // whatever app has focus — hands-free can sit for minutes, long
+        // enough that the Esc meant to stop it often lands in a terminal or
+        // editor that treats Esc as its own command. Everything else keeps
+        // passing through exactly as it did as a listen-only tap.
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .listenOnly,
+            options: .defaultTap,
             eventsOfInterest: mask,
             callback: { _, type, event, refcon in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
                 let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
-                manager.handleTapEvent(type: type, event: event)
-                return Unmanaged.passUnretained(event)
+                let swallow = manager.handleTapEvent(type: type, event: event)
+                return swallow ? nil : Unmanaged.passUnretained(event)
             },
             userInfo: selfPtr
         ) else { return false }
@@ -383,11 +389,17 @@ final class HotkeyManager {
         runLoopSource = nil
     }
 
-    private func handleTapEvent(type: CGEventType, event: CGEvent) {
+    // Returns whether this event is ours alone — swallowed rather than also
+    // delivered to whatever app has focus. Only ever true for the Esc that
+    // just ended a held or hands-free/command session: every other event
+    // (the hotkey itself included) passes through exactly as it did back
+    // when the tap was listen-only.
+    @discardableResult
+    private func handleTapEvent(type: CGEventType, event: CGEvent) -> Bool {
         // macOS disables taps that stall or on timeout — re-enable transparently.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
-            return
+            return false
         }
         // The event's own timestamp, not processing time: the tap source runs
         // on the main run loop, so a busy main thread delays when we *see* an
@@ -400,12 +412,13 @@ final class HotkeyManager {
         let keyCode = isMouse
             ? UInt16(clamping: event.getIntegerValueField(.mouseEventButtonNumber))
             : UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        let escapeDown = type == .keyDown && keyCode == UInt16(kVK_Escape)
 
         if let action = handsFreeKeyAction(type: type, keyCode: keyCode, flags: event.flags) {
             if action != .none {
                 DispatchQueue.main.async { [weak self] in self?.onAction?(action) }
             }
-            return
+            return false
         }
 
         // Command key next: its engine only ever consumes its own key (and Esc
@@ -416,7 +429,7 @@ final class HotkeyManager {
                 time: time) ?? .none
             if commandAction != .none {
                 DispatchQueue.main.async { [weak self] in self?.onAction?(commandAction) }
-                return
+                return escapeDown
             }
         }
 
@@ -425,6 +438,7 @@ final class HotkeyManager {
         if action != .none {
             DispatchQueue.main.async { [weak self] in self?.onAction?(action) }
         }
+        return escapeDown && action != .none
     }
 
     // Detect a clean tap of the dedicated hands-free key. Returns nil when
