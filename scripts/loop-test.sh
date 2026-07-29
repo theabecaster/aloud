@@ -32,11 +32,12 @@ cleanup() {
 }
 
 restore_pref() {  # key, prior value ("absent" = was never set)
-  if [ "$2" = "absent" ]; then
-    defaults delete "$BUNDLE_ID" "$1" 2>/dev/null || true
-  else
-    defaults write "$BUNDLE_ID" "$1" -bool "$2"
-  fi
+  case "$2" in
+    absent) defaults delete "$BUNDLE_ID" "$1" 2>/dev/null || true ;;
+    # `defaults read` reports booleans as 1/0, which `-bool` refuses.
+    1|true|yes) defaults write "$BUNDLE_ID" "$1" -bool true ;;
+    *) defaults write "$BUNDLE_ID" "$1" -bool false ;;
+  esac
 }
 
 # Noise reduction has to be OFF for this test. It's on by default and enables
@@ -64,7 +65,10 @@ sleep 1
 # 1. App running?
 if ! pgrep -qf "Aloud.app/Contents/MacOS/Aloud"; then
   open -a "$(dirname "$(dirname "$(dirname "$APP_BIN")")")"
-  sleep 3
+  # Long enough for the freshly launched app to warm-load the voice model —
+  # 3 s proved marginal: a hold arriving before the engine is ready records
+  # into nothing and the test fails empty.
+  sleep 10
 fi
 
 # 2. Synthesize the phrase to play through speakers.
