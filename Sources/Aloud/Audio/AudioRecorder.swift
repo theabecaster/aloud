@@ -441,11 +441,26 @@ final class AudioRecorder {
             ])
             return false
         }
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            lastStartError = error
+        // Same guard on prepare/start: same library, same queue, same
+        // mid-transition window — a raised exception here is also just a
+        // failed rebuild for the retry to pick up.
+        var started = false
+        var startError: Error?
+        let startException = AloudCatchException {
+            engine.prepare()
+            do {
+                try engine.start()
+                started = true
+            } catch {
+                startError = error
+            }
+        }
+        guard startException == nil, started else {
+            lastStartError = startError ?? startException.map { e in
+                NSError(domain: "Aloud", code: 4, userInfo: [
+                    NSLocalizedDescriptionKey: "Engine start raised \(e.name.rawValue): \(e.reason ?? "")",
+                ])
+            }
             input.removeTap(onBus: 0)   // never leave one behind for the next start
             return false
         }
