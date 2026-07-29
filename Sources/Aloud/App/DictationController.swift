@@ -63,6 +63,18 @@ final class DictationController: ObservableObject {
     // and must not stamp its verdict (or its field snapshot) on that session.
     private var sessionGeneration = 0
 
+    // The last dictation that landed in another app, kept so the next
+    // session's focus snapshot can reveal what the user made of it (see
+    // harvestCorrection). One observation per injection: consumed when an
+    // edit is captured, replaced by the next commit. Memory only.
+    private var lastInjection: (text: String, bundleID: String, date: Date)?
+    // Past this, the field has likely moved on for reasons that aren't
+    // corrections — new drafts, other tools, another person's turn in a chat.
+    private static let correctionCaptureWindow: TimeInterval = 15 * 60
+    // A suggestion crossed its threshold during this session's focus probe;
+    // announced on the pill once, after the commit lands.
+    private var suggestionHintPending = false
+
     // A failed dictation's audio is on disk and can be retried (menu item).
     @Published private(set) var retryAvailable = AudioBackup.exists
 
@@ -482,6 +494,7 @@ final class DictationController: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self, self.sessionGeneration == generation else { return }
                 self.sessionContext = snapshot
+                self.harvestCorrection(from: snapshot)
                 if snapshot.editability == .notEditable, !self.sessionTargetIsSelf,
                    self.phase == .recording {
                     self.sessionTypingBlocked = true
@@ -717,6 +730,7 @@ final class DictationController: ObservableObject {
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
                     recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: sendReturn)
+                    recordInjection(text)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: duration,
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID,
                                                 languageCode: LanguageDetection.code(for: raw)),
@@ -731,7 +745,12 @@ final class DictationController: ObservableObject {
                 if sendReturn { TextInjector.postReturn() }
                 endLiveTyping()
                 polishingCue.cancel()
-                indicator.hide()
+                if suggestionHintPending {
+                    suggestionHintPending = false
+                    indicator.showHint(loc("Aloud noticed a fix — review it in the menu bar"))
+                } else {
+                    indicator.hide()
+                }
                 phase = .idle
             } catch {
                 // Keep whatever was already typed — deleting words the user
@@ -793,6 +812,7 @@ final class DictationController: ObservableObject {
                             if sendReturn { TextInjector.postReturn() }
                         }
                         recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: sendReturn)
+                        recordInjection(text)
                     }
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID,
@@ -806,7 +826,13 @@ final class DictationController: ObservableObject {
                     TextInjector.postReturn()
                 }
                 // The blocked hint is showing — hiding now would wipe it.
-                if !(sessionTypingBlocked && !text.isEmpty) { indicator.hide() }
+                if sessionTypingBlocked && !text.isEmpty {
+                } else if suggestionHintPending {
+                    suggestionHintPending = false
+                    indicator.showHint(loc("Aloud noticed a fix — review it in the menu bar"))
+                } else {
+                    indicator.hide()
+                }
                 phase = .idle
             } catch {
                 keepAudioBackup(samples)
@@ -815,6 +841,52 @@ final class DictationController: ObservableObject {
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 if case .error = phase { phase = .idle }
+            }
+        }
+    }
+
+    // MARK: correction learning
+
+    // Remember what just landed so the next session can read back what the
+    // user made of it. Only real targets count: our own windows re-render
+    // text instead of keeping a field, so there is nothing to read back.
+    private func recordInjection(_ text: String) {
+        guard settings.learnCorrections,
+              let bundleID = sessionApp.bundleID,
+              bundleID != AppPaths.bundleID else { return }
+        lastInjection = (text, bundleID, Date())
+    }
+
+    // A new session's focus snapshot doubles as the read-back of the previous
+    // injection: back in the same app inside the window, whatever the user
+    // turned that text into is sitting in fieldText. Locate it, diff it,
+    // count it — off the main actor, because a session start never waits on
+    // learning. Raw field text stays in memory; only ≤4-word phrase pairs
+    // ever reach the learner's store.
+    private func harvestCorrection(from snapshot: FocusSnapshot) {
+        guard settings.learnCorrections,
+              let previous = lastInjection,
+              previous.bundleID == snapshot.appBundleID,
+              Date().timeIntervalSince(previous.date) < Self.correctionCaptureWindow,
+              let fieldText = snapshot.fieldText else { return }
+        let settings = self.settings
+        Task.detached(priority: .utility) { [weak self] in
+            guard let corrected = CorrectionCapture.editedSpan(injected: previous.text,
+                                                               fieldText: fieldText) else { return }
+            let candidates = CorrectionLearner.passiveCandidates(original: previous.text,
+                                                                 corrected: corrected)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                // The edit has been seen and judged — never count it twice.
+                // Unless a faster session already recorded a newer injection:
+                // this utility-priority hop can land late, and clearing
+                // unconditionally would throw that one's tracking away.
+                if self.lastInjection?.date == previous.date {
+                    self.lastInjection = nil
+                }
+                let fresh = CorrectionLearner.shared.filteringInverses(candidates, settings: settings)
+                let ready = CorrectionLearner.shared.observe(fresh, settings: settings)
+                if !ready.isEmpty { self.suggestionHintPending = true }
             }
         }
     }
@@ -969,6 +1041,7 @@ final class DictationController: ObservableObject {
                 if !text.isEmpty {
                     injector.inject(text)
                     recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: false)
+                    recordInjection(text)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: result.audioDuration,
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID,
                                                 languageCode: LanguageDetection.code(for: raw)),

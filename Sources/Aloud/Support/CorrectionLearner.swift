@@ -51,6 +51,18 @@ final class CorrectionLearner: ObservableObject {
         suggestions.filter { $0.status == .ready }.sorted { $0.lastSeen > $1.lastSeen }
     }
 
+    /// Candidates safe to learn from a passive capture. An explicit History
+    /// "Fix" may keep case-only changes — the user typed them at us on
+    /// purpose — but a passive capture cannot tell vocabulary casing from
+    /// sentence-position casing: a split, joined, or line-initial sentence
+    /// re-cases words wholesale, and a standing case rule would re-case every
+    /// future dictation. Word-identity changes only.
+    static func passiveCandidates(original: String,
+                                  corrected: String) -> [CorrectionDiff.Candidate] {
+        CorrectionDiff.candidates(original: original, corrected: corrected)
+            .filter { $0.from.lowercased() != $0.to.lowercased() }
+    }
+
     /// Feed candidates observed from one capture. Matching is case-insensitive
     /// on `from`; `to` is clamped to the latest observed value, because the
     /// user's most recent spelling is the one they settled on. Dismissed pairs

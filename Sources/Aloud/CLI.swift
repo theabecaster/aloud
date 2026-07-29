@@ -925,6 +925,39 @@ enum CLI {
             d.removePersistentDomain(forName: suiteName)
         } else { expect(false, "settings: round-trip") }
 
+        // 11. Correction learning, whole pipeline in-process: an injected
+        // dictation is found (edited) in a later field snapshot, the edit
+        // becomes a candidate, two sightings promote it, accepting it lands
+        // a learned replacement.
+        let learnSuite = "aloud-selftest-learn-\(getpid())"
+        if let d = UserDefaults(suiteName: learnSuite) {
+            d.removePersistentDomain(forName: learnSuite)
+            let learnSettings = SettingsStore(defaults: d)
+            let injected = "say hi to jon smith for me"
+            let field = "Earlier note.\nSay hi to Jon Smyth for me\nLater note."
+            let span = CorrectionCapture.editedSpan(injected: injected, fieldText: field)
+            expect(span != nil, "learning: edited dictation found in field text")
+            expect(CorrectionCapture.editedSpan(injected: injected, fieldText: injected) == nil,
+                   "learning: untouched dictation learns nothing")
+            let candidates = CorrectionLearner.passiveCandidates(original: injected,
+                                                                 corrected: span ?? "")
+            expect(candidates.contains { $0.to.contains("Smyth") },
+                   "learning: the edit becomes a vocabulary candidate")
+            expect(!candidates.contains { $0.from.lowercased() == $0.to.lowercased() },
+                   "learning: sentence-position casing is never a candidate")
+            let learner = CorrectionLearner(fileURL: tmp.appendingPathComponent("corrections.json"))
+            let first = learner.observe(candidates, settings: learnSettings)
+            let second = learner.observe(candidates, settings: learnSettings)
+            expect(first.isEmpty && !second.isEmpty,
+                   "learning: a fix suggests only once it repeats")
+            if let ready = learner.readySuggestions.first {
+                learner.accept(ready, settings: learnSettings)
+            }
+            expect(learnSettings.replacements.contains { $0.learned && $0.replacement.contains("Smyth") },
+                   "learning: accepting creates a learned replacement")
+            d.removePersistentDomain(forName: learnSuite)
+        } else { expect(false, "learning: settings suite") }
+
         print(failures.isEmpty ? "\nselftest passed" : "\nselftest FAILED: \(failures.joined(separator: ", "))")
         return failures.isEmpty ? 0 : 1
     }
