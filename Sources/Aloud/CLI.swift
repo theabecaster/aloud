@@ -901,7 +901,16 @@ enum CLI {
         // 8. Doctor JSON emits and parses.
         expect(doctor() == 0, "doctor: runs")
 
-        // 9. Settings store round-trip in an isolated suite.
+        // 9. Module resources resolve without Bundle.module (which fatalErrors
+        // in packaged builds — the v2.0.0/v2.4.0 crash).
+        for cue in DictationController.SoundCue.allCases {
+            expect(ModuleResources.bundle.url(forResource: cue.rawValue, withExtension: "wav",
+                                              subdirectory: "Sounds")
+                   ?? ModuleResources.bundle.url(forResource: cue.rawValue, withExtension: "wav") != nil,
+                   "resources: sound cue \(cue.rawValue) resolves")
+        }
+
+        // 10. Settings store round-trip in an isolated suite.
         let suiteName = "aloud-selftest-\(getpid())"
         if let d = UserDefaults(suiteName: suiteName) {
             d.removePersistentDomain(forName: suiteName)

@@ -409,7 +409,7 @@ final class DictationController: ObservableObject {
     // Aloud's own cues, not the system alert set: the alert sounds double as
     // macOS's "that input went nowhere" beep, so reusing them made the start
     // chime indistinguishable from an error.
-    enum SoundCue: String {
+    enum SoundCue: String, CaseIterable {
         case listening = "cue-listening"    // recording started
         case error = "cue-error"            // something didn't land
     }
@@ -418,9 +418,9 @@ final class DictationController: ObservableObject {
     private func playCue(_ cue: SoundCue) {
         guard settings.soundCues else { return }
         if cueSounds[cue] == nil,
-           let url = Bundle.module.url(forResource: cue.rawValue, withExtension: "wav",
-                                       subdirectory: "Sounds")
-               ?? Bundle.module.url(forResource: cue.rawValue, withExtension: "wav"),
+           let url = ModuleResources.bundle.url(forResource: cue.rawValue, withExtension: "wav",
+                                                subdirectory: "Sounds")
+               ?? ModuleResources.bundle.url(forResource: cue.rawValue, withExtension: "wav"),
            let sound = NSSound(contentsOf: url, byReference: true) {
             sound.volume = 0.55
             cueSounds[cue] = sound
