@@ -184,6 +184,16 @@ final class RecordingIndicatorPanel {
     // Fires once each time the still-listening reminder appears.
     var onStillListening: (() -> Void)?
 
+    // The reminder, on demand — only --indicator-demo calls this; the real
+    // one waits out thirty silent seconds that a screenshot script can't.
+    // The level timer stops too: its per-frame recompute would put the
+    // meter straight back.
+    func demoStillListening() {
+        levelTimer?.invalidate()
+        levelTimer = nil
+        model.stillListening = true
+    }
+
     // Timings live on the panel; the rule itself is here so it can be tested
     // without an AppKit window or a 30 Hz timer.
     enum SilenceReminder {
@@ -490,8 +500,7 @@ struct IndicatorView: View {
                         // little rather than being cut off mid-word.
                         .minimumScaleFactor(0.8)
                 } else if model.stillListening {
-                    Text(loc("Still listening…"))
-                        .foregroundStyle(.orange)
+                    StillListeningCaption()
                         .frame(width: 90)
                 } else {
                     SpectrumMeter(bands: model.bands, tint: meterTint)
@@ -713,6 +722,46 @@ struct IndicatorView: View {
             Divider()
             Button(loc("Reset Position")) { model.onResetPosition?() }
         }
+    }
+}
+
+// The hands-free silence reminder, sized to hold the meter's slot on one
+// line, with a soft shine sweeping through the glyphs every few seconds —
+// for the user glancing back at a screen they stopped watching, a caption
+// that moves is found faster than one that sits still.
+private struct StillListeningCaption: View {
+    // 0 → 1 is one sweep; the gradient band spans well past the text on both
+    // sides, so most of each cycle it is off the glyphs entirely — the pause
+    // between shimmers comes free, no timer needed.
+    @State private var phase: CGFloat = 0
+
+    var body: some View {
+        Text(loc("Still listening…"))
+            .font(.system(size: 11, weight: .medium))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .foregroundStyle(.orange)
+            .overlay {
+                GeometryReader { geo in
+                    LinearGradient(colors: [.clear, .white.opacity(0.85), .clear],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: geo.size.width * 0.55)
+                        .offset(x: phase * geo.size.width * 2.6 - geo.size.width * 0.8)
+                }
+                .mask(
+                    Text(loc("Still listening…"))
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                )
+                .allowsHitTesting(false)
+            }
+            .onAppear {
+                phase = 0
+                withAnimation(.linear(duration: 2.4).repeatForever(autoreverses: false)) {
+                    phase = 1
+                }
+            }
     }
 }
 

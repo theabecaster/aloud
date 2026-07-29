@@ -439,6 +439,7 @@ enum CLI {
                 indicator.isBasic = false
                 indicator.showLocked()
             }),
+            ("still-listening", 5, { indicator.demoStillListening() }),
             ("command", 4, {
                 indicator.hide()
                 indicator.show(levelProvider: { levels[index()] },
