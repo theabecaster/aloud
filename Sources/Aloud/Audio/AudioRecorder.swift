@@ -1,3 +1,4 @@
+import AloudObjC
 import AVFoundation
 import CoreAudio
 
@@ -155,16 +156,21 @@ final class AudioRecorder {
             noteVoiceProcessingActive(enabled)
             return
         }
-        do {
-            try input.setVoiceProcessingEnabled(enabled)
-            if enabled { input.isVoiceProcessingAGCEnabled = false }
-            noteVoiceProcessingActive(enabled)
-        } catch {
-            // Not every input device supports it. Recording raw is a worse
-            // experience than recording processed, but a far better one than
-            // not recording at all.
-            noteVoiceProcessingActive(false)
+        // Failure of any kind — the Swift error a refusing device throws, or
+        // the ObjC exception AVFAudio raises mid-device-transition — means
+        // recording raw. A worse experience than recording processed, but a
+        // far better one than not recording at all.
+        var engaged = false
+        let exception = AloudCatchException {
+            do {
+                try input.setVoiceProcessingEnabled(enabled)
+                if enabled { input.isVoiceProcessingAGCEnabled = false }
+                engaged = enabled
+            } catch {
+                engaged = false
+            }
         }
+        noteVoiceProcessingActive(exception == nil && engaged)
     }
 
     // Last line of defence for the above. If voice processing is engaged and
@@ -420,14 +426,41 @@ final class AudioRecorder {
         // hotkey press would crash rather than fail. Removing a tap that isn't
         // there is free.
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) { [weak self] buffer, _ in
-            self?.consume(buffer: buffer, converter: converter, targetFormat: targetFormat)
+        // installTap raises an ObjC exception — not a Swift error — when the
+        // format no longer matches the bus, and the bus can change between
+        // the outputFormat read above and this call (a device mid-transition;
+        // both v2.5.x crash logs are exactly this). Caught here, it is just a
+        // failed rebuild: the caller's retry runs after the device settles.
+        if let exception = AloudCatchException({
+            input.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) { [weak self] buffer, _ in
+                self?.consume(buffer: buffer, converter: converter, targetFormat: targetFormat)
+            }
+        }) {
+            lastStartError = NSError(domain: "Aloud", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "Tap install raised \(exception.name.rawValue): \(exception.reason ?? "")",
+            ])
+            return false
         }
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            lastStartError = error
+        // Same guard on prepare/start: same library, same queue, same
+        // mid-transition window — a raised exception here is also just a
+        // failed rebuild for the retry to pick up.
+        var started = false
+        var startError: Error?
+        let startException = AloudCatchException {
+            engine.prepare()
+            do {
+                try engine.start()
+                started = true
+            } catch {
+                startError = error
+            }
+        }
+        guard startException == nil, started else {
+            lastStartError = startError ?? startException.map { e in
+                NSError(domain: "Aloud", code: 4, userInfo: [
+                    NSLocalizedDescriptionKey: "Engine start raised \(e.name.rawValue): \(e.reason ?? "")",
+                ])
+            }
             input.removeTap(onBus: 0)   // never leave one behind for the next start
             return false
         }

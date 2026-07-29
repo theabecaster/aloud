@@ -12,9 +12,18 @@ let package = Package(
         .package(url: "https://github.com/FluidInference/FluidAudio.git", .upToNextMinor(from: "0.15.5")),
     ],
     targets: [
+        // Tiny ObjC shim: catches the NSExceptions AVFAudio raises from
+        // Swift-visible methods (installTap with a format the device just
+        // abandoned). Swift cannot catch ObjC exceptions on its own; without
+        // this they are uncatchable SIGABRTs.
+        .target(
+            name: "AloudObjC",
+            path: "Sources/AloudObjC"
+        ),
         .executableTarget(
             name: "Aloud",
-            dependencies: [.product(name: "FluidAudio", package: "FluidAudio")],
+            dependencies: ["AloudObjC",
+                           .product(name: "FluidAudio", package: "FluidAudio")],
             path: "Sources/Aloud",
             resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
