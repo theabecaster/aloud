@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import Combine
+import os
 
 // Orchestrates the push-to-talk loop: hotkey → record → transcribe → inject.
 // Owns the long-lived subsystem instances; publishes UI-facing state.
@@ -847,6 +848,11 @@ final class DictationController: ObservableObject {
 
     // MARK: correction learning
 
+    // The pipeline is silent by design — no UI until a fix repeats — which
+    // makes "why didn't it learn?" undiagnosable without a trace. Local
+    // unified log only; counts and app IDs, never the text itself.
+    private nonisolated static let learningLog = Logger(subsystem: AppPaths.bundleID, category: "learning")
+
     // Remember what just landed so the next session can read back what the
     // user made of it. Only real targets count: our own windows re-render
     // text instead of keeping a field, so there is nothing to read back.
@@ -855,6 +861,7 @@ final class DictationController: ObservableObject {
               let bundleID = sessionApp.bundleID,
               bundleID != AppPaths.bundleID else { return }
         lastInjection = (text, bundleID, Date())
+        Self.learningLog.debug("injection recorded app=\(bundleID, privacy: .public) chars=\(text.count)")
     }
 
     // A new session's focus snapshot doubles as the read-back of the previous
@@ -864,17 +871,33 @@ final class DictationController: ObservableObject {
     // learning. Raw field text stays in memory; only ≤4-word phrase pairs
     // ever reach the learner's store.
     private func harvestCorrection(from snapshot: FocusSnapshot) {
-        guard settings.learnCorrections,
-              let previous = lastInjection,
-              previous.bundleID == snapshot.appBundleID,
-              Date().timeIntervalSince(previous.date) < Self.correctionCaptureWindow,
-              let fieldText = snapshot.fieldText else { return }
+        guard settings.learnCorrections else { return }
+        guard let previous = lastInjection else {
+            Self.learningLog.debug("harvest skipped: no prior injection")
+            return
+        }
+        guard previous.bundleID == snapshot.appBundleID else {
+            Self.learningLog.debug("harvest skipped: app changed \(previous.bundleID, privacy: .public) -> \(snapshot.appBundleID ?? "?", privacy: .public)")
+            return
+        }
+        guard Date().timeIntervalSince(previous.date) < Self.correctionCaptureWindow else {
+            Self.learningLog.debug("harvest skipped: injection too old")
+            return
+        }
+        guard let fieldText = snapshot.fieldText else {
+            Self.learningLog.info("harvest skipped: no field text from \(snapshot.appBundleID ?? "?", privacy: .public) — app exposes no readable AX value")
+            return
+        }
         let settings = self.settings
         Task.detached(priority: .utility) { [weak self] in
             guard let corrected = CorrectionCapture.editedSpan(injected: previous.text,
-                                                               fieldText: fieldText) else { return }
+                                                               fieldText: fieldText) else {
+                Self.learningLog.debug("harvest: no edited span (unchanged, clipped, ambiguous, or rewritten) injected=\(previous.text.count) field=\(fieldText.count) chars")
+                return
+            }
             let candidates = CorrectionLearner.passiveCandidates(original: previous.text,
                                                                  corrected: corrected)
+            Self.learningLog.info("harvest: edited span found, \(candidates.count) candidate(s)")
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 // The edit has been seen and judged — never count it twice.
@@ -886,6 +909,7 @@ final class DictationController: ObservableObject {
                 }
                 let fresh = CorrectionLearner.shared.filteringInverses(candidates, settings: settings)
                 let ready = CorrectionLearner.shared.observe(fresh, settings: settings)
+                Self.learningLog.info("harvest: observed \(fresh.count), newly ready \(ready.count)")
                 if !ready.isEmpty { self.suggestionHintPending = true }
             }
         }
