@@ -33,6 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var iconSymbol = "waveform"
     // How far Aloud's blue has risen through the glyph, 0…1 from the bottom.
     private var iconFill: CGFloat = 0
+    // Set while a permission Aloud was working with has gone missing. The
+    // glyph then carries an orange badge, because from the menu bar the app
+    // is otherwise indistinguishable from one that's simply idle.
+    private var iconAttention = false
+    private var permissionWatch: Timer?
 
     // File identity of our executable at launch. If the bundle on disk is
     // later replaced (manual update) or trashed, this instance is a zombie:
@@ -54,15 +59,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = launchExecutableID
         AppPaths.ensureStateDir()
+        // A previous run that died mid-session may have left the system
+        // default input switched. Repair it before anything else touches audio.
+        AudioRecorder.restoreDefaultInputIfInterrupted()
         setupStatusItem()
         let isUIPreview = ProcessInfo.processInfo.environment["ALOUD_UI_PREVIEW"] == "1"
 
         if isUIPreview {
             // Render-only harness: no permission prompts, event taps, model
             // preparation, reachability monitor, or update network request.
-        } else if !controller.settings.onboardingComplete || !Permissions.allGranted {
+        } else if !controller.settings.onboardingComplete {
             showOnboarding()
         } else {
+            // Onboarding is done, so a missing permission does not reopen it —
+            // revoking microphone access makes macOS restart the app, and
+            // being marched back through the walkthrough for a switch you just
+            // deliberately turned off is the wrong answer. The menu bar badge
+            // and the popover carry it instead. startListening is still tried:
+            // it's a no-op without Accessibility and recovers on its own once
+            // the grant comes back.
             _ = controller.startListening()
             Task {
                 // Relaunched before the model download ever finished: cover
@@ -74,6 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         if !isUIPreview {
             resumeDownloadWhenOnline()
+            startWatchingPermissions()
+        } else if previewForcesAttention {
+            refreshPermissionAttention()
         }
 
         // Mirror recording state in the menu bar icon.
@@ -89,10 +107,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // app hears you, so it says so where the app always is: the menu bar
         // glyph takes Aloud's blue while it's on, and fades back to the menu
         // bar's own colour when it isn't.
-        setMenuBarTint(controller.settings.noiseReduction, animated: false)
-        noiseObservation = controller.settings.$noiseReduction.sink { [weak self] on in
-            self?.setMenuBarTint(on, animated: true)
-        }
+        // Tint means *actively filtering*: the setting on its own isn't
+        // enough — the route has to allow it (sound on the Mac's speakers).
+        setMenuBarTint(controller.settings.noiseReduction && controller.noiseReductionAvailable,
+                       animated: false)
+        noiseObservation = controller.settings.$noiseReduction
+            .combineLatest(controller.$noiseReductionAvailable)
+            .sink { [weak self] on, available in
+                self?.setMenuBarTint(on && available, animated: true)
+            }
 
         // Settings › About owns the manual check now; the install flow still
         // lives here, next to the pending-update state it mutates.
@@ -153,6 +176,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if controller.settings.onboardingComplete, Permissions.allGranted, !controller.isListening {
             _ = controller.startListening()
         }
+        // Coming back from System Settings is exactly when a grant changes;
+        // don't make the user watch the badge for the poll to catch up.
+        refreshPermissionAttention()
     }
 
     // MARK: status item
@@ -166,6 +192,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.toolTip = "Aloud"
         }
+    }
+
+    // A grant can be taken away in System Settings while Aloud sits in the
+    // background, and nothing tells us when it happens — so we look. Both
+    // checks are cheap, and a few seconds' lag between revoking a permission
+    // and the menu bar admitting it is imperceptible.
+    private func startWatchingPermissions() {
+        refreshPermissionAttention()
+        permissionWatch?.invalidate()
+        permissionWatch = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshPermissionAttention() }
+        }
+    }
+
+    // Visual-QA hook: stage the missing-permission state on a Mac where
+    // everything is granted, so the badge and the warning rows can actually be
+    // looked at. Preview harness only — it can't turn on in the real app.
+    private var previewForcesAttention: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return env["ALOUD_UI_PREVIEW"] == "1" && env["ALOUD_PREVIEW_ATTENTION"] == "1"
+    }
+
+    // Only ever true once setup is finished: during onboarding the missing
+    // permission is the step the user is on, not a fault to flag.
+    private var needsPermissionAttention: Bool {
+        if previewForcesAttention { return true }
+        return controller.settings.onboardingComplete && !Permissions.allGranted
+    }
+
+    private func refreshPermissionAttention() {
+        let needs = needsPermissionAttention
+        guard needs != iconAttention else { return }
+        iconAttention = needs
+        statusItem?.button?.toolTip = needs ? loc("Aloud can’t work until you allow access") : "Aloud"
+        applyIcon()
     }
 
     private func refreshIcon(for phase: DictationController.Phase) {
@@ -197,6 +258,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard let button = statusItem?.button else { return }
         guard let base = NSImage(systemSymbolName: iconSymbol, accessibilityDescription: "Aloud")
         else { return }
+        // Something is actually broken, so the glyph stops being a quiet
+        // template and wears an orange badge. This outranks the filtering
+        // tint: a blue chip announcing that noise filtering is on says
+        // nothing worth saying about an app that currently can't hear at all.
+        if iconAttention {
+            let badged = NSImage(systemSymbolName: "waveform.badge.exclamationmark",
+                                 accessibilityDescription: loc("Aloud can’t work until you allow access")) ?? base
+            var image = badged
+            button.effectiveAppearance.performAsCurrentDrawingAppearance {
+                let label = NSColor.labelColor.usingColorSpace(.sRGB) ?? .labelColor
+                // Palette layers of this symbol run badge-first, waveform
+                // second — so orange lands on the badge and the waveform
+                // keeps the menu bar's own colour. An all-orange glyph would
+                // read as one more state, like the blue does for filtering;
+                // a badge on an otherwise normal mark reads as a fault.
+                image = badged.withSymbolConfiguration(
+                    .init(paletteColors: [.systemOrange, label])) ?? badged
+            }
+            image.isTemplate = false
+            button.image = image
+            return
+        }
         let level = min(max(iconFill, 0), 1)
         guard level > 0.001 else {
             base.isTemplate = true
@@ -363,7 +446,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             ))
         }
 
-        if !Permissions.allGranted || !controller.settings.onboardingComplete {
+        // Setup not finished yet: onboarding is where the permissions get
+        // asked for, so one door — pointing at a single missing switch here
+        // would only compete with the walkthrough that's about to ask for it
+        // anyway.
+        if !controller.settings.onboardingComplete {
             attention.append(.init(
                 id: "setup",
                 title: loc("Finish Setup"),
@@ -373,6 +460,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                     self?.openOnboarding()
                 }
             ))
+        } else if needsPermissionAttention {
+            // Setup *is* done, so a missing grant means macOS took one back
+            // (an update, or the user turned it off). They've already seen
+            // the walkthrough; name the exact switch and go straight there.
+            if Permissions.microphone != .granted || previewForcesAttention {
+                attention.append(.init(
+                    id: "grant-microphone",
+                    title: loc("Allow Microphone Access"),
+                    symbol: "mic.slash",
+                    detail: loc("Aloud can’t hear you until this is on."),
+                    tone: .warning,
+                    action: { [weak self] in
+                        self?.closeStatusPopover()
+                        if Permissions.microphone == .notDetermined {
+                            Permissions.requestMicrophone { _ in }
+                        } else {
+                            Permissions.openMicrophoneSettings()
+                        }
+                    }
+                ))
+            }
+            if Permissions.accessibility != .granted || previewForcesAttention {
+                attention.append(.init(
+                    id: "grant-accessibility",
+                    title: loc("Allow Accessibility Access"),
+                    symbol: "keyboard",
+                    detail: loc("Aloud can’t type for you until this is on."),
+                    tone: .warning,
+                    action: { [weak self] in
+                        self?.closeStatusPopover()
+                        Permissions.openAccessibilitySettings()
+                    }
+                ))
+            }
         } else if case .modelMissing = controller.upgradeState {
             attention.append(.init(
                 id: "download",
@@ -411,6 +532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             controller: controller,
             learner: CorrectionLearner.shared,
             attentionActions: attention,
+            permissionMissing: needsPermissionAttention,
             scratchpadVisible: scratchpad.isVisible,
             onOpenHistory: { [weak self] in self?.showSettings(.history) },
             onOpenSettings: { [weak self] in self?.showSettings(.general) },
@@ -462,23 +584,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         } else {
             window.center()
         }
-        // A window's very first orderFront can race the hosting view's initial
-        // layout: the switches' knobs are placed during that first display
-        // pass, and when the window reaches the screen before it finishes —
-        // seen on the settings window right after install — every toggle
-        // draws as an empty track until clicked, or until the window resigns
-        // and reclaims key (which forces AppKit to redraw every NSSwitch).
-        // Forcing layout while the window is still off-screen doesn't help —
-        // WindowServer has nothing to composite yet — so the fix has to run
-        // once the window is actually visible.
+        // A window's very first orderFront can race two things: the hosting
+        // view's initial layout, and — in a menu-bar (LSUIElement) app on
+        // macOS 14's cooperative activation — the app's activation itself,
+        // which can land a beat after the window is already on screen. Either
+        // race paints every toggle as an empty track, stuck until something
+        // forces AppKit to redraw the switches (a click, or the window
+        // resigning and reclaiming key — which is why refocusing "fixes" it).
+        // The fix: the window stays invisible until it is key *and* its
+        // controls have been repainted in that state — the redraw a manual
+        // refocus forces, done before the user ever sees a frame. A short
+        // fallback reveals it regardless, so a window that somehow never
+        // becomes key doesn't stay hidden.
         let firstPresentation = !window.isVisible
         NSApp.activate(ignoringOtherApps: true)
+        if firstPresentation { window.alphaValue = 0 }
         window.makeKeyAndOrderFront(nil)
         if firstPresentation {
-            DispatchQueue.main.async {
-                window.contentView?.layoutSubtreeIfNeeded()
-                window.displayIfNeeded()
+            revealAfterFirstPaint(window)
+        }
+    }
+
+    // Repaints every control and only then makes the window visible — once
+    // it is key (immediately if it already is), or after a short fallback.
+    private func revealAfterFirstPaint(_ window: NSWindow) {
+        func reveal() {
+            guard window.alphaValue == 0 else { return }
+            func markDirty(_ view: NSView) {
+                view.needsDisplay = true
+                view.subviews.forEach(markDirty)
             }
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.contentView.map(markDirty)
+            window.displayIfNeeded()
+            window.alphaValue = 1
+        }
+        // Never leave the window invisible: whatever the key dance does,
+        // this is the longest the user waits.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { reveal() }
+        if window.isKeyWindow {
+            DispatchQueue.main.async { reveal() }
+            return
+        }
+        final class TokenBox: @unchecked Sendable { var value: NSObjectProtocol? }
+        let box = TokenBox()
+        box.value = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { _ in
+            if let token = box.value {
+                NotificationCenter.default.removeObserver(token)
+                box.value = nil
+            }
+            MainActor.assumeIsolated { reveal() }
         }
     }
 

@@ -6,8 +6,30 @@ import SwiftUI
 /// contextual actions without turning every transcript into a submenu.
 struct StatusMenuView: View {
     struct AttentionAction: Identifiable {
+        // Most of these are invitations — an update to take, a model to
+        // download. A warning is different in kind: Aloud is broken until it's
+        // dealt with, and it has to read that way rather than as one more
+        // optional errand in the same blue.
+        enum Tone { case invitation, warning }
+
         let id: String
         let title: String
+        let symbol: String
+        var detail: String? = nil
+        var tone: Tone = .invitation
+        let action: () -> Void
+    }
+
+    /// A one-tap action on the dictation that just happened. These used to
+    /// live behind an ellipsis menu; they're only useful for a few seconds
+    /// after a dictation, which is exactly when a hidden menu is the wrong
+    /// place for them.
+    private struct QuickAction: Identifiable {
+        let id: String
+        /// Short enough that three of them fit the popover's width; the
+        /// unabbreviated wording stays in the tooltip.
+        let title: String
+        let help: String
         let symbol: String
         let action: () -> Void
     }
@@ -20,6 +42,11 @@ struct StatusMenuView: View {
     @ObservedObject private var learner: CorrectionLearner
 
     let attentionActions: [AttentionAction]
+    /// Whether a permission Aloud needs is missing *and* setup is finished —
+    /// decided by the delegate so this view has one source of truth for it,
+    /// and so the preview harness can stage the state on a Mac where
+    /// everything happens to be granted.
+    let permissionMissing: Bool
     let scratchpadVisible: Bool
     let onOpenHistory: () -> Void
     let onOpenSettings: () -> Void
@@ -32,6 +59,7 @@ struct StatusMenuView: View {
     init(controller: DictationController,
          learner: CorrectionLearner,
          attentionActions: [AttentionAction],
+         permissionMissing: Bool,
          scratchpadVisible: Bool,
          onOpenHistory: @escaping () -> Void,
          onOpenSettings: @escaping () -> Void,
@@ -45,6 +73,7 @@ struct StatusMenuView: View {
         _settings = ObservedObject(wrappedValue: controller.settings)
         _learner = ObservedObject(wrappedValue: learner)
         self.attentionActions = attentionActions
+        self.permissionMissing = permissionMissing
         self.scratchpadVisible = scratchpadVisible
         self.onOpenHistory = onOpenHistory
         self.onOpenSettings = onOpenSettings
@@ -78,6 +107,7 @@ struct StatusMenuView: View {
                 Divider()
             }
 
+            quickActions
             historyHeader
             historyContent
             Divider()
@@ -116,6 +146,8 @@ struct StatusMenuView: View {
 
             Spacer(minLength: 8)
 
+            cleanUpMenu
+
             Button(action: onOpenSettings) {
                 Image(systemName: "gearshape")
                     .frame(width: 20, height: 20)
@@ -135,16 +167,27 @@ struct StatusMenuView: View {
                     HStack(spacing: 9) {
                         Image(systemName: item.symbol)
                             .frame(width: 18)
-                        Text(item.title)
-                            .lineLimit(1)
-                        Spacer()
+                            .foregroundStyle(item.tone == .warning ? Color.orange : Color.primary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.title)
+                                .lineLimit(1)
+                            if let detail = item.detail {
+                                Text(detail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        Spacer(minLength: 6)
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.tertiary)
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(StatusMenuAttentionButtonStyle())
+                .buttonStyle(StatusMenuAttentionButtonStyle(tone: item.tone))
             }
             suggestionCells
         }
@@ -200,6 +243,127 @@ struct StatusMenuView: View {
         }
     }
 
+    /// Clean-up is the one setting people change by the task rather than once:
+    /// exact words for a command, tightened prose for an email. Settings owns
+    /// the full segmented picker — at 360pt that control eats the popover — so
+    /// this is a bare pop-up: the level's name, in the level's colour, with the
+    /// chevron that says it opens. No bezel, so it sits in the header beside
+    /// the gear without reading as a second button competing with it.
+    private var cleanUpMenu: some View {
+        Menu {
+            // Inline picker inside the menu, not four Buttons: the checkmark
+            // beside the current level comes free and behaves like every other
+            // macOS pop-up.
+            Picker(loc("Clean-up"), selection: $settings.polishLevel) {
+                ForEach(controller.availableLevels) { level in
+                    Text(level.displayName).tag(level)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            HStack(spacing: 3) {
+                // Concise with no rewrite engine quietly behaves as Standard;
+                // say so rather than promise a tightening that never comes.
+                if settings.polishLevel == .concise, !controller.enhancerAvailable {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+                Text(settings.polishLevel.displayName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(cleanUpTint)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(cleanUpHelp)
+        .accessibilityLabel(loc("Clean-up: %@", settings.polishLevel.displayName))
+        .accessibilityHint(settings.polishLevel.shortSummary)
+    }
+
+    /// A colour per level, so the current one is recognised before it's read.
+    /// The ramp tracks how much Aloud touches the words — grey for untouched,
+    /// Aloud's own blue for the default, purple where a model gets involved —
+    /// and deliberately skips orange and red, which this popover already spends
+    /// on things being wrong.
+    private var cleanUpTint: Color {
+        switch settings.polishLevel {
+        case .off: return .gray
+        case .light: return .teal
+        case .standard: return .aloud
+        case .concise: return .purple
+        }
+    }
+
+    /// The hover text is the whole explanation: with no label and no ⓘ, this is
+    /// where "what does Concise actually do" gets answered short of opening
+    /// Settings. The unavailable-rewrite case says so instead — that fact
+    /// matters more than the level's promise, which isn't being kept.
+    private var cleanUpHelp: String {
+        if settings.polishLevel == .concise, !controller.enhancerAvailable {
+            return loc("The rewrite engine isn’t available right now — Standard clean-up is used instead.")
+        }
+        return loc("Clean-up: %@", settings.polishLevel.explanation)
+    }
+
+    private var quickActionItems: [QuickAction] {
+        var items: [QuickAction] = []
+        if !controller.lastTranscription.isEmpty {
+            items.append(.init(id: "copy",
+                               title: loc("Copy Last"),
+                               help: loc("Copy Last Text"),
+                               symbol: "doc.on.doc",
+                               action: onCopyLast))
+        }
+        if controller.retryAvailable {
+            items.append(.init(id: "retry",
+                               title: loc("Type Again"),
+                               help: loc("Type It Again"),
+                               symbol: "arrow.clockwise",
+                               action: onRetryLast))
+        }
+        if controller.undoEnhancementAvailable {
+            items.append(.init(id: "exact",
+                               title: loc("Exact Words"),
+                               help: loc("Use Exact Words"),
+                               symbol: "arrow.uturn.backward",
+                               action: onUseExactWords))
+        }
+        return items
+    }
+
+    @ViewBuilder
+    private var quickActions: some View {
+        let items = quickActionItems
+        if !items.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(items) { item in
+                    Button(action: item.action) {
+                        Label(item.title, systemImage: item.symbol)
+                            .labelStyle(.titleAndIcon)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                            // A longer translation shrinks rather than
+                            // truncating: three of these have to share 360pt.
+                            .minimumScaleFactor(0.75)
+                    }
+                    .buttonStyle(StatusMenuQuickActionButtonStyle())
+                    .help(item.help)
+                    .accessibilityLabel(item.help)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 4)
+        }
+    }
+
     @ViewBuilder
     private var historyHeader: some View {
         if !history.entries.isEmpty {
@@ -207,6 +371,22 @@ struct StatusMenuView: View {
                 Text(loc("Recent Dictations"))
                     .font(.subheadline.weight(.semibold))
                 Spacer()
+                // The full list — search, editing, everything older than the
+                // handful shown here — lives in Settings → History. Naming it
+                // at the top of the list is where someone looks when the row
+                // they want isn't in view.
+                Button(action: onOpenHistory) {
+                    HStack(spacing: 2) {
+                        Text(loc("All History"))
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.aloud)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(loc("All History"))
             }
             .padding(.horizontal, 16)
             .padding(.top, 10)
@@ -266,33 +446,12 @@ struct StatusMenuView: View {
 
             Spacer()
 
-            Menu {
-                if !controller.lastTranscription.isEmpty {
-                    Button(loc("Copy Last Text"), action: onCopyLast)
-                }
-                if controller.retryAvailable {
-                    Button(loc("Type It Again"), action: onRetryLast)
-                }
-                if controller.undoEnhancementAvailable {
-                    Button(loc("Use Exact Words"), action: onUseExactWords)
-                }
-                if !controller.lastTranscription.isEmpty
-                    || controller.retryAvailable
-                    || controller.undoEnhancementAvailable {
-                    Divider()
-                }
-                Button(loc("History"), action: onOpenHistory)
-                Button(loc("Settings"), action: onOpenSettings)
-                Button(loc("Quit Aloud"), action: onQuit)
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .frame(width: 20, height: 20)
+            Button(action: onQuit) {
+                Label(loc("Quit Aloud"), systemImage: "power")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help(loc("More"))
-            .accessibilityLabel(loc("More"))
+            .buttonStyle(.borderless)
+            .help(loc("Quit Aloud"))
+            .accessibilityLabel(loc("Quit Aloud"))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
@@ -307,15 +466,17 @@ struct StatusMenuView: View {
     }
 
     private var statusSymbol: String {
+        if permissionMissing { return "exclamationmark.triangle.fill" }
         switch controller.phase {
         case .recording: return "waveform.badge.mic"
         case .transcribing: return "waveform.badge.magnifyingglass"
-        case .error: return "exclamationmark.waveform"
+        case .error: return "waveform.badge.exclamationmark"
         case .idle: return "waveform"
         }
     }
 
     private var statusColor: Color {
+        if permissionMissing { return .orange }
         switch controller.phase {
         case .error: return .orange
         default: return .aloud
@@ -323,8 +484,15 @@ struct StatusMenuView: View {
     }
 
     private var statusText: String {
-        if Permissions.microphone != .granted { return loc("Microphone access needed") }
-        if Permissions.accessibility != .granted { return loc("Accessibility access needed") }
+        // Before setup is finished, missing permissions aren't news — they're
+        // what the walkthrough is for. Saying "microphone access needed" to
+        // someone who hasn't been asked yet reads as a fault, not a step.
+        if !settings.onboardingComplete { return loc("Finish setting up Aloud") }
+        if permissionMissing {
+            return Permissions.microphone != .granted
+                ? loc("Microphone access needed")
+                : loc("Accessibility access needed")
+        }
         switch controller.phase {
         case .recording:
             return loc("Listening…")
@@ -358,7 +526,14 @@ private struct HistoryHeightKey: PreferenceKey {
 }
 
 private struct StatusMenuAttentionButtonStyle: ButtonStyle {
+    let tone: StatusMenuView.AttentionAction.Tone
+
     @Environment(\.isEnabled) private var isEnabled
+
+    // Warnings get orange, and an outline the invitations don't have — the
+    // tinted fill alone is easy to read as decoration, where a bounded card
+    // asks to be dealt with.
+    private var accent: Color { tone == .warning ? .orange : .aloud }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -367,9 +542,34 @@ private struct StatusMenuAttentionButtonStyle: ButtonStyle {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(
-                Color.aloud.opacity(configuration.isPressed ? 0.16 : 0.09),
+                accent.opacity(configuration.isPressed ? 0.22 : (tone == .warning ? 0.14 : 0.09)),
                 in: RoundedRectangle(cornerRadius: 8, style: .continuous)
             )
+            .overlay {
+                if tone == .warning {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(accent.opacity(0.45), lineWidth: 1)
+                }
+            }
+    }
+}
+
+/// Compact capsule for the last-dictation actions. Quieter than an attention
+/// card — nothing here is wrong, these are just fast paths — but still a
+/// visible target rather than a menu item nobody opens.
+private struct StatusMenuQuickActionButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isEnabled ? Color.primary : Color.secondary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(
+                Color.primary.opacity(configuration.isPressed ? 0.14 : 0.07),
+                in: Capsule(style: .continuous)
+            )
+            .contentShape(Capsule(style: .continuous))
     }
 }
 
@@ -693,4 +893,19 @@ private struct DictationAppIcon: View {
 private func copyToPasteboard(_ text: String) {
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
+}
+
+#Preview {
+    StatusMenuView(controller: DictationController(),
+                   learner: CorrectionLearner.shared,
+                   attentionActions: [],
+                   permissionMissing: false,
+                   scratchpadVisible: false,
+                   onOpenHistory: {},
+                   onOpenSettings: {},
+                   onToggleScratchpad: {},
+                   onCopyLast: {},
+                   onRetryLast: {},
+                   onUseExactWords: {},
+                   onQuit: {})
 }

@@ -1,6 +1,9 @@
 /* Menu bar */
 "Relaunch to Finish Update" = "Relaunch to Finish Update";
 "Finish Setup" = "Finish Setup";
+"Allow Microphone Access" = "Allow Microphone Access";
+"Allow Accessibility Access" = "Allow Accessibility Access";
+"Aloud can’t work until you allow access" = "Aloud can’t work until you allow access";
 "Download Voice Recognition" = "Download Voice Recognition";
 "Retry Voice Download" = "Retry Voice Download";
 "Improving accuracy…" = "Improving accuracy…";
@@ -8,6 +11,9 @@
 "Copy Last Text" = "Copy Last Text";
 "Type It Again" = "Type It Again";
 "Use Exact Words" = "Use Exact Words";
+"Copy Last" = "Copy Last";
+"Type Again" = "Type Again";
+"Exact Words" = "Exact Words";
 "Scratchpad" = "Scratchpad";
 "Settings" = "Settings";
 "Update Available (%@)" = "Update Available (%@)";
@@ -15,6 +21,7 @@
 "Quit Aloud" = "Quit Aloud";
 
 /* Menu bar status line */
+"Finish setting up Aloud" = "Finish setting up Aloud";
 "Microphone access needed" = "Microphone access needed";
 "Accessibility access needed" = "Accessibility access needed";
 "Voice setup needed" = "Voice setup needed";
@@ -78,6 +85,7 @@
 "This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind." = "This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind.";
 "Uninstall" = "Uninstall";
 "Uninstall Aloud" = "Uninstall Aloud";
+"Remove Aloud and everything it stores on this Mac" = "Remove Aloud and everything it stores on this Mac";
 
 /* Settings sidebar */
 "General" = "General";
@@ -89,11 +97,10 @@
 "History" = "History";
 "About" = "About";
 "Recent Dictations" = "Recent Dictations";
+"All History" = "All History";
 "On this Mac" = "On this Mac";
-"More" = "More";
 "Copied" = "Copied";
-"Permissions, microphone, and startup." = "Permissions, microphone, and startup.";
-"Choose how you start dictating." = "Choose how you start dictating.";
+"Permissions, microphone, keys, and startup." = "Permissions, microphone, keys, and startup.";
 "Control how Aloud hears and writes." = "Control how Aloud hears and writes.";
 "Teach Aloud the words that matter to you." = "Teach Aloud the words that matter to you.";
 "Turn short phrases into text you use often." = "Turn short phrases into text you use often.";
@@ -108,18 +115,28 @@
 "Accessibility access" = "Accessibility access";
 "Allowed" = "Allowed";
 "Open Settings" = "Open Settings";
-"Without both, Aloud can’t hear you or type for you." = "Without both, Aloud can’t hear you or type for you.";
+"Allow…" = "Allow…";
+"Aloud can’t hear you until this is on." = "Aloud can’t hear you until this is on.";
+"Aloud can’t type for you until this is on." = "Aloud can’t type for you until this is on.";
 "Microphone" = "Microphone";
 "System default" = "System default";
 "Reduce background noise" = "Reduce background noise";
-"Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on." = "Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on.";
+"The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again." = "The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again.";
+"Not available with %@." = "Not available with %@.";
+"Getting ready…" = "Getting ready…";
+"%@ (Bluetooth)" = "%@ (Bluetooth)";
+"A Bluetooth mic puts the whole headset into mono call audio while Aloud listens." = "A Bluetooth mic puts the whole headset into mono call audio while Aloud listens.";
+"Your headphones are also your speakers, so Aloud listens through the built-in mic to keep their sound." = "Your headphones are also your speakers, so Aloud listens through the built-in mic to keep their sound.";
+"Where Aloud listens. System default follows the Mac." = "Where Aloud listens. System default follows the Mac.";
+"Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin." = "Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin.";
+"More info" = "More info";
 "Sound when recording starts" = "Sound when recording starts";
 "Open Aloud at login" = "Open Aloud at login";
 
 /* Settings — keys */
 "Dictation key" = "Dictation key";
-"Hands-free mode" = "Hands-free mode";
 "Hands-free key" = "Hands-free key";
+"Optional. Double-press %@ to keep listening after you let go — Esc finishes and types everything." = "Optional. Double-press %@ to keep listening after you let go — Esc finishes and types everything.";
 "Remove the hands-free key" = "Remove the hands-free key";
 "Command key" = "Command key";
 "Remove the command key" = "Remove the command key";
@@ -134,6 +151,11 @@
 "Setting up full accuracy — almost done" = "Setting up full accuracy — almost done";
 "Waiting for internet to finish setting up full accuracy" = "Waiting for internet to finish setting up full accuracy";
 "Clean-up" = "Clean-up";
+"Clean-up: %@" = "Clean-up: %@";
+"Your exact words" = "Your exact words";
+"Drops filler words" = "Drops filler words";
+"Fillers, spoken fixes, your words" = "Fillers, spoken fixes, your words";
+"Tightens the wording" = "Tightens the wording";
 "The rewrite engine isn’t available right now — Standard clean-up is used instead." = "The rewrite engine isn’t available right now — Standard clean-up is used instead.";
 "History always keeps your exact words." = "History always keeps your exact words.";
 "Languages" = "Languages";
@@ -204,6 +226,7 @@
 "Clear History" = "Clear History";
 "less than a minute ago" = "less than a minute ago";
 "Show original" = "Show original";
+"Original" = "Original";
 "Hide original" = "Hide original";
 "Fix" = "Fix";
 "Correct this dictation and teach Aloud the right words" = "Correct this dictation and teach Aloud the right words";
@@ -289,9 +312,7 @@
 "Polishing…" = "Polishing…";
 "Kept your exact words — Aloud never rewrites here" = "Kept your exact words — Aloud never rewrites here";
 "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier." = "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier.";
-"Double-press %@ to keep listening after you let go. Esc finishes and types everything." = "Double-press %@ to keep listening after you let go. Esc finishes and types everything.";
 "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works.";
-"Off — %@ only listens while you hold it." = "Off — %@ only listens while you hold it.";
 "Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor.";
 "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor.";
 "Tip: press %@ to keep listening hands-free. Esc finishes." = "Tip: press %@ to keep listening hands-free. Esc finishes.";

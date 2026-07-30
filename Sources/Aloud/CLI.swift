@@ -94,6 +94,13 @@ enum CLI {
             // without a person listening. Needs the Microphone permission.
             let seconds = args.count >= 2 ? (Double(args[1]) ?? 2.0) : 2.0
             return await micCheck(seconds: seconds)
+        case "--audio-release-check":
+            // Start capture with voice processing requested, stop it, and
+            // report whether the audio hardware was actually let go — the
+            // processing unit holds the mic and output device (a Bluetooth
+            // headset stays in mono phone-call mode) if teardown leaks it,
+            // and no transcript or meter can reveal that. Needs Microphone.
+            return await audioReleaseCheck()
         case "--speech-check":
             // Headless probe of the speech detector: how much of a clip is
             // actually speech, and where. The hands-free "Still listening…"
@@ -198,10 +205,14 @@ enum CLI {
             "settings": [
                 "hotkey": settings.hotkey.displayName,
                 "launchAtLogin": settings.launchAtLogin,
+                // Whether the switch in Settings can do anything at all: it
+                // needs a real .app bundle, and macOS keeps its own opinion of
+                // the registration in `loginItemStatus`.
+                "launchAtLoginSupported": LoginItem.isSupported,
+                "launchAtLoginStatus": LoginItem.statusDescription,
                 "microphoneUID": settings.microphoneUID ?? "default",
                 "onboardingComplete": settings.onboardingComplete,
                 "liveTyping": settings.liveTyping,
-                "handsFree": settings.handsFree,
                 "noiseReduction": settings.noiseReduction,
             ],
             "paths": [
@@ -257,7 +268,7 @@ enum CLI {
         recorder.onVoiceProcessingWentDeaf = { settings.rememberDeafUnderNoiseReduction($0) }
         do {
             try recorder.start(deviceUID: settings.microphoneUID,
-                               noiseReduction: settings.noiseReduction)
+                               noiseReduction: settings.noiseReduction && AudioDevices.voiceProcessingAllowed())
         } catch {
             // The engine's own reason, not just ours — "couldn't start" on its
             // own tells nobody anything.
@@ -266,7 +277,9 @@ enum CLI {
                 "couldn't start capture: \(error.localizedDescription)\(detail)\n".utf8))
             return 1
         }
-        print("noise_reduction_requested=\(settings.noiseReduction) engaged=\(recorder.voiceProcessingActive)")
+        print("noise_reduction_requested=\(settings.noiseReduction) "
+            + "output_permits=\(AudioDevices.voiceProcessingAllowed()) "
+            + "engaged=\(recorder.voiceProcessingActive)")
         try? await Task.sleep(nanoseconds: UInt64(max(0.2, seconds) * 1_000_000_000))
         let heard = recorder.heardAnything
         let firstSignal = recorder.secondsToFirstSignal
@@ -284,6 +297,34 @@ enum CLI {
         // No audio at all means the tap never delivered — a broken capture
         // path, not a quiet room.
         return samples.isEmpty ? 1 : 0
+    }
+
+    // MARK: --audio-release-check
+
+    static func audioReleaseCheck() async -> Int32 {
+        let recorder = AudioRecorder()
+        // Voice processing requested wherever the output allows it —
+        // releasing it is the thing under test. Behind the same gate the
+        // app uses, because engaging it against a Bluetooth output would
+        // inflict the very breakage this check exists to prevent; on such
+        // a machine the run reports engaged=no and only proves the engine
+        // itself was let go.
+        let requestProcessing = AudioDevices.voiceProcessingAllowed()
+        do {
+            try recorder.start(deviceUID: SettingsStore.shared.microphoneUID,
+                               noiseReduction: requestProcessing)
+        } catch {
+            let detail = recorder.lastStartError.map { " (\($0))" } ?? ""
+            FileHandle.standardError.write(Data(
+                "couldn't start capture: \(error.localizedDescription)\(detail)\n".utf8))
+            return 1
+        }
+        let engaged = recorder.voiceProcessingActive
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        _ = recorder.stop()
+        let released = recorder.hardwareReleased
+        print("voice_processing_engaged=\(engaged ? "yes" : "no") released_after_stop=\(released ? "yes" : "no")")
+        return released ? 0 : 1
     }
 
     // MARK: --speech-check
@@ -925,7 +966,27 @@ enum CLI {
             d.removePersistentDomain(forName: suiteName)
         } else { expect(false, "settings: round-trip") }
 
-        // 11. Correction learning, whole pipeline in-process: an injected
+        // 11. Microphone policy — pure logic. The one behaviour worth pinning:
+        // "System default" dodges a Bluetooth headset only when that same
+        // headset is also the output, and never overrides an explicit pick.
+        let bose = MicrophonePolicy.Device(uid: "AA-BB:input", name: "Bose QC35 II", isBluetooth: true)
+        let boseOut = MicrophonePolicy.Device(uid: "AA-BB:output", name: "Bose QC35 II", isBluetooth: true)
+        let speakers = MicrophonePolicy.Device(uid: "BuiltInSpeakers", name: "MacBook Pro Speakers", isBluetooth: false)
+        expect(MicrophonePolicy.preferredUID(systemDefaultInput: bose, defaultOutput: boseOut,
+                                             builtInUID: "BuiltInMic") == "BuiltInMic",
+               "mic policy: headset doubling as speakers steers to built-in")
+        expect(MicrophonePolicy.preferredUID(systemDefaultInput: bose, defaultOutput: speakers,
+                                             builtInUID: "BuiltInMic") == nil,
+               "mic policy: bluetooth mic with wired output left alone")
+        expect(MicrophonePolicy.preferredUID(systemDefaultInput: bose, defaultOutput: boseOut,
+                                             builtInUID: nil) == nil,
+               "mic policy: no built-in mic, nothing to steer to")
+        expect(MicrophonePolicy.voiceProcessingAllowed(outputTransport: .builtIn)
+                && !MicrophonePolicy.voiceProcessingAllowed(outputTransport: .bluetooth)
+                && !MicrophonePolicy.voiceProcessingAllowed(outputTransport: .other),
+               "mic policy: noise filter only on the built-in output")
+
+        // 12. Correction learning, whole pipeline in-process: an injected
         // dictation is found (edited) in a later field snapshot, the edit
         // becomes a candidate, two sightings promote it, accepting it lands
         // a learned replacement.

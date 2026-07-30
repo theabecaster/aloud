@@ -1,6 +1,9 @@
 /* Menu bar */
 "Relaunch to Finish Update" = "Reabrir para terminar la actualización";
 "Finish Setup" = "Terminar la configuración";
+"Allow Microphone Access" = "Permitir acceso al micrófono";
+"Allow Accessibility Access" = "Permitir acceso de accesibilidad";
+"Aloud can’t work until you allow access" = "Aloud no funciona hasta que permitas el acceso";
 "Download Voice Recognition" = "Descargar reconocimiento de voz";
 "Retry Voice Download" = "Reintentar la descarga de voz";
 "Improving accuracy…" = "Mejorando la precisión…";
@@ -8,6 +11,9 @@
 "Copy Last Text" = "Copiar el último texto";
 "Type It Again" = "Escribirlo otra vez";
 "Use Exact Words" = "Usar las palabras exactas";
+"Copy Last" = "Copiar último";
+"Type Again" = "Escribir otra vez";
+"Exact Words" = "Palabras exactas";
 "Scratchpad" = "Bloc de notas";
 "Settings" = "Ajustes";
 "Update Available (%@)" = "Actualización disponible (%@)";
@@ -15,6 +21,7 @@
 "Quit Aloud" = "Salir de Aloud";
 
 /* Menu bar status line */
+"Finish setting up Aloud" = "Termina de configurar Aloud";
 "Microphone access needed" = "Se necesita acceso al micrófono";
 "Accessibility access needed" = "Se necesita acceso de Accesibilidad";
 "Voice setup needed" = "Falta configurar la voz";
@@ -78,6 +85,7 @@
 "This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind." = "Esto elimina la app, el reconocimiento de voz descargado y todos los ajustes y el historial de este Mac. No queda nada.";
 "Uninstall" = "Desinstalar";
 "Uninstall Aloud" = "Desinstalar Aloud";
+"Remove Aloud and everything it stores on this Mac" = "Eliminar Aloud y todo lo que guarda en este Mac";
 
 /* Settings sidebar */
 "General" = "General";
@@ -89,11 +97,10 @@
 "History" = "Historial";
 "About" = "Información";
 "Recent Dictations" = "Dictados recientes";
+"All History" = "Todo el historial";
 "On this Mac" = "En este Mac";
-"More" = "Más";
 "Copied" = "Copiado";
-"Permissions, microphone, and startup." = "Permisos, micrófono e inicio.";
-"Choose how you start dictating." = "Elige cómo empezar a dictar.";
+"Permissions, microphone, keys, and startup." = "Permisos, micrófono, teclas e inicio.";
 "Control how Aloud hears and writes." = "Controla cómo Aloud escucha y escribe.";
 "Teach Aloud the words that matter to you." = "Enséñale a Aloud las palabras que te importan.";
 "Turn short phrases into text you use often." = "Convierte frases cortas en texto que usas a menudo.";
@@ -108,18 +115,28 @@
 "Accessibility access" = "Acceso de accesibilidad";
 "Allowed" = "Permitido";
 "Open Settings" = "Abrir Ajustes";
-"Without both, Aloud can’t hear you or type for you." = "Sin ambos, Aloud no puede oírte ni escribir por ti.";
+"Allow…" = "Permitir…";
+"Aloud can’t hear you until this is on." = "Sin esto, Aloud no puede oírte.";
+"Aloud can’t type for you until this is on." = "Sin esto, Aloud no puede escribir por ti.";
 "Microphone" = "Micrófono";
 "System default" = "Por omisión del sistema";
 "Reduce background noise" = "Reducir el ruido de fondo";
-"Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on." = "Actívalo en un lugar ruidoso: filtra el ruido de la sala, el teclado y el sonido de los altavoces del Mac antes de que Aloud escuche. Déjalo desactivado si tu voz suena apagada con él.";
+"The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again." = "El filtro funciona a través de los altavoces del Mac, así que se pausa mientras el sonido va a %@. Vuelve — con tu ajuste — cuando los altavoces son de nuevo la salida.";
+"Not available with %@." = "No disponible con %@.";
+"Getting ready…" = "Preparando…";
+"%@ (Bluetooth)" = "%@ (Bluetooth)";
+"A Bluetooth mic puts the whole headset into mono call audio while Aloud listens." = "Un micrófono Bluetooth pone todos los auriculares en audio de llamada mono mientras Aloud escucha.";
+"Your headphones are also your speakers, so Aloud listens through the built-in mic to keep their sound." = "Tus auriculares también son tus altavoces, así que Aloud escucha por el micrófono integrado para no perder su sonido.";
+"Where Aloud listens. System default follows the Mac." = "Dónde escucha Aloud. «Por omisión del sistema» sigue al Mac.";
+"Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin." = "Filtra el ruido de la sala, el teclado y el sonido de los altavoces del Mac. Déjalo desactivado si tu voz suena delgada.";
+"More info" = "Más información";
 "Sound when recording starts" = "Sonido al empezar a grabar";
 "Open Aloud at login" = "Abrir Aloud al iniciar sesión";
 
 /* Settings — keys */
 "Dictation key" = "Tecla de dictado";
-"Hands-free mode" = "Modo manos libres";
 "Hands-free key" = "Tecla de manos libres";
+"Optional. Double-press %@ to keep listening after you let go — Esc finishes and types everything." = "Opcional. Pulsa %@ dos veces para seguir escuchando tras soltar; Esc termina y escribe todo.";
 "Remove the hands-free key" = "Quitar la tecla de manos libres";
 "Command key" = "Tecla de comandos";
 "Remove the command key" = "Quitar la tecla de comandos";
@@ -134,6 +151,11 @@
 "Setting up full accuracy — almost done" = "Configurando la precisión completa: casi listo";
 "Waiting for internet to finish setting up full accuracy" = "Esperando conexión a internet para terminar de configurar la precisión completa";
 "Clean-up" = "Limpieza";
+"Clean-up: %@" = "Limpieza: %@";
+"Your exact words" = "Tus palabras exactas";
+"Drops filler words" = "Quita las muletillas";
+"Fillers, spoken fixes, your words" = "Muletillas, correcciones y tus palabras";
+"Tightens the wording" = "Ajusta la redacción";
 "The rewrite engine isn’t available right now — Standard clean-up is used instead." = "El motor de reescritura no está disponible ahora mismo; se usa la limpieza Estándar en su lugar.";
 "History always keeps your exact words." = "El historial siempre guarda tus palabras exactas.";
 "Languages" = "Idiomas";
@@ -204,6 +226,7 @@
 "Clear History" = "Borrar historial";
 "less than a minute ago" = "hace menos de un minuto";
 "Show original" = "Mostrar original";
+"Original" = "Original";
 "Hide original" = "Ocultar original";
 "Fix" = "Corregir";
 "Correct this dictation and teach Aloud the right words" = "Corrige este dictado y enseña a Aloud las palabras correctas";
@@ -289,9 +312,7 @@
 "Polishing…" = "Puliendo…";
 "Kept your exact words — Aloud never rewrites here" = "Se conservaron tus palabras exactas: Aloud nunca reescribe aquí";
 "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier." = "Mantén %@ para hablar y suéltala para escribir. Esc mientras la mantienes cancela. También sirven los botones extra del ratón, solos o con un modificador.";
-"Double-press %@ to keep listening after you let go. Esc finishes and types everything." = "Pulsa dos veces %@ para seguir escuchando después de soltarla. Esc termina y escribe todo.";
 "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "Pulsa %1$@ para empezar a escuchar y luego Esc —o %1$@ otra vez— para terminar y escribir. Pulsar dos veces %2$@ sigue funcionando.";
-"Off — %@ only listens while you hold it." = "Desactivado: %@ solo escucha mientras la mantienes pulsada.";
 "Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Opcional. Elige una tecla, mantenla y di qué hacer: reescribir o traducir el texto seleccionado, o escribir algo nuevo en el cursor.";
 "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Mantén %@ y di qué hacer: reescribir o traducir el texto seleccionado, o escribir algo nuevo en el cursor.";
 "Tip: press %@ to keep listening hands-free. Esc finishes." = "Consejo: pulsa %@ para seguir dictando sin manos. Esc termina.";

@@ -1,6 +1,9 @@
 /* Menu bar */
 "Relaunch to Finish Update" = "Reabrir para concluir a atualização";
 "Finish Setup" = "Concluir a configuração";
+"Allow Microphone Access" = "Permitir acesso ao microfone";
+"Allow Accessibility Access" = "Permitir acesso de acessibilidade";
+"Aloud can’t work until you allow access" = "O Aloud não funciona até você permitir o acesso";
 "Download Voice Recognition" = "Baixar reconhecimento de voz";
 "Retry Voice Download" = "Tentar baixar a voz novamente";
 "Improving accuracy…" = "Melhorando a precisão…";
@@ -8,6 +11,9 @@
 "Copy Last Text" = "Copiar o último texto";
 "Type It Again" = "Digitar de novo";
 "Use Exact Words" = "Usar as palavras exatas";
+"Copy Last" = "Copiar último";
+"Type Again" = "Digitar de novo";
+"Exact Words" = "Palavras exatas";
 "Scratchpad" = "Bloco de notas";
 "Settings" = "Ajustes";
 "Update Available (%@)" = "Atualização disponível (%@)";
@@ -15,6 +21,7 @@
 "Quit Aloud" = "Encerrar o Aloud";
 
 /* Menu bar status line */
+"Finish setting up Aloud" = "Conclua a configuração do Aloud";
 "Microphone access needed" = "É necessário acesso ao microfone";
 "Accessibility access needed" = "É necessário acesso de Acessibilidade";
 "Voice setup needed" = "É necessário configurar a voz";
@@ -78,6 +85,7 @@
 "This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind." = "Isto remove o app, o reconhecimento de voz baixado e todos os ajustes e o histórico deste Mac. Nada fica para trás.";
 "Uninstall" = "Desinstalar";
 "Uninstall Aloud" = "Desinstalar o Aloud";
+"Remove Aloud and everything it stores on this Mac" = "Remover o Aloud e tudo o que ele guarda neste Mac";
 
 /* Settings sidebar */
 "General" = "Geral";
@@ -89,11 +97,10 @@
 "History" = "Histórico";
 "About" = "Sobre";
 "Recent Dictations" = "Ditados recentes";
+"All History" = "Todo o histórico";
 "On this Mac" = "Neste Mac";
-"More" = "Mais";
 "Copied" = "Copiado";
-"Permissions, microphone, and startup." = "Permissões, microfone e inicialização.";
-"Choose how you start dictating." = "Escolha como começar a ditar.";
+"Permissions, microphone, keys, and startup." = "Permissões, microfone, teclas e inicialização.";
 "Control how Aloud hears and writes." = "Controle como o Aloud ouve e escreve.";
 "Teach Aloud the words that matter to you." = "Ensine ao Aloud as palavras importantes para você.";
 "Turn short phrases into text you use often." = "Transforme frases curtas em textos que você usa com frequência.";
@@ -108,18 +115,28 @@
 "Accessibility access" = "Acesso de acessibilidade";
 "Allowed" = "Permitido";
 "Open Settings" = "Abrir Ajustes";
-"Without both, Aloud can’t hear you or type for you." = "Sem os dois, o Aloud não consegue ouvir você nem escrever por você.";
+"Allow…" = "Permitir…";
+"Aloud can’t hear you until this is on." = "Sem isso, o Aloud não consegue ouvir você.";
+"Aloud can’t type for you until this is on." = "Sem isso, o Aloud não consegue escrever por você.";
 "Microphone" = "Microfone";
 "System default" = "Padrão do sistema";
 "Reduce background noise" = "Reduzir o ruído de fundo";
-"Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on." = "Ative em um ambiente barulhento: filtra o ruído do ambiente, o teclado e o som das caixas do Mac antes de o Aloud ouvir. Deixe desativado se a sua voz soar fraca com ele.";
+"The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again." = "O filtro funciona pelos alto-falantes do Mac, então fica pausado enquanto o som vai para %@. Ele volta — com o seu ajuste — quando os alto-falantes forem a saída de novo.";
+"Not available with %@." = "Indisponível com %@.";
+"Getting ready…" = "Preparando…";
+"%@ (Bluetooth)" = "%@ (Bluetooth)";
+"A Bluetooth mic puts the whole headset into mono call audio while Aloud listens." = "Um microfone Bluetooth coloca todo o fone em áudio de chamada mono enquanto o Aloud escuta.";
+"Your headphones are also your speakers, so Aloud listens through the built-in mic to keep their sound." = "Seus fones também são seus alto-falantes, então o Aloud escuta pelo microfone integrado para manter o som.";
+"Where Aloud listens. System default follows the Mac." = "Onde o Aloud escuta. “Padrão do sistema” acompanha o Mac.";
+"Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin." = "Filtra o ruído do ambiente, o teclado e o som dos alto-falantes do Mac. Deixe desligado se sua voz soar fina.";
+"More info" = "Mais informações";
 "Sound when recording starts" = "Som ao iniciar a gravação";
 "Open Aloud at login" = "Abrir o Aloud ao iniciar a sessão";
 
 /* Settings — keys */
 "Dictation key" = "Tecla de ditado";
-"Hands-free mode" = "Modo mãos livres";
 "Hands-free key" = "Tecla de mãos livres";
+"Optional. Double-press %@ to keep listening after you let go — Esc finishes and types everything." = "Opcional. Pressione %@ duas vezes para continuar ouvindo depois de soltar — Esc conclui e digita tudo.";
 "Remove the hands-free key" = "Remover a tecla de mãos livres";
 "Command key" = "Tecla de comando";
 "Remove the command key" = "Remover a tecla de comando";
@@ -134,6 +151,11 @@
 "Setting up full accuracy — almost done" = "Configurando a precisão total — quase pronto";
 "Waiting for internet to finish setting up full accuracy" = "Aguardando internet para concluir a configuração da precisão total";
 "Clean-up" = "Limpeza";
+"Clean-up: %@" = "Limpeza: %@";
+"Your exact words" = "Suas palavras exatas";
+"Drops filler words" = "Remove os vícios de linguagem";
+"Fillers, spoken fixes, your words" = "Vícios, correções faladas e suas palavras";
+"Tightens the wording" = "Enxuga o texto";
 "The rewrite engine isn’t available right now — Standard clean-up is used instead." = "O mecanismo de reescrita não está disponível no momento — a limpeza Padrão é usada no lugar.";
 "History always keeps your exact words." = "O histórico sempre guarda suas palavras exatas.";
 "Languages" = "Idiomas";
@@ -204,6 +226,7 @@
 "Clear History" = "Limpar histórico";
 "less than a minute ago" = "há menos de um minuto";
 "Show original" = "Mostrar original";
+"Original" = "Original";
 "Hide original" = "Ocultar original";
 "Fix" = "Corrigir";
 "Correct this dictation and teach Aloud the right words" = "Corrija este ditado e ensine ao Aloud as palavras certas";
@@ -289,9 +312,7 @@
 "Polishing…" = "Aprimorando…";
 "Kept your exact words — Aloud never rewrites here" = "Suas palavras exatas foram mantidas — o Aloud nunca reescreve aqui";
 "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier." = "Segure %@ para falar e solte para digitar. Esc enquanto segura cancela. Botões extras do mouse também funcionam, sozinhos ou com um modificador.";
-"Double-press %@ to keep listening after you let go. Esc finishes and types everything." = "Pressione %@ duas vezes para continuar ouvindo depois de soltar. Esc encerra e digita tudo.";
 "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "Pressione %1$@ para começar a ouvir e depois Esc — ou %1$@ de novo — para encerrar e digitar. Pressionar %2$@ duas vezes continua funcionando.";
-"Off — %@ only listens while you hold it." = "Desativado — %@ só ouve enquanto você segura.";
 "Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Opcional. Escolha uma tecla, segure-a e diga o que fazer: reescrever ou traduzir o texto selecionado, ou escrever algo novo no cursor.";
 "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Segure %@ e diga o que fazer: reescrever ou traduzir o texto selecionado, ou escrever algo novo no cursor.";
 "Tip: press %@ to keep listening hands-free. Esc finishes." = "Dica: pressione %@ para continuar sem as mãos. Esc encerra.";

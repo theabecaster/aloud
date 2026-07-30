@@ -35,6 +35,22 @@ final class DictationController: ObservableObject {
     // room defeats.
     private let speechActivity = SpeechActivity()
 
+    // Keeps the system default input off a Bluetooth headset that is also
+    // the current output — continuously, so a session never has to switch
+    // inputs (switching around a live capture is what made headsets blip
+    // into their phone-call mode). Stands down when a mic is explicitly
+    // chosen in Settings.
+    private let inputGuard = BluetoothInputGuard()
+
+    // Whether the current audio route lets the noise filter run at all —
+    // false whenever sound is going anywhere but the Mac's own speakers,
+    // because the system filter takes over that output to work (tried on
+    // Bluetooth once; rolled back as a worse experience than not
+    // filtering). Settings and the pill's menu disable the switch on this;
+    // the badge and the menu bar tint only ever show filtering that is
+    // actually happening.
+    @Published private(set) var noiseReductionAvailable = AudioDevices.voiceProcessingAllowed()
+
     // Live typing: active only while a dictation runs with the setting on.
     private var liveSession: StreamingTranscription?
     private var liveUpdatesTask: Task<Void, Never>?
@@ -130,7 +146,7 @@ final class DictationController: ObservableObject {
         self.settings = settings
         self.history = history
         self.transcriber = transcriber
-        self.hotkeyManager = HotkeyManager(hotkey: settings.hotkey, handsFree: settings.handsFree)
+        self.hotkeyManager = HotkeyManager(hotkey: settings.hotkey)
         self.transcriberState = transcriber.state
         self.upgradeState = (transcriber as? SwitchingTranscriber)?.primaryState ?? transcriber.state
         hotkeyManager.onAction = { [weak self] action in
@@ -145,7 +161,8 @@ final class DictationController: ObservableObject {
             self?.playCue(.stillListening)
         }
         indicator.settings = settings
-        indicator.noiseReduction = settings.noiseReduction
+        indicator.noiseReduction = settings.noiseReduction && noiseReductionAvailable
+        indicator.noiseReductionAvailable = noiseReductionAvailable
         // The badge on the pill is the same switch General holds: pressing it
         // applies to the dictation in progress and is remembered for the next
         // one. What the badge then shows is what capture actually did — a
@@ -165,9 +182,16 @@ final class DictationController: ObservableObject {
             // The completion corrects the badge afterward if capture didn't
             // end up where this expected (a mic that goes deaf under
             // filtering, say).
-            self.recorder.setNoiseReduction(enabled) { [weak self] active in
+            // Rebuilding capture for the flip can take a moment — the badge
+            // spins for that stretch rather than pretending the flip already
+            // landed. Same route gate as session start; the menu item is
+            // disabled when the route can't filter, this is the backstop.
+            let allowed = self.noiseReductionAvailable
+            if self.recorder.isRecording { self.indicator.noiseBusy = true }
+            self.recorder.setNoiseReduction(enabled && allowed) { [weak self] active in
                 guard let self else { return }
-                self.indicator.noiseReduction = self.recorder.isRecording ? active : enabled
+                self.indicator.noiseBusy = false
+                self.indicator.noiseReduction = (self.recorder.isRecording && allowed) ? active : (enabled && allowed)
                 // Disabling: tearing voice processing down reconfigures this
                 // process's audio output and cuts any in-flight sound dead,
                 // so the off cue waits here, where the engine has settled —
@@ -176,8 +200,23 @@ final class DictationController: ObservableObject {
                 if !enabled, !self.settings.noiseReduction { self.playCue(.noiseOff) }
             }
         }
+        // The filtering switch decides which mic the guard parks the default
+        // input on (built-in for stereo, the headset's own for matched
+        // filtering), so flipping it re-runs the guard like a route change.
         settings.$noiseReduction
-            .sink { [weak self] on in self?.indicator.noiseReduction = on }
+            .sink { [weak self] on in
+                guard let self else { return }
+                self.indicator.noiseReduction = on && self.noiseReductionAvailable
+            }
+            .store(in: &cancellables)
+        inputGuard.isActive = { [weak settings] in settings?.microphoneUID == nil }
+        // The audio route decides whether filtering is possible at all;
+        // recompute on every settled route change so the badge, Settings,
+        // and the menu bar all tell the same truth.
+        inputGuard.onRouteChange = { [weak self] in self?.refreshNoiseAvailability() }
+        inputGuard.start()
+        settings.$microphoneUID
+            .sink { [weak self] _ in self?.inputGuard.reapply() }
             .store(in: &cancellables)
         indicator.levelsProvider = { [weak self] in self?.availableLevels ?? PolishLevel.allCases }
         recorder.onDeviceChange = { [weak self] in
@@ -193,9 +232,6 @@ final class DictationController: ObservableObject {
             settings?.rememberDeafUnderNoiseReduction(uid)
         }
         settings.dropCollidingKeys()
-        settings.$handsFree
-            .sink { [weak self] enabled in self?.hotkeyManager.handsFree = enabled }
-            .store(in: &cancellables)
         hotkeyManager.handsFreeHotkey = settings.handsFreeHotkey
         settings.$handsFreeHotkey
             .sink { [weak self] hk in self?.hotkeyManager.handsFreeHotkey = hk }
@@ -326,6 +362,17 @@ final class DictationController: ObservableObject {
         transcriberState = transcriber.state
         upgradeState = switcher?.primaryState ?? transcriber.state
         usingFallback = switcher?.usingFallback ?? false
+    }
+
+    // A session may begin while the model is still loading (the seconds
+    // right after launch); its commit lands here and waits for readiness —
+    // the pill is already showing its transcribing spinner. Coalesces with
+    // the launch-time prepare through the transcriber's own serial gate;
+    // once ready it costs nothing.
+    private func ensureTranscriberReady() async {
+        guard transcriber.state != .ready, transcriber.modelIsDownloaded else { return }
+        try? await transcriber.prepare { _ in }
+        refreshTranscriberState()
     }
 
     // MARK: push-to-talk
@@ -488,11 +535,12 @@ final class DictationController: ObservableObject {
 
     private func beginRecording() {
         guard phase == .idle || phase.isError else { return }
-        guard transcriber.state == .ready else {
-            // Not ready yet — flash the indicator with a hint instead of failing silently.
-            indicator.showHint(transcriber.modelIsDownloaded
-                               ? loc("Voice model is still warming up…")
-                               : loc("Finish setup to start dictating"))
+        // The model still loading — the ten-odd seconds after every launch —
+        // is no reason to turn the hotkey away: capture doesn't need the
+        // model, and the commit waits for it (the pill is showing a spinner
+        // by then anyway). Only a model that isn't on disk yet refuses.
+        guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
+            indicator.showHint(loc("Finish setup to start dictating"))
             return
         }
         // A new dictation is the natural end of the last one's edit window:
@@ -532,32 +580,54 @@ final class DictationController: ObservableObject {
                 }
             }
         }
-        do {
-            try recorder.start(deviceUID: settings.microphoneUID,
-                               noiseReduction: settings.noiseReduction)
-            startSpeechActivity()
-            phase = .recording
-            playCue(.listening)
-            refreshTranscriberState()   // pick up a background engine switch
-            indicator.isBasic = usingFallback
+        // The pill appears the instant the key goes down — as "Getting
+        // ready…" — because starting capture can take over a second on a
+        // Bluetooth microphone negotiating its profile, and a hotkey that
+        // seems to do nothing for that long reads as broken. The engine
+        // starts off the main thread; the pill flips to the live meter (and
+        // the cue plays) when the microphone is actually listening.
+        phase = .recording
+        indicator.showTranscribing(label: loc("Getting ready…"))
+        let startGeneration = sessionGeneration
+        recorder.startAsync(deviceUID: settings.microphoneUID,
+                            noiseReduction: settings.noiseReduction && AudioDevices.voiceProcessingAllowed()) { [weak self] error in
+            guard let self else { return }
+            // The session this start belongs to may already be over — a
+            // quick tap, an Esc. Nothing owns the engine then; put it down.
+            guard self.sessionGeneration == startGeneration, self.phase == .recording,
+                  !self.isCommandSession else {
+                self.recorder.cancel()
+                return
+            }
+            if let error {
+                self.phase = .error(error.localizedDescription)
+                self.indicator.showHint(loc("Couldn’t access the microphone"))
+                return
+            }
+            self.startSpeechActivity()
+            self.playCue(.listening)
+            self.refreshTranscriberState()   // pick up a background engine switch
+            self.indicator.isBasic = self.usingFallback
             // Load the rewrite model while the user is still talking so the
             // commit path never pays its cold start — warmed with the session
             // app's tone so the session actually gets used at commit. Apps
             // whose mode skips the rewrite never pay for a warm-up either.
-            if settings.polishLevel == .concise {
-                let decision = ModeResolver.decision(forBundleID: sessionApp.bundleID,
-                                                     rules: settings.appModes)
-                if decision.allowsRewrite { enhancer?.prewarm(extraInstructions: decision.extraInstructions) }
+            if self.settings.polishLevel == .concise {
+                let decision = ModeResolver.decision(forBundleID: self.sessionApp.bundleID,
+                                                     rules: self.settings.appModes)
+                if decision.allowsRewrite { self.enhancer?.prewarm(extraInstructions: decision.extraInstructions) }
             }
-            indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
-                           bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
+            // A hands-free lock can land while the engine was still spinning
+            // up (double-tap: the second tap usually beats the start) —
+            // show() resets the lock for fresh sessions, so carry it over.
+            let wasLocked = self.indicator.isHandsFreeLocked
+            self.indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
+                                bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
+            if wasLocked { self.indicator.showLocked() }
             // Never live-type at our own windows: the transcript shows up in
             // the UI itself (Try It box, history), and the keystrokes would
             // only bounce off a window with no text field as repeated beeps.
-            if settings.liveTyping, !sessionTargetIsSelf { startLiveTyping() }
-        } catch {
-            phase = .error(error.localizedDescription)
-            indicator.showHint(loc("Couldn’t access the microphone"))
+            if self.settings.liveTyping, !self.sessionTargetIsSelf { self.startLiveTyping() }
         }
     }
 
@@ -725,6 +795,7 @@ final class DictationController: ObservableObject {
         }
         Task {
             do {
+                await ensureTranscriberReady()
                 let result = try await transcriber.transcribe(samples: samples)
                 let raw = verbatim(result)
                 let (rewriteInput, fallback) = polishedVariants(from: raw)
@@ -833,6 +904,7 @@ final class DictationController: ObservableObject {
         phase = .transcribing
         Task {
             do {
+                await ensureTranscriberReady()
                 let result = try await transcriber.transcribe(samples: samples)
                 let raw = verbatim(result)
                 var (text, enhanced) = await finishText(from: raw)
@@ -1141,10 +1213,10 @@ final class DictationController: ObservableObject {
             indicator.showHint(loc("Commands aren’t available on this Mac"))
             return
         }
-        guard transcriber.state == .ready else {
-            indicator.showHint(transcriber.modelIsDownloaded
-                               ? loc("Voice model is still warming up…")
-                               : loc("Finish setup to start dictating"))
+        // Same contract as a dictation hold: a loading model is waited for
+        // at commit, only a missing one refuses.
+        guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
+            indicator.showHint(loc("Finish setup to start dictating"))
             return
         }
         let front = NSWorkspace.shared.frontmostApplication
@@ -1153,19 +1225,31 @@ final class DictationController: ObservableObject {
         // still in flight so its verdict can't flash over this recording.
         sessionGeneration += 1
         sessionTypingBlocked = false
-        do {
-            try recorder.start(deviceUID: settings.microphoneUID,
-                               noiseReduction: settings.noiseReduction)
-            phase = .recording
-            isCommandSession = true
-            playCue(.listening)
-            prewarmCommandEngine()
-            indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
-                           bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent },
-                           command: true)
-        } catch {
-            phase = .error(error.localizedDescription)
-            indicator.showHint(loc("Couldn’t access the microphone"))
+        // Same instant-feedback contract as a dictation hold: pill first,
+        // engine off-thread, live state when the microphone actually hears.
+        phase = .recording
+        isCommandSession = true
+        indicator.showTranscribing(label: loc("Getting ready…"))
+        let startGeneration = sessionGeneration
+        recorder.startAsync(deviceUID: settings.microphoneUID,
+                            noiseReduction: settings.noiseReduction && AudioDevices.voiceProcessingAllowed()) { [weak self] error in
+            guard let self else { return }
+            guard self.sessionGeneration == startGeneration, self.phase == .recording,
+                  self.isCommandSession else {
+                self.recorder.cancel()
+                return
+            }
+            if let error {
+                self.phase = .error(error.localizedDescription)
+                self.isCommandSession = false
+                self.indicator.showHint(loc("Couldn’t access the microphone"))
+                return
+            }
+            self.playCue(.listening)
+            self.prewarmCommandEngine()
+            self.indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
+                                bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent },
+                                command: true)
         }
     }
 
@@ -1182,6 +1266,7 @@ final class DictationController: ObservableObject {
         phase = .transcribing
         Task {
             do {
+                await ensureTranscriberReady()
                 let result = try await transcriber.transcribe(samples: samples)
                 let spoken = verbatim(result)
                 guard !spoken.isEmpty else {
@@ -1211,6 +1296,15 @@ final class DictationController: ObservableObject {
 
     private func prewarmCommandEngine() {
         commandInterpreter?.prewarm()
+    }
+
+    // Route changed: re-derive whether filtering is possible and push the
+    // gated truth to every surface that shows it.
+    private func refreshNoiseAvailability() {
+        let available = AudioDevices.voiceProcessingAllowed()
+        noiseReductionAvailable = available
+        indicator.noiseReductionAvailable = available
+        indicator.noiseReduction = settings.noiseReduction && available
     }
 
     // Run the spoken instruction. Nothing is ever typed on failure — a wrong
@@ -1271,6 +1365,7 @@ final class DictationController: ObservableObject {
         phase = .transcribing
         Task {
             do {
+                await ensureTranscriberReady()
                 let result = try await transcriber.transcribe(samples: samples)
                 let raw = verbatim(result)
                 var (text, enhanced) = await finishText(from: raw)

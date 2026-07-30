@@ -8,7 +8,12 @@ import CoreAudio
 final class AudioRecorder {
     static let targetSampleRate: Double = 16_000
 
-    private let engine = AVAudioEngine()
+    // Replaced with a fresh instance at the end of every session (see
+    // stop()): deallocating the engine is the only teardown macOS honours
+    // completely once voice processing has existed in it. Touched only on
+    // engineQueue — start() blocks main inside an engineQueue.sync for
+    // everything it does with it.
+    private var engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var samples: [Float] = []
     private let lock = NSLock()
@@ -127,17 +132,52 @@ final class AudioRecorder {
         return id
     }
 
-    // Select a specific input device by pointing the engine's input AU at it.
-    // No-op (default device) when uid is nil or stale.
+    // Record from a specific input device for this session. Pointing the
+    // engine's own audio unit at the device does not hold — the engine's
+    // input is a "default device aggregate" that snaps back to the system
+    // default moments after start (measured: ~0.5 s) — so the only grip that
+    // lasts is the system default itself: change it, remember what it was,
+    // put it back at teardown. The previous default is also persisted, so a
+    // session that dies mid-flight is repaired at the next launch instead of
+    // leaving the user's input switched. No-op when uid is nil or stale, or
+    // already the default.
+    private static let restoreDefaultInputKey = "restoreDefaultInputUID"
+    // engineQueue only, like everything else touching capture routing.
+    private var defaultInputToRestore: AudioDeviceID = 0
+    private var defaultInputOverriddenTo: AudioDeviceID = 0
+
     private func applyInputDevice(uid: String?) {
         guard let uid, let deviceID = AudioDevices.deviceID(forUID: uid) else { return }
-        var id = deviceID
-        let au = engine.inputNode.audioUnit
-        if let au {
-            AudioUnitSetProperty(au, kAudioOutputUnitProperty_CurrentDevice,
-                                 kAudioUnitScope_Global, 0, &id,
-                                 UInt32(MemoryLayout<AudioDeviceID>.size))
+        let current = AudioDevices.defaultInputDeviceID()
+        guard current != 0, current != deviceID,
+              AudioDevices.setDefaultInputDevice(deviceID) else { return }
+        defaultInputToRestore = current
+        defaultInputOverriddenTo = deviceID
+        UserDefaults.standard.set(AudioDevices.uid(forDeviceID: current),
+                                  forKey: Self.restoreDefaultInputKey)
+    }
+
+    private func restoreDefaultInputAfterSession() {
+        guard defaultInputToRestore != 0 else { return }
+        // Only put the default back if it is still where this session left
+        // it — a user who switched inputs mid-session has made a newer
+        // choice, and stomping it would be worse than leaving ours.
+        if AudioDevices.defaultInputDeviceID() == defaultInputOverriddenTo {
+            AudioDevices.setDefaultInputDevice(defaultInputToRestore)
         }
+        defaultInputToRestore = 0
+        defaultInputOverriddenTo = 0
+        UserDefaults.standard.removeObject(forKey: Self.restoreDefaultInputKey)
+    }
+
+    // Launch-time repair: a previous run that died mid-session left the
+    // system default input switched. Put it back before anything else runs.
+    static func restoreDefaultInputIfInterrupted() {
+        guard let uid = UserDefaults.standard.string(forKey: restoreDefaultInputKey) else { return }
+        if let id = AudioDevices.deviceID(forUID: uid) {
+            AudioDevices.setDefaultInputDevice(id)
+        }
+        UserDefaults.standard.removeObject(forKey: restoreDefaultInputKey)
     }
 
     // macOS voice processing (the same path FaceTime and Dictation use):
@@ -164,7 +204,17 @@ final class AudioRecorder {
         let exception = AloudCatchException {
             do {
                 try input.setVoiceProcessingEnabled(enabled)
-                if enabled { input.isVoiceProcessingAGCEnabled = false }
+                if enabled {
+                    input.isVoiceProcessingAGCEnabled = false
+                    // Voice processing ducks whatever else the Mac is playing
+                    // for as long as it's engaged. Left at the default that's
+                    // a heavy, phone-call-grade cut; .min keeps the dip to a
+                    // polite nod — music steps back while the pill is up and
+                    // comes back on its own when teardown releases the unit.
+                    input.voiceProcessingOtherAudioDuckingConfiguration =
+                        AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                            enableAdvancedDucking: false, duckingLevel: .min)
+                }
                 engaged = enabled
             } catch {
                 engaged = false
@@ -310,6 +360,45 @@ final class AudioRecorder {
 
     func start(deviceUID: String?, noiseReduction: Bool) throws {
         guard !isRecording else { return }
+        prepareForStart()
+        // Everything that touches the engine — including asking it which
+        // device it sees — runs on the engine queue with the caller blocked,
+        // so nothing races the engine swap a previous session's teardown may
+        // still be doing ahead of us in the queue.
+        try engineQueue.sync {
+            try startCapture(deviceUID: deviceUID, noiseReduction: noiseReduction)
+        }
+        finishStart()
+    }
+
+    /// start(), with the engine work off the calling thread. Starting capture
+    /// can take over a second when a Bluetooth microphone negotiates its
+    /// profile, and the UI must not freeze for it — it shows a "getting
+    /// ready" state instead and flips to live on `completion` (main queue,
+    /// nil error = capture running). The caller owns the case where the
+    /// session ended before completion arrived: call cancel() then.
+    func startAsync(deviceUID: String?, noiseReduction: Bool,
+                    completion: @escaping (Error?) -> Void) {
+        guard !isRecording else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        prepareForStart()
+        engineQueue.async { [self] in
+            do {
+                try startCapture(deviceUID: deviceUID, noiseReduction: noiseReduction)
+                DispatchQueue.main.async { [self] in
+                    finishStart()
+                    completion(nil)
+                }
+            } catch {
+                DispatchQueue.main.async { completion(error) }
+            }
+        }
+    }
+
+    // Main-thread field reset shared by both starts.
+    private func prepareForStart() {
         // Under the lock: the previous session's tap can still deliver a
         // last buffer or two until its queued teardown runs, and these are
         // the fields it touches.
@@ -321,29 +410,49 @@ final class AudioRecorder {
         currentLevel = 0
         resetSpectrum()
         voiceProcessingFellBack = false
-        // Which microphone this will actually be — "system default" is a
-        // moving target, and the answer decides whether voice processing is
-        // safe to use here at all.
-        sessionDeviceUID = deviceUID ?? AudioDevices.uid(forDeviceID: currentInputDeviceID())
-        let deviceIsDeaf = sessionDeviceUID.map { isDeviceDeafUnderVoiceProcessing?($0) ?? false } ?? false
-        self.noiseReduction = noiseReduction && !deviceIsDeaf
+    }
 
-        try engineQueue.sync {
-            applyVoiceProcessing(self.noiseReduction)
+    // The heavy part; engineQueue only.
+    private func startCapture(deviceUID: String?, noiseReduction: Bool) throws {
+            // The default-input switch comes first, before *anything* touches
+            // the engine: the engine's input rides a default-tracking
+            // aggregate that binds to whatever the default is the moment the
+            // input node is first touched, and a Bluetooth microphone bound
+            // there — even in passing — is enough for the headset to start
+            // dropping into its mono phone-call profile.
             applyInputDevice(uid: deviceUID)
+            // Which microphone this will actually be — "system default" is a
+            // moving target, and the answer decides whether voice processing
+            // is safe to use here at all. Asked of the system, not the
+            // engine: the engine reports its default-tracking *aggregate*,
+            // whose UID is transient (it embeds a pid) — remembered on the
+            // deaf-device list it would match nothing ever again.
+            sessionDeviceUID = deviceUID ?? AudioDevices.uid(forDeviceID: AudioDevices.defaultInputDeviceID())
+            let deviceIsDeaf = sessionDeviceUID.map { isDeviceDeafUnderVoiceProcessing?($0) ?? false } ?? false
+            self.noiseReduction = noiseReduction && !deviceIsDeaf
 
+            applyVoiceProcessing(self.noiseReduction)
+
+            // A start that fails after the default-input override engaged
+            // must undo it on the way out — stop() never runs for a session
+            // that never began, and nothing else would put it back.
             guard engine.inputNode.outputFormat(forBus: 0).sampleRate > 0 else {
+                restoreDefaultInputAfterSession()
                 throw NSError(domain: "Aloud", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
             }
             guard installCapture() else {
+                restoreDefaultInputAfterSession()
                 throw NSError(domain: "Aloud", code: 2,
                               userInfo: [NSLocalizedDescriptionKey: "Couldn’t start listening"])
             }
-        }
+        sessionDeviceID = currentInputDeviceID()
+    }
+
+    // Main-thread bookkeeping once capture is live.
+    private func finishStart() {
         isRecording = true
         captureStartUptime = ProcessInfo.processInfo.systemUptime
-        sessionDeviceID = currentInputDeviceID()
         startSilenceWatchdog()
 
         // Unplugging the active mic (or an AirPods hand-off) fires a config
@@ -493,12 +602,26 @@ final class AudioRecorder {
         // samples are snapshotted here, the few milliseconds the tap may
         // still deliver land in the old array, and the next start() clears it
         // after its own engineQueue turn — which FIFO puts after this one.
-        engineQueue.async { [engine] in
+        engineQueue.async { [self] in
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
             // Leave the graph as raw capture found it, so a session that never
             // wanted voice processing never opens an output device.
             engine.disconnectNodeOutput(engine.inputNode)
+            // Nothing of this session's engine may survive into idle. Voice
+            // processing holds hardware claims of its own — the microphone
+            // *and* the output device it echo-cancels against — and neither
+            // a stopped engine nor even switching the processing off again
+            // reliably gives them back: macOS has been observed leaving the
+            // output degraded (mono, voice-band) for as long as the process
+            // that ever hosted the processing unit lives. Disabling first is
+            // the polite teardown; replacing the engine is the one the OS
+            // actually honours. The price is a cold engine at the next
+            // hotkey-down, which start() builds anyway.
+            applyVoiceProcessing(false)
+            engine.reset()
+            engine = AVAudioEngine()
+            restoreDefaultInputAfterSession()
         }
         isRecording = false
         converter = nil
@@ -513,6 +636,16 @@ final class AudioRecorder {
 
     func cancel() {
         _ = stop()
+    }
+
+    // Whether the audio hardware has actually been let go: engine idle and
+    // voice processing torn down. Queues behind any in-flight teardown, so a
+    // caller right after stop() reads the settled truth rather than a race.
+    // Diagnostic only (--audio-release-check).
+    var hardwareReleased: Bool {
+        engineQueue.sync {
+            !engine.isRunning && !engine.inputNode.isVoiceProcessingEnabled
+        }
     }
 
     private func resetSpectrum() {

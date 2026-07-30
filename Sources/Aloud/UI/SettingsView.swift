@@ -9,10 +9,10 @@ final class SettingsNavigationModel: ObservableObject {
     }
 }
 
-// One calm window, System Settings-style sidebar. Eight panes in three
-// clusters: how Aloud runs (General, Keys, Dictation), what it does with your
-// words (Vocabulary, Snippets, App Rules), and the record (History, About).
-// Every pane answers one question, so nothing needs a second glance.
+// One calm window, System Settings-style sidebar. Seven panes in three
+// clusters: how Aloud runs (General, Dictation), what it does with your words
+// (Vocabulary, Snippets, App Rules), and the record (History, About). Every
+// pane answers one question, so nothing needs a second glance.
 struct SettingsView: View {
     @ObservedObject var controller: DictationController
     @ObservedObject var navigation: SettingsNavigationModel
@@ -32,7 +32,6 @@ struct SettingsView: View {
 
     enum Section: String, CaseIterable, Identifiable {
         case general = "General"
-        case keys = "Keys"
         case dictation = "Dictation"
         case vocabulary = "Vocabulary"
         case snippets = "Snippets"
@@ -43,8 +42,7 @@ struct SettingsView: View {
         var title: String { loc(rawValue) }
         var subtitle: String {
             switch self {
-            case .general: return loc("Permissions, microphone, and startup.")
-            case .keys: return loc("Choose how you start dictating.")
+            case .general: return loc("Permissions, microphone, keys, and startup.")
             case .dictation: return loc("Control how Aloud hears and writes.")
             case .vocabulary: return loc("Teach Aloud the words that matter to you.")
             case .snippets: return loc("Turn short phrases into text you use often.")
@@ -56,7 +54,6 @@ struct SettingsView: View {
         var symbol: String {
             switch self {
             case .general: return "gearshape"
-            case .keys: return "keyboard"
             case .dictation: return "waveform"
             case .vocabulary: return "character.book.closed"
             case .snippets: return "text.insert"
@@ -70,7 +67,7 @@ struct SettingsView: View {
     // Headerless clusters: the grouping reads as rhythm in the sidebar
     // without inventing category names the user has to learn.
     private let clusters: [[Section]] = [
-        [.general, .keys, .dictation],
+        [.general, .dictation],
         [.vocabulary, .snippets, .appRules],
         [.history, .about],
     ]
@@ -142,7 +139,6 @@ struct SettingsView: View {
     private var detail: some View {
         switch navigation.section {
         case .general: GeneralSettings(controller: controller)
-        case .keys: KeysSettings(controller: controller)
         case .dictation: DictationSettings(controller: controller)
         case .vocabulary: VocabularySettings(settings: controller.settings)
         case .snippets: SnippetsSettings(settings: controller.settings)
@@ -228,6 +224,10 @@ struct GeneralSettings: View {
     @State private var launchAtLogin: Bool
     @State private var devices: [AudioInputDevice] = []
     @State private var micAccess = Permissions.microphone
+    // Whether "System default" would currently be redirected to the built-in
+    // mic (headphones doubling as speakers). Live state, so it refreshes on
+    // the same poll that watches the permission switches.
+    @State private var autoSteersToBuiltIn = false
     @State private var axAccess = Permissions.accessibility
 
     // @State so one publisher survives re-renders instead of a new timer per
@@ -238,6 +238,16 @@ struct GeneralSettings: View {
     @State private var poll = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
     @State private var hostWindow: NSWindow?
 
+    // Which recorder is shaking, and the sentence explaining why. One at a
+    // time: the user can only be pressing one key.
+    @State private var refusedSlot: KeySlot?
+    @State private var refusedMessage = ""
+    @State private var shake: CGFloat = 0
+    @State private var hoveringUninstall = false
+    // Height of the startup card, so the settings above it can be stretched to
+    // exactly the space that's left.
+    @State private var startupHeight: CGFloat = 0
+
     init(controller: DictationController) {
         self.controller = controller
         self.settings = controller.settings
@@ -246,52 +256,230 @@ struct GeneralSettings: View {
 
     private var allGranted: Bool { micAccess == .granted && axAccess == .granted }
 
+    // The pane scrolls as one piece, but startup sits on the floor rather
+    // than trailing whatever section happens to come last. Our own ScrollView
+    // holds a non-scrolling Form stretched to at least the viewport's height,
+    // so the spacer above the startup card can expand when there's room and
+    // collapses to nothing when the content is tall enough to scroll.
     var body: some View {
+        GeometryReader { viewport in
+            ScrollView {
+                VStack(spacing: 0) {
+                    // The settings Form is stretched to fill everything above
+                    // the startup card, so its own backdrop covers the slack —
+                    // a bare Spacer here would leave a band of bare window in
+                    // a pane that is otherwise one continuous surface. minHeight
+                    // (not height) so taller content grows past it and this
+                    // ScrollView takes over.
+                    form.frame(minHeight: max(0, viewport.size.height - startupHeight),
+                               alignment: .top)
+                    // fixedSize keeps this card at its content height instead
+                    // of greedily splitting the pane with the Form above.
+                    startup
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: StartupHeightKey.self,
+                                                   value: g.size.height)
+                        })
+                }
+                .onPreferenceChange(StartupHeightKey.self) { startupHeight = $0 }
+            }
+            // The poll can retire the permissions section while the user is
+            // looking at it — granting in System Settings and switching back
+            // is the common case. Let the rest of the pane slide up instead of
+            // jumping.
+            .animation(.default, value: allGranted)
+            .background(HostWindowReader(window: $hostWindow))
+            .onAppear {
+                devices = AudioDevices.inputDevices()
+                autoSteersToBuiltIn = AudioDevices.defaultOutputIsBluetooth()
+            }
+            .onReceive(poll) { _ in
+                // The poll exists so a grant flipped in System Settings shows
+                // up here while this window sits in the background — so it
+                // must run whenever the window is on screen, key or not, and
+                // only rest once the window is actually closed.
+                guard hostWindow?.isVisible ?? true else { return }
+                micAccess = Permissions.microphone
+                axAccess = Permissions.accessibility
+                autoSteersToBuiltIn = AudioDevices.defaultOutputIsBluetooth()
+            }
+        }
+    }
+
+    private var form: some View {
         Form {
+            // A permission that's already granted has nothing to say — a row
+            // reading "Allowed" is one more line to scan past every time this
+            // pane opens. So the section exists only while something is
+            // actually blocking Aloud, and its presence is the whole signal.
+            if !allGranted {
+                SwiftUI.Section {
+                    if micAccess != .granted {
+                        permissionRow(loc("Microphone access"),
+                                      detail: loc("Aloud can’t hear you until this is on."),
+                                      status: micAccess,
+                                      request: {
+                                          Permissions.requestMicrophone { _ in
+                                              micAccess = Permissions.microphone
+                                          }
+                                      },
+                                      openSettings: Permissions.openMicrophoneSettings)
+                    }
+                    if axAccess != .granted {
+                        permissionRow(loc("Accessibility access"),
+                                      detail: loc("Aloud can’t type for you until this is on."),
+                                      status: axAccess,
+                                      request: nil,
+                                      openSettings: Permissions.openAccessibilitySettings)
+                    }
+                } header: {
+                    Text(loc("Permissions"))
+                } footer: {
+                    // macOS routinely keeps a stale Accessibility entry after
+                    // an app update: the switch reads on while the app isn't
+                    // trusted. Name the fix instead of leaving the user
+                    // staring at a switch that looks correct — but only for
+                    // someone who had it working once, since for anyone else
+                    // the switch really is just off.
+                    if axAccess != .granted, settings.onboardingComplete {
+                        Text(loc("Switch already on? Turn it off and on again — macOS keeps a stale entry after an update."))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Every explanation here sits on the control it belongs to, behind
+            // an ⓘ. Collected in a footer they read as one paragraph about the
+            // section, and the user has to work out which sentence is about
+            // which switch.
             SwiftUI.Section {
-                permissionRow(loc("Microphone access"),
-                              granted: micAccess == .granted,
-                              action: Permissions.openMicrophoneSettings)
-                permissionRow(loc("Accessibility access"),
-                              granted: axAccess == .granted,
-                              action: Permissions.openAccessibilitySettings)
-            } header: {
-                Text(loc("Permissions"))
-            } footer: {
-                if !allGranted {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(loc("Without both, Aloud can’t hear you or type for you."))
-                        // macOS routinely keeps a stale Accessibility entry
-                        // after an app update: the switch reads on while the
-                        // app isn't trusted. Name the fix instead of leaving
-                        // the user staring at a switch that looks correct —
-                        // but only for someone who had it working once, since
-                        // for anyone else the switch really is just off.
-                        if axAccess != .granted, settings.onboardingComplete {
-                            Text(loc("Switch already on? Turn it off and on again — macOS keeps a stale entry after an update."))
+                LabeledContent {
+                    Picker("", selection: micSelection) {
+                        Text(loc("System default")).tag(nil as String?)
+                        ForEach(devices) { d in
+                            Text(d.isBluetooth ? loc("%@ (Bluetooth)", d.name) : d.name)
+                                .tag(d.uid as String?)
                         }
                     }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .labelsHidden()
+                    .accessibilityLabel(loc("Microphone"))
+                } label: {
+                    SettingLabel(title: loc("Microphone"), info: microphoneInfo)
                 }
+
+                // Only switchable where filtering can actually run: the
+                // system filter takes over the output device, so with
+                // headphones as the output it shows off and disabled, the
+                // reason named right underneath. The stored choice survives
+                // — unplug the headphones and it re-arms by itself.
+                // A Toggle carrying its own label view, rather than a
+                // LabeledContent wrapping a label-less one: the latter renders
+                // as a checkbox in a grouped Form, and it'd be the only
+                // checkbox in the app.
+                Toggle(isOn: Binding(
+                    get: { settings.noiseReduction && controller.noiseReductionAvailable },
+                    set: { settings.noiseReduction = $0 })) {
+                    SettingLabel(
+                        title: loc("Reduce background noise"),
+                        // The ⓘ stays live while the row is disabled, and its
+                        // text switches to explaining exactly that state.
+                        info: controller.noiseReductionAvailable
+                            ? loc("Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin.")
+                            : loc("The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again.",
+                                  AudioDevices.defaultOutputName() ?? loc("this output")),
+                        note: controller.noiseReductionAvailable ? nil
+                            : loc("Not available with %@.",
+                                  AudioDevices.defaultOutputName() ?? loc("this output")),
+                        dimmed: !controller.noiseReductionAvailable)
+                }
+                // A Toggle whose label isn't a plain Text renders as a
+                // checkbox on macOS unless the style is named outright.
+                .toggleStyle(.switch)
+                .disabled(!controller.noiseReductionAvailable)
+                Toggle(loc("Play sound effects"), isOn: $settings.soundCues)
             }
 
+            // The keys used to be a pane of their own, three sections deep.
+            // They're three choices — one required, two optional — so they sit
+            // here as three rows, with the how-it-works behind each ⓘ and the
+            // footer kept free for a refusal.
             SwiftUI.Section {
-                Picker(loc("Microphone"), selection: micSelection) {
-                    Text(loc("System default")).tag(nil as String?)
-                    ForEach(devices) { d in
-                        Text(d.name).tag(d.uid as String?)
+                LabeledContent {
+                    HStack(spacing: 6) {
+                        HotkeyRecorderView(hotkey: settings.hotkey) { new in
+                            assign(new, to: .dictation) { controller.updateHotkey($0) }
+                        }
+                        .shaking(refusedSlot == .dictation ? shake : 0)
+                        // Required key: nothing to clear, only the space it
+                        // would take, so this row lines up with the two below.
+                        clearButton("", visible: false) {}
+                    }
+                } label: {
+                    SettingLabel(
+                        title: loc("Dictation key"),
+                        info: loc("Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier.",
+                                  settings.hotkey.displayName))
+                }
+
+                LabeledContent {
+                    HStack(spacing: 6) {
+                        OptionalHotkeyRecorderView(hotkey: settings.handsFreeHotkey) { new in
+                            assign(new, to: .handsFree) { settings.handsFreeHotkey = $0 }
+                        }
+                        .shaking(refusedSlot == .handsFree ? shake : 0)
+                        clearButton(loc("Remove the hands-free key"),
+                                    visible: settings.handsFreeHotkey != nil) {
+                            settings.handsFreeHotkey = nil
+                        }
+                    }
+                } label: {
+                    SettingLabel(title: loc("Hands-free key"), info: handsFreeInfo)
+                }
+
+                // Only on Macs with the on-device engine — elsewhere the row
+                // would record a key that can never do anything.
+                if controller.commandsAvailable {
+                    LabeledContent {
+                        HStack(spacing: 6) {
+                            OptionalHotkeyRecorderView(hotkey: settings.commandHotkey) { new in
+                                assign(new, to: .command) { settings.commandHotkey = $0 }
+                            }
+                            .shaking(refusedSlot == .command ? shake : 0)
+                            clearButton(loc("Remove the command key"),
+                                        visible: settings.commandHotkey != nil) {
+                                settings.commandHotkey = nil
+                            }
+                        }
+                    } label: {
+                        SettingLabel(title: loc("Command key"), info: commandInfo)
                     }
                 }
-                Toggle(loc("Reduce background noise"), isOn: $settings.noiseReduction)
-                Toggle(loc("Play sound effects"), isOn: $settings.soundCues)
-                Toggle(loc("Animate the recording pill"), isOn: $settings.indicatorEntrance)
+            } header: {
+                Text(loc("Keys"))
             } footer: {
-                Text(loc("Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on."))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                // Nothing standing here — only the refusal, while the shake
+                // it belongs to is still fresh in the eye.
+                if refusedSlot != nil {
+                    Label(refusedMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .transition(.opacity)
+                }
             }
 
+        }
+        .formStyle(.grouped)
+        // Our ScrollView is the one that scrolls; this Form just lays out.
+        .scrollDisabled(true)
+    }
+
+    // Startup and its neighbour, the way out. Its own Form so the card keeps
+    // the grouped look while the spacer above it lives outside any section —
+    // a bare Spacer between sections draws as an empty card.
+    private var startup: some View {
+        Form {
             SwiftUI.Section {
                 Toggle(loc("Open Aloud at login"), isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
@@ -302,32 +490,57 @@ struct GeneralSettings: View {
                         }
                     }
                     .disabled(!LoginItem.isSupported)
+            } footer: {
+                // Leaving is a legitimate thing to want, and it belongs with
+                // the other app-level switches rather than tucked under About.
+                // Plain secondary text on the floor of the pane: findable when
+                // you go looking, never advertising itself. The confirmation
+                // sheet is where the consequences get spelled out.
+                HStack {
+                    Spacer()
+                    Button { Uninstaller.confirmAndRun() } label: {
+                        Text(loc("Uninstall Aloud"))
+                            .underline(hoveringUninstall)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .onHover { hoveringUninstall = $0 }
+                    .help(loc("Remove Aloud and everything it stores on this Mac"))
+                }
             }
         }
         .formStyle(.grouped)
-        .background(HostWindowReader(window: $hostWindow))
-        .onAppear { devices = AudioDevices.inputDevices() }
-        .onReceive(poll) { _ in
-            // The poll exists so a grant flipped in System Settings shows up
-            // here while this window sits in the background — so it must run
-            // whenever the window is on screen, key or not, and only rest
-            // once the window is actually closed.
-            guard hostWindow?.isVisible ?? true else { return }
-            micAccess = Permissions.microphone
-            axAccess = Permissions.accessibility
-        }
+        // Our ScrollView is the one that scrolls; this Form just lays out.
+        .scrollDisabled(true)
     }
 
-    // Reassurance when it's on, a way out when it isn't — nothing in between.
-    private func permissionRow(_ title: String, granted: Bool,
-                               action: @escaping () -> Void) -> some View {
-        LabeledContent(title) {
-            if granted {
-                Label(loc("Allowed"), systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .labelStyle(.titleAndIcon)
+    // Only ever drawn for a permission that isn't granted: what's missing,
+    // what it costs the user, and the one action that fixes it.
+    private func permissionRow(_ title: String, detail: String,
+                               status: Permissions.Status,
+                               request: (() -> Void)?,
+                               openSettings: @escaping () -> Void) -> some View {
+        LabeledContent {
+            // Never asked yet means macOS will still show its own prompt, so
+            // ask right here. Once it's been denied only System Settings can
+            // undo it, and sending them anywhere else wastes a click.
+            if status == .notDetermined, let request {
+                Button(loc("Allow…"), action: request)
             } else {
-                Button(loc("Open Settings"), action: action)
+                Button(loc("Open Settings"), action: openSettings)
+            }
+        } label: {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
             }
         }
     }
@@ -336,92 +549,24 @@ struct GeneralSettings: View {
         Binding(get: { settings.microphoneUID },
                 set: { settings.microphoneUID = $0 })
     }
-}
 
-// MARK: - Keys
-
-// Every key Aloud listens for, in one place. The hands-free switch and the
-// hands-free key live together here; splitting them across panes was the
-// single most confusing thing about the old layout.
-struct KeysSettings: View {
-    @ObservedObject var controller: DictationController
-    @ObservedObject private var settings: SettingsStore
-
-    init(controller: DictationController) {
-        self.controller = controller
-        _settings = ObservedObject(wrappedValue: controller.settings)
+    // Describes the keys the user actually has, never a hypothetical one:
+    // hands-free is always available by double-press, and a dedicated key is
+    // the optional shortcut to it.
+    private var handsFreeInfo: String {
+        guard let key = settings.handsFreeHotkey else {
+            return loc("Optional. Double-press %@ to keep listening after you let go — Esc finishes and types everything.",
+                       settings.hotkey.displayName)
+        }
+        return loc("Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works.",
+                   key.displayName, settings.hotkey.displayName)
     }
 
-    // Which recorder is shaking, and the sentence explaining why. One at a
-    // time: the user can only be pressing one key.
-    @State private var refusedSlot: KeySlot?
-    @State private var refusedMessage = ""
-    @State private var shake: CGFloat = 0
-
-    var body: some View {
-        Form {
-            SwiftUI.Section {
-                LabeledContent(loc("Dictation key")) {
-                    HotkeyRecorderView(hotkey: settings.hotkey) { new in
-                        assign(new, to: .dictation) { controller.updateHotkey($0) }
-                    }
-                    .shaking(refusedSlot == .dictation ? shake : 0)
-                }
-            } footer: {
-                footnote(for: .dictation,
-                         loc("Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier.",
-                             settings.hotkey.displayName))
-            }
-
-            SwiftUI.Section {
-                Toggle(loc("Hands-free mode"), isOn: $settings.handsFree)
-                if settings.handsFree {
-                    LabeledContent(loc("Hands-free key")) {
-                        HStack(spacing: 6) {
-                            OptionalHotkeyRecorderView(hotkey: settings.handsFreeHotkey) { new in
-                                assign(new, to: .handsFree) { settings.handsFreeHotkey = $0 }
-                            }
-                            .shaking(refusedSlot == .handsFree ? shake : 0)
-                            if settings.handsFreeHotkey != nil {
-                                clearButton(loc("Remove the hands-free key")) {
-                                    settings.handsFreeHotkey = nil
-                                }
-                            }
-                        }
-                    }
-                }
-            } footer: {
-                // Three states, three sentences: the footer describes the keys
-                // the user actually has, never a hypothetical one.
-                footnote(for: .handsFree, handsFreeFooter)
-            }
-
-            // Only on Macs with the on-device engine — elsewhere the row
-            // would record a key that can never do anything.
-            if controller.commandsAvailable {
-                SwiftUI.Section {
-                    LabeledContent(loc("Command key")) {
-                        HStack(spacing: 6) {
-                            OptionalHotkeyRecorderView(hotkey: settings.commandHotkey) { new in
-                                assign(new, to: .command) { settings.commandHotkey = $0 }
-                            }
-                            .shaking(refusedSlot == .command ? shake : 0)
-                            if settings.commandHotkey != nil {
-                                clearButton(loc("Remove the command key")) {
-                                    settings.commandHotkey = nil
-                                }
-                            }
-                        }
-                    }
-                } footer: {
-                    footnote(for: .command, settings.commandHotkey.map {
-                        loc("Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor.",
-                            $0.displayName)
-                    } ?? loc("Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor."))
-                }
-            }
-        }
-        .formStyle(.grouped)
+    private var commandInfo: String {
+        settings.commandHotkey.map {
+            loc("Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor.",
+                $0.displayName)
+        } ?? loc("Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor.")
     }
 
     // The three keys Aloud listens for. Two of them doing the same thing means
@@ -481,43 +626,103 @@ struct KeysSettings: View {
         }
     }
 
-    // The section's own footnote, or the refusal that replaces it while the
-    // shake is still fresh in the eye.
-    @ViewBuilder
-    private func footnote(for slot: KeySlot, _ text: String) -> some View {
-        if refusedSlot == slot {
-            Label(refusedMessage, systemImage: "exclamationmark.triangle.fill")
-                .font(.footnote)
-                .foregroundStyle(.orange)
-                .transition(.opacity)
-        } else {
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    // Describes the keys the user has right now: off, double-press, or the
-    // dedicated key they picked.
-    private var handsFreeFooter: String {
-        guard settings.handsFree else {
-            return loc("Off — %@ only listens while you hold it.", settings.hotkey.displayName)
-        }
-        guard let key = settings.handsFreeHotkey else {
-            return loc("Double-press %@ to keep listening after you let go. Esc finishes and types everything.",
-                       settings.hotkey.displayName)
-        }
-        return loc("Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works.",
-                   key.displayName, settings.hotkey.displayName)
-    }
-
-    private func clearButton(_ help: String, action: @escaping () -> Void) -> some View {
+    // The ✕ that empties an optional key. Laid out on every key row, even
+    // where there's nothing to clear, so all three recorders keep one right
+    // edge instead of the required key sitting a button's width further over.
+    private func clearButton(_ help: String, visible: Bool,
+                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: "xmark.circle.fill")
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
         .help(help)
+        .opacity(visible ? 1 : 0)
+        .allowsHitTesting(visible)
+        .accessibilityHidden(!visible)
+    }
+
+    // What the ⓘ next to the picker says depends on what the current choice
+    // actually costs — a Bluetooth mic has a price, headphones doubling as
+    // speakers explain a redirect the user didn't ask for, and otherwise
+    // there's only the plain meaning of the control.
+    private var microphoneInfo: String {
+        if selectedMicIsBluetooth {
+            return loc("A Bluetooth mic puts the whole headset into mono call audio while Aloud listens.")
+        }
+        if settings.microphoneUID == nil, autoSteersToBuiltIn {
+            return loc("Your headphones are also your speakers, so Aloud listens through the built-in mic to keep their sound.")
+        }
+        return loc("Where Aloud listens. System default follows the Mac.")
+    }
+
+    private var selectedMicIsBluetooth: Bool {
+        guard let uid = settings.microphoneUID else { return false }
+        return devices.first { $0.uid == uid }?.isBluetooth ?? false
+    }
+}
+
+// Reports the startup card's measured height up to the pane.
+private struct StartupHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+// A control's name with its explanation one click away, and room for a short
+// line underneath when the *current* state needs saying out loud.
+private struct SettingLabel: View {
+    let title: String
+    let info: String
+    var note: String? = nil
+    // The row's control can't be used right now. macOS greys a disabled
+    // switch only faintly, and beside a full-strength name that reads as
+    // "off" rather than "unavailable" — so the name goes down with it. The
+    // note and the ⓘ stay bright: they're the part that explains why.
+    var dimmed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Text(title)
+                    .foregroundStyle(dimmed ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+                // The ⓘ never disables with its row: a control that's off
+                // because of circumstances is exactly when someone wants to
+                // read why, and the info text is expected to say so.
+                InfoButton(text: info)
+                    .environment(\.isEnabled, true)
+            }
+            if let note {
+                Text(note)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+// The quiet ⓘ popover used across Settings and onboarding: detail for whoever
+// wants it, nothing on screen for everyone else.
+private struct InfoButton: View {
+    let text: String
+
+    @State private var shown = false
+
+    var body: some View {
+        Button { shown.toggle() } label: {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $shown, arrowEdge: .bottom) {
+            Text(text)
+                .font(.callout)
+                .frame(width: 250)
+                .padding(14)
+        }
+        .accessibilityLabel(loc("More info"))
     }
 }
 
@@ -726,7 +931,6 @@ enum KeyCaptureWindow {
 struct DictationSettings: View {
     @ObservedObject var controller: DictationController
     @ObservedObject var settings: SettingsStore
-    @State private var showExperimentalInfo = false
 
     init(controller: DictationController) {
         self.controller = controller
@@ -840,19 +1044,7 @@ struct DictationSettings: View {
             } header: {
                 HStack(spacing: 5) {
                     Text(loc("Experimental"))
-                    Button {
-                        showExperimentalInfo.toggle()
-                    } label: {
-                        Image(systemName: "info.circle")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .popover(isPresented: $showExperimentalInfo, arrowEdge: .bottom) {
-                        Text(loc("Experimental features work, but expect the occasional hiccup. You can turn them off any time."))
-                            .font(.callout)
-                            .frame(width: 250)
-                            .padding(14)
-                    }
+                    InfoButton(text: loc("Experimental features work, but expect the occasional hiccup. You can turn them off any time."))
                 }
             } footer: {
                 Text(settings.liveTyping
@@ -1318,6 +1510,53 @@ struct StatBlock: View {
     }
 }
 
+// The transcript as it was heard, before clean-up. Reading it is half of why
+// anyone opens this; the other half is wanting those exact words instead — so
+// the copy lives here with the text, not only in a context menu nobody finds.
+private struct OriginalTextPopover: View {
+    let text: String
+
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(loc("Original"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 12)
+                // Same copy affordance as a history row: the icon becomes a
+                // checkmark for a beat, so nothing has to be said in words.
+                Button(action: copy) {
+                    Label(copied ? loc("Copied") : loc("Copy"),
+                          systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .contentTransition(.symbolEffect(.replace))
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(copied ? Color.aloud : Color.secondary)
+                .accessibilityLabel(copied ? loc("Copied") : loc("Copy Original"))
+            }
+            Text(text)
+                .font(.callout)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(width: 280, alignment: .leading)
+        .padding(14)
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            copied = false
+        }
+    }
+}
+
 struct HistoryRow: View {
     let entry: HistoryEntry
     @ObservedObject var settings: SettingsStore
@@ -1365,10 +1604,7 @@ struct HistoryRow: View {
                         // inline expansion made rows jump around.
                         rowAction(loc("Show original"), symbol: "eye") { showRaw = true }
                             .popover(isPresented: $showRaw, arrowEdge: .bottom) {
-                                Text(raw)
-                                    .font(.callout)
-                                    .frame(width: 280, alignment: .leading)
-                                    .padding(14)
+                                OriginalTextPopover(text: raw)
                             }
                     }
                     rowAction(loc("Fix"), symbol: "wand.and.sparkles") { showFix = true }
@@ -1581,15 +1817,6 @@ struct AboutSettings: View {
                 .padding(.top, 4)
             }
             Spacer()
-            Divider()
-            HStack {
-                Spacer()
-                Button(loc("Uninstall Aloud"), role: .destructive) {
-                    Uninstaller.confirmAndRun()
-                }
-                .controlSize(.regular)
-            }
-            .padding(12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
