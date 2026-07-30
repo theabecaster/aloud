@@ -498,7 +498,12 @@ final class DictationController: ObservableObject {
         // A new dictation is the natural end of the last one's edit window:
         // whatever the tracker reconstructed is learned now, before this
         // session's own focus snapshot gets a chance to double-count it.
-        concludeEditTracking(reason: "new session")
+        // Deferred one main-queue hop so the user's final keystrokes — fed to
+        // the tracker through the same queue — are consumed first, and still
+        // well ahead of the focus snapshot's ~50 ms capture.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.concludeEditTracking(reason: "new session") }
+        }
         let front = NSWorkspace.shared.frontmostApplication
         sessionApp = (front?.localizedName, front?.bundleIdentifier)
         sessionTargetIsSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
@@ -611,7 +616,11 @@ final class DictationController: ObservableObject {
                event.cgEvent?.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.marker {
                 // Aloud's own typing: not a reason to rebase, but the audit
                 // needs it to know what the field would hold on its own.
-                Task { @MainActor in self?.sessionAudit?.consumeSynthetic(input) }
+                // main.async, not Task: the audit replays keystrokes, and
+                // only the serial main queue guarantees they stay in order.
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { self?.sessionAudit?.consumeSynthetic(input) }
+                }
                 return
             }
             if isKeystroke {
@@ -624,11 +633,13 @@ final class DictationController: ObservableObject {
                 if hotkey.isMouseButton, event.buttonNumber == Int(hotkey.keyCode) { return }
                 if let hk = handsFreeKey, hk.isMouseButton, event.buttonNumber == Int(hk.keyCode) { return }
             }
-            Task { @MainActor in
-                guard let self else { return }
-                self.sessionAudit?.consumeUser(input)
-                if isKeystroke { self.lastUserKeystroke = Date() }
-                self.liveTyper.rebase()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.sessionAudit?.consumeUser(input)
+                    if isKeystroke { self.lastUserKeystroke = Date() }
+                    self.liveTyper.rebase()
+                }
             }
         }
         liveUpdatesTask = Task { [weak self] in
@@ -896,37 +907,51 @@ final class DictationController: ObservableObject {
     private func settleSessionLearning(canonical: String) {
         let audit = sessionAudit
         sessionAudit = nil
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            var baseline = canonical
-            var screenKnown = true
-            if let audit, audit.userTouched {
-                let conclusion = audit.conclude()
-                if !conclusion.candidates.isEmpty {
-                    Self.learningLog.notice("session audit: \(conclusion.candidates.count) candidate(s) from mid-dictation edits")
-                    self.learn(conclusion.candidates, from: canonical)
+        // main.async, matching how the audit is fed: monitor events already
+        // in flight land first, so the conclusion sees the whole session.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                var baseline = canonical
+                var learned = false
+                var screenKnown = true
+                if let audit, audit.userTouched {
+                    let conclusion = audit.conclude()
+                    if !conclusion.candidates.isEmpty {
+                        Self.learningLog.notice("session audit: \(conclusion.candidates.count) candidate(s) from mid-dictation edits")
+                        // Validated against the preview the user actually
+                        // corrected — the canonical result is a fresh
+                        // transcription and may not contain the fixed word.
+                        self.learn(conclusion.candidates, from: conclusion.aloudText)
+                        learned = true
+                    }
+                    if let screen = conclusion.screenText {
+                        baseline = screen
+                    } else {
+                        screenKnown = false
+                    }
                 }
-                if let screen = conclusion.screenText {
-                    baseline = screen
-                } else {
-                    screenKnown = false
-                }
+                // A mid-session fix that was learned but left the screen
+                // unknowable must not hand the read-back path a stale
+                // reference — it would find the same fix and count it twice.
+                guard !(learned && !screenKnown) else { return }
+                self.recordInjection(baseline, screenKnown: screenKnown)
             }
-            self.recordInjection(baseline, canonical: canonical, screenKnown: screenKnown)
         }
     }
 
     // Remember what just landed so the next session can read back what the
     // user made of it. Only real targets count: our own windows re-render
     // text instead of keeping a field, so there is nothing to read back.
-    // `baseline` is what is actually on screen; `canonical` what Aloud
-    // produced — they differ when the user edited mid-dictation.
-    private func recordInjection(_ baseline: String, canonical: String? = nil,
-                                 screenKnown: Bool = true) {
+    // `baseline` is the field's real text — the canonical result only when
+    // the user never edited mid-dictation. Storing anything else would make
+    // the next session's read-back rediscover, and double-count, a fix the
+    // session audit already learned.
+    private func recordInjection(_ baseline: String, screenKnown: Bool = true) {
         guard settings.learnCorrections,
               let bundleID = sessionApp.bundleID,
               bundleID != AppPaths.bundleID else { return }
-        lastInjection = (canonical ?? baseline, bundleID, Date())
+        lastInjection = (baseline, bundleID, Date())
         Self.learningLog.notice("injection recorded app=\(bundleID, privacy: .public) chars=\(baseline.count)")
         armEditTracker(for: baseline, screenKnown: screenKnown)
     }
@@ -948,7 +973,10 @@ final class DictationController: ObservableObject {
             if event.type == .keyDown,
                event.cgEvent?.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.marker { return }
             let input = Self.trackerInput(from: event)
-            Task { @MainActor in self?.trackEdit(input) }
+            // Serial main queue keeps replayed keystrokes in true order.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.trackEdit(input) }
+            }
         }
         editTrackerTimeout = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.editTrackerWindow * 1_000_000_000))
@@ -1031,11 +1059,28 @@ final class DictationController: ObservableObject {
     private func learn(_ candidates: [CorrectionDiff.Candidate], from original: String) {
         let source = original.lowercased()
         let plausible = candidates.filter { source.contains($0.from.lowercased()) }
+        if plausible.count < candidates.count {
+            Self.learningLog.notice("learning: dropped \(candidates.count - plausible.count) candidate(s) not present in the source text")
+        }
         guard !plausible.isEmpty else { return }
         let fresh = CorrectionLearner.shared.filteringInverses(plausible, settings: settings)
         let ready = CorrectionLearner.shared.observe(fresh, settings: settings)
         Self.learningLog.notice("learning: observed \(fresh.count), newly ready \(ready.count)")
-        if !ready.isEmpty { suggestionHintPending = true }
+        if !ready.isEmpty {
+            suggestionHintPending = true
+            announceReadySuggestions()
+        }
+    }
+
+    // The pill hint for a suggestion that just crossed its threshold. Learning
+    // that lands mid-recording holds the hint for the commit tail (the pill is
+    // busy being a meter); learning that lands after — the session audit, the
+    // tracker's timeout — announces right away, because "I noticed" a whole
+    // dictation later reads as never having noticed at all.
+    private func announceReadySuggestions() {
+        guard suggestionHintPending, phase == .idle else { return }
+        suggestionHintPending = false
+        indicator.showHint(loc("Aloud noticed a fix — review it in the menu bar"))
     }
 
     // A new session's focus snapshot doubles as the read-back of the previous

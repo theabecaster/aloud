@@ -31,6 +31,11 @@ struct SessionEditAudit {
         // made it unknowable. Callers arming a post-commit tracker need the
         // real screen contents, not the canonical text that never landed.
         let screenText: String?
+        // What Aloud alone put on screen — the text the user's corrections
+        // were corrections *of*. Candidates must be validated against this,
+        // not the canonical result: the commit re-transcribes, and a preview
+        // word the user fixed may not survive into the canonical text at all.
+        let aloudText: String
     }
 
     mutating func consumeSynthetic(_ input: EditTracker.Input) {
@@ -57,10 +62,10 @@ struct SessionEditAudit {
     // Settle the session: what did the user change, relative to what Aloud
     // alone would have produced?
     func conclude() -> Conclusion {
-        guard userTouched else {
-            return Conclusion(candidates: [], screenText: nil)
-        }
         let aloud = aloudAlone.outcome.exactText
+        guard userTouched else {
+            return Conclusion(candidates: [], screenText: nil, aloudText: aloud)
+        }
         let out = actual.outcome
         var candidates: [CorrectionDiff.Candidate] = []
         if out.exactText != aloud {
@@ -75,6 +80,7 @@ struct SessionEditAudit {
             candidates.append(guess)
         }
         return Conclusion(candidates: candidates,
-                          screenText: actual.phase == .exact ? out.exactText : nil)
+                          screenText: actual.phase == .exact ? out.exactText : nil,
+                          aloudText: aloud)
     }
 }
