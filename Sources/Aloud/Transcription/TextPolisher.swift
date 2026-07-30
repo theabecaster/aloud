@@ -39,6 +39,18 @@ enum PolishLevel: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    // The same promise as `explanation`, cut to fit one line beside a control.
+    // The menu bar popover has 360pt to work with — the full sentence wraps to
+    // three lines there and turns a one-line control into a paragraph.
+    var shortSummary: String {
+        switch self {
+        case .off: return loc("Your exact words")
+        case .light: return loc("Drops filler words")
+        case .standard: return loc("Fillers, spoken fixes, your words")
+        case .concise: return loc("Tightens the wording")
+        }
+    }
+
     // The rule-based level that runs before (or instead of) the rewrite.
     var deterministicLevel: PolishLevel {
         self == .concise ? .standard : self

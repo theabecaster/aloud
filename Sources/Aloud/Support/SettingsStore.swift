@@ -28,7 +28,6 @@ final class SettingsStore: ObservableObject {
         appModes = (defaults.data(forKey: Keys.appModes))
             .flatMap { try? JSONDecoder().decode([AppModeRule].self, from: $0) } ?? []
         soundCues = defaults.object(forKey: Keys.soundCues) as? Bool ?? true
-        indicatorEntrance = defaults.object(forKey: Keys.indicatorEntrance) as? Bool ?? true
         indicatorPosition = (defaults.data(forKey: Keys.indicatorPosition))
             .flatMap { try? JSONDecoder().decode(CGPoint.self, from: $0) }
         statsWords = defaults.object(forKey: Keys.statsWords) as? Int ?? 0
@@ -39,7 +38,6 @@ final class SettingsStore: ObservableObject {
         declaredLanguages = storedLanguages.isEmpty
             ? [Locale.current.language.languageCode?.identifier ?? "en"]
             : storedLanguages
-        handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
         pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
         noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? false
     }
@@ -63,14 +61,12 @@ final class SettingsStore: ObservableObject {
         static let snippets = "snippets"
         static let appModes = "appModes"
         static let soundCues = "soundCues"
-        static let indicatorEntrance = "indicatorEntrance"
         static let indicatorPosition = "indicatorPosition"
         static let statsWords = "statsWords"
         static let statsSeconds = "statsSeconds"
         static let statsDictations = "statsDictations"
         static let liveTyping = "liveTyping"
         static let declaredLanguages = "declaredLanguages"
-        static let handsFree = "handsFree"
         static let pressEnterCommand = "pressEnterCommand"
         static let noiseReduction = "noiseReduction"
         static let deafDevices = "noiseReductionDeafDevices"
@@ -129,10 +125,6 @@ final class SettingsStore: ObservableObject {
     @Published var soundCues: Bool {
         didSet { defaults.set(soundCues, forKey: Keys.soundCues) }
     }
-    // The recording pill blooms in and drains out instead of plain-fading.
-    @Published var indicatorEntrance: Bool {
-        didSet { defaults.set(indicatorEntrance, forKey: Keys.indicatorEntrance) }
-    }
     // Where the user parked the recording pill, as fractions (0…1) of the
     // screen's visible frame — survives display size changes. nil = default
     // bottom-center.
@@ -155,10 +147,6 @@ final class SettingsStore: ObservableObject {
     // declared, hints the primary. Default: the system language. Never empty.
     @Published var declaredLanguages: [String] {
         didSet { defaults.set(declaredLanguages, forKey: Keys.declaredLanguages) }
-    }
-    // Double-press the dictation key → keep listening until Esc. On by default.
-    @Published var handsFree: Bool {
-        didSet { defaults.set(handsFree, forKey: Keys.handsFree) }
     }
     // Ending a dictation with "press enter" sends Return after the text.
     // Off by default: dictating *about* pressing enter must never submit

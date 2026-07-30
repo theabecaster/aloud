@@ -64,6 +64,20 @@ final class RecordingIndicatorPanel {
         get { model.onToggleNoiseReduction }
         set { model.onToggleNoiseReduction = newValue }
     }
+    // Rebuilding capture for a filter flip takes a moment. The badge shows a
+    // spinner for that stretch instead of pretending the flip already
+    // landed, and ignores presses until it has.
+    var noiseBusy: Bool {
+        get { model.noiseBusy }
+        set { model.noiseBusy = newValue }
+    }
+    // Whether the audio route allows filtering at all (headphones as the
+    // output make it unavailable). Off: the quick menu's toggle dims, and
+    // the badge never shows — nothing may claim a filter that cannot run.
+    var noiseReductionAvailable: Bool {
+        get { model.noiseReductionAvailable }
+        set { model.noiseReductionAvailable = newValue }
+    }
 
     // Settings drive the quick menu (mic, clean-up) and remember where the
     // user dragged the pill.
@@ -135,6 +149,12 @@ final class RecordingIndicatorPanel {
             next > now ? next : now + (next - now) * 0.28
         }
     }
+
+    // Whether the pill currently wears the hands-free lock. The controller
+    // reads this across its async session start: a lock that arrived while
+    // the engine was still spinning up must survive the flip from "Getting
+    // ready…" to the live meter (show() resets it for fresh sessions).
+    var isHandsFreeLocked: Bool { model.isLocked }
 
     // Hands-free lock engaged: keep the live meter, add the lock affordance.
     // Only the locked pill takes mouse input (for its close button) — everywhere
@@ -287,9 +307,7 @@ final class RecordingIndicatorPanel {
         isFadingOut = true
         // The drain plays inside the alpha fade's window; ease-in mirrors the
         // entrance the way the badge's exit mirrors its arrival.
-        if entranceEnabled {
-            withAnimation(.easeIn(duration: Self.fadeDuration)) { model.revealed = false }
-        }
+        withAnimation(.easeIn(duration: Self.fadeDuration)) { model.revealed = false }
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = Self.fadeDuration
             panel.animator().alphaValue = 0
@@ -302,10 +320,6 @@ final class RecordingIndicatorPanel {
             }
         })
     }
-
-    // Whether the pill plays its entrance/exit. Read at each transition so
-    // flipping the setting applies to the very next show.
-    private var entranceEnabled: Bool { settings?.indicatorEntrance ?? true }
 
     private func present() {
         hideGeneration += 1   // cancel any pending or in-flight hide
@@ -328,20 +342,14 @@ final class RecordingIndicatorPanel {
         panel.alphaValue = 0
         // Start shrunk while still invisible, then bloom on the next turn —
         // same-turn would render the resting state straight away.
-        model.revealed = !entranceEnabled
+        model.revealed = false
         panel.orderFrontRegardless()
         fadeIn(panel)
-        if !model.revealed {
-            DispatchQueue.main.async { [weak self] in self?.reveal() }
-        }
+        DispatchQueue.main.async { [weak self] in self?.reveal() }
     }
 
     private func reveal() {
-        if entranceEnabled {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.72)) { model.revealed = true }
-        } else {
-            model.revealed = true
-        }
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.72)) { model.revealed = true }
     }
 
     // Ramps from wherever alpha is now, so catching a fade-out mid-flight
@@ -432,6 +440,10 @@ final class IndicatorModel: ObservableObject {
     // Whether background noise is being filtered right now. Mirrored here
     // rather than read from settings so the pill redraws the moment it changes.
     @Published var noiseReduction = false
+    // A filter flip's capture rebuild is in flight; the badge spins.
+    @Published var noiseBusy = false
+    // Whether the route allows filtering at all; gates the quick menu toggle.
+    @Published var noiseReductionAvailable = true
     // Entrance/exit: false renders the pill shrunk and dropped, true at rest.
     // The panel drives it inside withAnimation so an interrupted exit springs
     // back from wherever it was, and leaves it un-animated when the user has
@@ -655,12 +667,21 @@ struct IndicatorView: View {
     private var noiseBadge: some View {
         if model.mode == .recording, badgeVisible {
             Button {
+                guard !model.noiseBusy else { return }
                 model.onToggleNoiseReduction?()
             } label: {
-                Image(systemName: "waveform.badge.minus")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(badgeLit ? AnyShapeStyle(.white)
-                                              : AnyShapeStyle(.secondary))
+                Group {
+                    if model.noiseBusy {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(badgeLit ? .white : nil)
+                    } else {
+                        Image(systemName: "waveform.badge.minus")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(badgeLit ? AnyShapeStyle(.white)
+                                                      : AnyShapeStyle(.secondary))
+                    }
+                }
                     .frame(width: 24, height: 24)
                     .background {
                         // Off, the pill's own ultra-thin material would make
@@ -719,6 +740,7 @@ struct IndicatorView: View {
             Toggle(loc("Reduce background noise"), isOn: Binding(
                 get: { model.noiseReduction },
                 set: { _ in model.onToggleNoiseReduction?() }))
+                .disabled(!model.noiseReductionAvailable)
             Divider()
             Button(loc("Reset Position")) { model.onResetPosition?() }
         }
