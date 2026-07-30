@@ -90,9 +90,15 @@ enum CorrectionGuess {
     static func editDistance(_ a: String, _ b: String, limit: Int) -> Int? {
         let x = Array(a), y = Array(b)
         if abs(x.count - y.count) > limit { return nil }
+        // An empty side makes the distance the other's length outright, and
+        // spares the table a zero-width row to iterate over.
+        guard !x.isEmpty, !y.isEmpty else {
+            let distance = max(x.count, y.count)
+            return distance <= limit ? distance : nil
+        }
         var previous = Array(0...y.count)
         var current = [Int](repeating: 0, count: y.count + 1)
-        for i in 1...max(1, x.count) where !x.isEmpty {
+        for i in 1...x.count {
             current[0] = i
             var rowMin = i
             for j in 1...y.count {

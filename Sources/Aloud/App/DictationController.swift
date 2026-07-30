@@ -567,6 +567,10 @@ final class DictationController: ObservableObject {
         sessionTargetIsSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
         sessionTypingBlocked = false
         sessionGeneration += 1
+        // This session is a hold until a double-tap says otherwise; the flag
+        // outlives the pill it was set for, and the spin-up check below reads
+        // it back to decide whether to re-lock.
+        indicator.clearHandsFreeLock()
         // Off the critical path: AX reads can stall tens of milliseconds, and
         // recording start must stay instant (a slow start also delays event
         // processing enough to eat quick taps). Best-effort by commit time.

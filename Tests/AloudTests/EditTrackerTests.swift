@@ -219,3 +219,24 @@ final class CorrectionGuessTests: XCTestCase {
         XCTAssertEqual(c?.from, "Smith")
     }
 }
+
+final class EditDistanceTests: XCTestCase {
+
+    func testEmptySidesDoNotTrapTheTable() {
+        // A zero-length side used to walk a zero-width row and trap. Reachable
+        // through the booster's plausibility gate, whose terms come from user
+        // data that can hold anything.
+        XCTAssertEqual(CorrectionGuess.editDistance("", "", limit: 0), 0)
+        XCTAssertEqual(CorrectionGuess.editDistance("ab", "", limit: 2), 2)
+        XCTAssertEqual(CorrectionGuess.editDistance("", "ab", limit: 2), 2)
+        XCTAssertNil(CorrectionGuess.editDistance("abc", "", limit: 2))
+    }
+
+    func testDistanceAndCutoff() {
+        XCTAssertEqual(CorrectionGuess.editDistance("smith", "smyth", limit: 2), 1)
+        XCTAssertEqual(CorrectionGuess.editDistance("same", "same", limit: 0), 0)
+        XCTAssertNil(CorrectionGuess.editDistance("kitten", "sitting", limit: 2),
+                     "three edits, cut off at two")
+        XCTAssertEqual(CorrectionGuess.editDistance("kitten", "sitting", limit: 3), 3)
+    }
+}
