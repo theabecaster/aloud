@@ -105,18 +105,29 @@ actor VocabularyBooster {
     // that swap to happen was scored on the wrong footing throughout.
     static func plausibleRescore(original: String, rescored: String,
                                  terms: [Replacement]) -> Bool {
+        guard original != rescored else { return true }
         let swaps = CorrectionDiff.candidates(original: original, corrected: rescored)
+        // The text changed but the diff can't say how — a rewritten run too
+        // long to be vocabulary, or a transcript too big for the table. Not
+        // being able to check is not the same as passing.
+        guard !swaps.isEmpty else { return false }
         for swap in swaps {
-            guard let term = terms.first(where: {
+            // Every term whose text the swap landed on is a fair explanation;
+            // taking only the first would judge a swap against a term that
+            // merely shares a word with it.
+            let accounting = terms.filter {
                 swap.to.range(of: $0.replacement, options: .caseInsensitive) != nil
-            }) else { return false }   // changed something no term accounts for
-            let from = swap.from.lowercased()
-            let confusable = [term.replacement, term.pattern].contains { target in
-                let t = target.lowercased()
-                let allowed = max(2, min(from.count, t.count) / 3)
-                return CorrectionGuess.editDistance(from, t, limit: allowed) != nil
             }
-            guard confusable else { return false }
+            guard !accounting.isEmpty else { return false }
+            // Confusable in the same sense the learner uses, so a name the
+            // model mangles badly — "chevaun" for "Siobhan" — is still allowed
+            // through. That mangling is the whole reason for boosting.
+            let plausible = accounting.contains { term in
+                [term.replacement, term.pattern].contains {
+                    CorrectionGuess.confusable(swap.from, $0)
+                }
+            }
+            guard plausible else { return false }
         }
         return true
     }

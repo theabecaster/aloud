@@ -87,6 +87,9 @@ final class DictationController: ObservableObject {
     // harvestCorrection). One observation per injection: consumed when an
     // edit is captured, replaced by the next commit. Memory only.
     private var lastInjection: (text: String, bundleID: String, date: Date)?
+    // A correction has already been taken from that injection by the keystroke
+    // tracker; the accessibility read-back would only find the same edit again.
+    private var lastInjectionHarvested = false
     // Past this, the field has likely moved on for reasons that aren't
     // corrections — new drafts, other tools, another person's turn in a chat.
     private static let correctionCaptureWindow: TimeInterval = 15 * 60
@@ -253,6 +256,14 @@ final class DictationController: ObservableObject {
                 .sink { [weak self] hk in self?.hotkeyManager.commandHotkey = hk }
                 .store(in: &cancellables)
         }
+        // Switching the learning off has to take the watch down with it,
+        // rather than leaving a monitor running until it happens to expire.
+        settings.$learnCorrections
+            .sink { [weak self] on in
+                guard !on else { return }
+                self?.abandonEditTracking()
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: lifecycle
@@ -854,6 +865,10 @@ final class DictationController: ObservableObject {
                         endLiveTyping()
                         polishingCue.cancel()
                         playCue(.error)
+                        // This pill has something more urgent to say, and the
+                        // suggestion is already waiting in the menu — holding
+                        // the hint over would announce it a dictation late.
+                        suggestionHintPending = false
                         indicator.showHint(loc("%@ didn’t take the text — it’s in History",
                                                sessionApp.name ?? loc("That app")))
                         phase = .idle
@@ -891,6 +906,7 @@ final class DictationController: ObservableObject {
                 endLiveTyping()
                 polishingCue.cancel()
                 playCue(.error)
+                suggestionHintPending = false
                 indicator.showHint(loc("Couldn’t finish that dictation"))
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -937,6 +953,10 @@ final class DictationController: ObservableObject {
                         // with no text field would only beep.
                     } else if sessionTypingBlocked {
                         playCue(.error)
+                        // This pill has something more urgent to say, and the
+                        // suggestion is already waiting in the menu — holding
+                        // the hint over would announce it a dictation late.
+                        suggestionHintPending = false
                         indicator.showHint(loc("%@ didn’t take the text — it’s in History",
                                                sessionApp.name ?? loc("That app")))
                     } else {
@@ -970,6 +990,7 @@ final class DictationController: ObservableObject {
             } catch {
                 keepAudioBackup(samples)
                 playCue(.error)
+                suggestionHintPending = false
                 indicator.showHint(loc("Couldn’t transcribe that — try again"))
                 phase = .error(error.localizedDescription)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -1037,7 +1058,14 @@ final class DictationController: ObservableObject {
         guard settings.learnCorrections,
               let bundleID = sessionApp.bundleID,
               bundleID != AppPaths.bundleID else { return }
+        // Settle the outgoing injection while it is still the one on record:
+        // harvesting matches a positionless burst against `lastInjection`, so
+        // overwriting first would score the user's retype against words they
+        // never saw. Reachable from "Type Exact Words Instead" and from a
+        // retry, neither of which goes through a session start.
+        concludeEditTracking(reason: "superseded")
         lastInjection = (baseline, bundleID, Date())
+        lastInjectionHarvested = false
         Self.learningLog.notice("injection recorded app=\(bundleID, privacy: .public) chars=\(baseline.count)")
         armEditTracker(for: baseline, screenKnown: screenKnown)
     }
@@ -1048,7 +1076,6 @@ final class DictationController: ObservableObject {
     // one can't be (a click, a chord, a Return), the model degrades or ends
     // and, once ended, the monitor comes straight down.
     private func armEditTracker(for text: String, screenKnown: Bool = true) {
-        concludeEditTracking(reason: "superseded")
         editTrackerBaseline = text
         editTracker = EditTracker(injected: text)
         // Mid-session edits ended somewhere unknowable: exact replay against
@@ -1072,6 +1099,13 @@ final class DictationController: ObservableObject {
     }
 
     private func trackEdit(_ input: EditTracker.Input) {
+        // Switched off mid-window: stop watching this instant, and let nothing
+        // seen so far be learned. "Off" has to mean off from the moment it is
+        // set, not once the tracker happens to expire.
+        guard settings.learnCorrections else {
+            abandonEditTracking()
+            return
+        }
         guard let phase = editTracker?.phase, phase != .done else { return }
         let done = editTracker?.consume(input) == .done
         if done {
@@ -1140,8 +1174,11 @@ final class DictationController: ObservableObject {
         guard !unseen.isEmpty else { return }
         Self.learningLog.notice("edit tracker (\(reason, privacy: .public)): \(unseen.count) candidate(s), \(outcome.bursts.count) burst(s)")
         unseen.forEach { editTrackerLearned.insert(Self.pairKey($0)) }
-        // The read-back path must not rediscover an edit already counted here.
-        lastInjection = nil
+        // Marked, not cleared: a second fix moments later is still worth
+        // catching, and the tracker needs this text to match its next burst
+        // against. The read-back path reads the mark and stands down, so it
+        // can't rediscover what was already counted here.
+        lastInjectionHarvested = true
         learn(unseen, from: previous.text)
     }
 
@@ -1163,6 +1200,20 @@ final class DictationController: ObservableObject {
         harvestTrackedEdits(reason: reason)
         editTracker = nil
         editTrackerLearned = []
+    }
+
+    // Drop the watch without learning from it — the user withdrew consent.
+    func abandonEditTracking() {
+        editTrackerTimeout?.cancel()
+        editTrackerTimeout = nil
+        editTrackerIdle?.cancel()
+        editTrackerIdle = nil
+        if let monitor = editTrackerMonitor { NSEvent.removeMonitor(monitor) }
+        editTrackerMonitor = nil
+        editTracker = nil
+        editTrackerLearned = []
+        sessionAudit = nil
+        lastInjection = nil
     }
 
     // Shared tail of every capture path: retire inverses, count, and maybe
@@ -1208,6 +1259,10 @@ final class DictationController: ObservableObject {
             Self.learningLog.notice("harvest skipped: no prior injection")
             return
         }
+        guard !lastInjectionHarvested else {
+            Self.learningLog.notice("harvest skipped: the keystroke tracker already took this one")
+            return
+        }
         guard previous.bundleID == snapshot.appBundleID else {
             Self.learningLog.notice("harvest skipped: app changed \(previous.bundleID, privacy: .public) -> \(snapshot.appBundleID ?? "?", privacy: .public)")
             return
@@ -1231,10 +1286,10 @@ final class DictationController: ObservableObject {
                 guard let self else { return }
                 // The edit has been seen and judged — never count it twice.
                 // Unless a faster session already recorded a newer injection:
-                // this utility-priority hop can land late, and clearing
-                // unconditionally would throw that one's tracking away.
+                // this utility-priority hop can land late, and marking
+                // unconditionally would stand down on that one's tracking.
                 if self.lastInjection?.date == previous.date {
-                    self.lastInjection = nil
+                    self.lastInjectionHarvested = true
                 }
                 self.learn(CorrectionLearner.passiveCandidates(original: previous.text,
                                                                corrected: corrected),
