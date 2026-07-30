@@ -713,9 +713,12 @@ private struct SuggestionSummaryCell: View {
                 Text(loc("%ld suggested fixes", count))
                     .font(.callout.weight(.medium))
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                // No chevron: the row opens a panel of questions to answer,
+                // not a place to go, and the attention rows above it own that
+                // arrow for the things that really do take you somewhere.
+                Text(loc("Review"))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.aloud)
             }
             .contentShape(Rectangle())
             .padding(.horizontal, 10)

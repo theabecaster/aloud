@@ -12,6 +12,8 @@ final class LocalizationTests: XCTestCase {
     // onboarding, indicator, uninstall.
     private static let knownKeys = [
         "Suggested Fixes",
+        "Suggested",
+        "Corrections Aloud saw you make. Accept one and it joins the list below; decline and it won’t be suggested again.",
         "Review %ld suggested fixes",
         "Aloud noticed these corrections. Accepting one fixes that word automatically from now on.",
         "Quit Aloud",

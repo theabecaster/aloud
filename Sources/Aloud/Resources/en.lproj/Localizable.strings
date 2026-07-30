@@ -357,6 +357,10 @@
 
 /* Correction suggestions (menu bar cells + Settings — vocabulary) */
 "%ld suggested fixes" = "%ld suggested fixes";
+"Suggested" = "Suggested";
+"Review" = "Review";
+"Corrections Aloud saw you make. Accept one and it joins the list below; decline and it won’t be suggested again." = "Corrections Aloud saw you make. Accept one and it joins the list below; decline and it won’t be suggested again.";
+"Suggested: type “%1$@” instead of “%2$@”" = "Suggested: type “%1$@” instead of “%2$@”";
 "Review %ld suggested fixes" = "Review %ld suggested fixes";
 "Suggested Fixes" = "Suggested Fixes";
 "Aloud noticed these corrections. Accepting one fixes that word automatically from now on." = "Aloud noticed these corrections. Accepting one fixes that word automatically from now on.";
