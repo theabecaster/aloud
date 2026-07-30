@@ -61,6 +61,10 @@ final class CorrectionLearner: ObservableObject {
                                   corrected: String) -> [CorrectionDiff.Candidate] {
         CorrectionDiff.candidates(original: original, corrected: corrected)
             .filter { $0.from.lowercased() != $0.to.lowercased() }
+            // A correction respells the word that was heard; an edit that
+            // swaps it for something unrelated is the user writing, and
+            // most edits are exactly that (revisions, not corrections).
+            .filter { CorrectionGuess.confusable($0.from, $0.to) }
     }
 
     /// Feed candidates observed from one capture. Matching is case-insensitive
@@ -69,11 +73,19 @@ final class CorrectionLearner: ObservableObject {
     /// and pairs already covered by a standing replacement are ignored.
     /// Returns the suggestions that crossed `threshold` in THIS call, so the
     /// caller can surface a hint exactly once.
+    // A pending pair the user hasn't re-confirmed in this long was a one-off,
+    // not a habit; letting it linger means a stray edit from a month ago can
+    // combine with one today into a suggestion that reads as random.
+    static let pendingLifetime: TimeInterval = 30 * 24 * 3600
+
     @discardableResult
     func observe(_ candidates: [CorrectionDiff.Candidate],
                  settings: SettingsStore,
                  threshold: Int = 2) -> [Suggestion] {
         let now = Date()
+        suggestions.removeAll {
+            $0.status == .pending && now.timeIntervalSince($0.lastSeen) > Self.pendingLifetime
+        }
         var becameReady: [Suggestion] = []
         for candidate in candidates {
             // Correcting the *output* of a standing rule means that rule

@@ -21,6 +21,17 @@ import FluidAudio
 // proceeds unboosted; the regex pass still guarantees exact-pattern fixes, so
 // boosting can only ever add accuracy, never remove it.
 actor VocabularyBooster {
+    // Precision-first overrides of the SDK defaults, which are tuned to
+    // maximize recall on keyword-spotting benchmarks (see the SDK's own
+    // CustomVocabulary.md). A dictation app plants every false accept into
+    // the user's document — misses are recoverable, fabrications are not.
+    // -10 per-token spotter floor instead of the default -15 (the SDK's
+    // documented lenient extreme); similarity floored at 0.6 (their >100-term
+    // setting, strictest shipped); the flat acoustic head start capped at 3.
+    private static let minSpotterScore: Float = -10.0
+    private static let minTermSimilarity: Float = 0.6
+    private static let maxBoost: Float = 3.0
+
     private var models: CtcModels?
     private var tokenizer: CtcTokenizer?
     private var spotter: CtcKeywordSpotter?
@@ -51,16 +62,21 @@ actor VocabularyBooster {
         }
         do {
             let spotted = try await spotter.spotKeywordsWithLogProbs(
-                audioSamples: samples, customVocabulary: vocabulary, minScore: nil)
+                audioSamples: samples, customVocabulary: vocabulary,
+                minScore: Self.minSpotterScore)
             guard !spotted.logProbs.isEmpty else { return nil }
             let tuning = ContextBiasingConstants.rescorerConfig(forVocabSize: vocabulary.terms.count)
+            // The SDK's size-based tuning maximizes recall on keyword-spotting
+            // benchmarks; a dictation app plants every false accept into the
+            // user's document, so precision wins: similarity is floored, the
+            // flat acoustic head start capped.
             let output = rescorer.ctcTokenRescore(
                 transcript: text,
                 tokenTimings: tokenTimings,
                 logProbs: spotted.logProbs,
                 frameDuration: spotted.frameDuration,
-                cbw: tuning.cbw,
-                minSimilarity: tuning.minSimilarity)
+                cbw: min(tuning.cbw, Self.maxBoost),
+                minSimilarity: max(tuning.minSimilarity, Self.minTermSimilarity))
             guard output.wasModified else { return nil }
             // The acoustic score alone can misfire spectacularly — an
             // out-of-vocabulary name the model has never seen scores poorly
@@ -130,13 +146,21 @@ actor VocabularyBooster {
                 let ids = tokenizer.encode(r.replacement)
                 guard !ids.isEmpty else { return nil }
                 return CustomVocabularyTerm(text: r.replacement, aliases: [r.pattern],
-                                            ctcTokenIds: ids)
+                                            ctcTokenIds: ids,
+                                            minSimilarity: Self.minTermSimilarity)
             }
             guard !vocabTerms.isEmpty else { return }
             let vocab = CustomVocabularyContext(terms: vocabTerms)
             let spotter = CtcKeywordSpotter(models: models, blankId: models.vocabulary.count)
+            // The spotter-anchored acoustic rescue is the SDK's documented
+            // dominant source of over-firing on small vocabularies — it
+            // replaces text on acoustic score alone, no string similarity.
+            // Off entirely: their measurements show ~5× fewer false accepts
+            // at no recall cost on distinctive-name vocabularies, which is
+            // exactly what user replacements are.
             let rescorer = try await VocabularyRescorer.create(
                 spotter: spotter, vocabulary: vocab,
+                config: VocabularyRescorer.Config(spotterRescueEnabled: false),
                 ctcModelDirectory: CtcModels.defaultCacheDirectory())
             guard terms == targetTerms else { return }
             self.spotter = spotter

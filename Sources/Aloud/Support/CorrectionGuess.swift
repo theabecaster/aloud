@@ -59,6 +59,18 @@ enum CorrectionGuess {
         return CorrectionDiff.Candidate(from: best.phrase, to: to)
     }
 
+    /// Whether two spellings could plausibly be the same spoken word — the
+    /// mark of a correction as opposed to a rewrite. Generous on purpose
+    /// (similarity ≥ 0.35): real fixes span "Smith"→"Smyth" (0.8) down to
+    /// "colonel"→"kernel" (~0.4), while style substitutions like
+    /// "meeting"→"call" (0.14) sit far below.
+    static func confusable(_ a: String, _ b: String) -> Bool {
+        let x = a.lowercased(), y = b.lowercased()
+        guard !x.isEmpty, !y.isEmpty else { return false }
+        let limit = Int(Double(max(x.count, y.count)) * 0.65)
+        return editDistance(x, y, limit: limit) != nil
+    }
+
     // MARK: helpers
 
     // Same word shape CorrectionDiff uses: whitespace-split, surrounding

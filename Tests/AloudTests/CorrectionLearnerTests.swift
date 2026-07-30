@@ -94,6 +94,33 @@ final class CorrectionLearnerTests: XCTestCase {
         XCTAssertTrue(learner.suggestions.isEmpty, "a standing rule already covers the pair")
     }
 
+    func testStyleRewritesAreNotPassiveCandidates() {
+        // "meeting" → "call" is the user writing, not the user respelling
+        // what was heard; only confusable pairs survive.
+        let found = CorrectionLearner.passiveCandidates(
+            original: "set up a meeting with John Smith",
+            corrected: "set up a call with John Smyth")
+        XCTAssertEqual(found, [CorrectionDiff.Candidate(from: "Smith", to: "Smyth")])
+    }
+
+    func testStalePendingPairsDecayAway() throws {
+        // A pending pair last seen beyond the lifetime is forgotten by the
+        // next observation pass — a month-old stray edit can't pair with one
+        // today. Seed the store on disk the way persistence writes it.
+        let old = Date(timeIntervalSinceNow: -CorrectionLearner.pendingLifetime - 60)
+        let stale = CorrectionLearner.Suggestion(id: UUID(), from: "stale", to: "stail",
+                                                 count: 1, firstSeen: old, lastSeen: old,
+                                                 status: .pending)
+        try JSONEncoder().encode([stale]).write(to: fileURL)
+        let learner = CorrectionLearner(fileURL: fileURL)
+        learner.observe([candidate("other", "othr")], settings: settings)
+        XCTAssertFalse(learner.suggestions.contains { $0.from == "stale" })
+        // A fresh sighting after decay starts the count over.
+        let ready = learner.observe([candidate("stale", "stail")], settings: settings)
+        XCTAssertTrue(ready.isEmpty)
+        XCTAssertEqual(learner.suggestions.first { $0.from == "stale" }?.count, 1)
+    }
+
     func testCorrectingARuleOutputIsNeverANewRule() {
         // "DentAI" on screen came from the user's own vocabulary rule; the
         // user changing it means that rule (or the booster) misfired — a
