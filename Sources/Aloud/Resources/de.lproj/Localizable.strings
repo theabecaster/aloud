@@ -1,6 +1,9 @@
 /* Menu bar */
 "Relaunch to Finish Update" = "Neu starten, um das Update abzuschließen";
 "Finish Setup" = "Einrichtung abschließen";
+"Allow Microphone Access" = "Mikrofonzugriff erlauben";
+"Allow Accessibility Access" = "Bedienungshilfen-Zugriff erlauben";
+"Aloud can’t work until you allow access" = "Aloud funktioniert erst, wenn du den Zugriff erlaubst";
 "Download Voice Recognition" = "Spracherkennung laden";
 "Retry Voice Download" = "Sprachdownload erneut versuchen";
 "Improving accuracy…" = "Genauigkeit wird verbessert…";
@@ -8,6 +11,9 @@
 "Copy Last Text" = "Letzten Text kopieren";
 "Type It Again" = "Erneut eintippen";
 "Use Exact Words" = "Exakte Wörter verwenden";
+"Copy Last" = "Letztes kopieren";
+"Type Again" = "Erneut tippen";
+"Exact Words" = "Genaue Wörter";
 "Scratchpad" = "Notizzettel";
 "Settings" = "Einstellungen";
 "Update Available (%@)" = "Update verfügbar (%@)";
@@ -15,6 +21,7 @@
 "Quit Aloud" = "Aloud beenden";
 
 /* Menu bar status line */
+"Finish setting up Aloud" = "Einrichtung von Aloud abschließen";
 "Microphone access needed" = "Mikrofonzugriff erforderlich";
 "Accessibility access needed" = "Bedienungshilfen-Zugriff erforderlich";
 "Voice setup needed" = "Spracheinrichtung erforderlich";
@@ -78,6 +85,7 @@
 "This removes the app, the downloaded voice recognition, and all settings and history from this Mac. Nothing is left behind." = "Dies entfernt die App, die geladene Spracherkennung sowie alle Einstellungen und den Verlauf von diesem Mac. Es bleibt nichts zurück.";
 "Uninstall" = "Deinstallieren";
 "Uninstall Aloud" = "Aloud deinstallieren";
+"Remove Aloud and everything it stores on this Mac" = "Aloud und alles, was es auf diesem Mac speichert, entfernen";
 
 /* Settings sidebar */
 "General" = "Allgemein";
@@ -89,11 +97,10 @@
 "History" = "Verlauf";
 "About" = "Über";
 "Recent Dictations" = "Letzte Diktate";
+"All History" = "Ganzer Verlauf";
 "On this Mac" = "Auf diesem Mac";
-"More" = "Mehr";
 "Copied" = "Kopiert";
-"Permissions, microphone, and startup." = "Berechtigungen, Mikrofon und Start.";
-"Choose how you start dictating." = "Lege fest, wie du ein Diktat startest.";
+"Permissions, microphone, keys, and startup." = "Berechtigungen, Mikrofon, Tasten und Start.";
 "Control how Aloud hears and writes." = "Steuere, wie Aloud zuhört und schreibt.";
 "Teach Aloud the words that matter to you." = "Bringe Aloud die Wörter bei, die dir wichtig sind.";
 "Turn short phrases into text you use often." = "Verwandle kurze Phrasen in häufig verwendeten Text.";
@@ -108,18 +115,28 @@
 "Accessibility access" = "Bedienungshilfen-Zugriff";
 "Allowed" = "Erlaubt";
 "Open Settings" = "Einstellungen öffnen";
-"Without both, Aloud can’t hear you or type for you." = "Ohne beide kann Aloud dich weder hören noch für dich schreiben.";
+"Allow…" = "Erlauben…";
+"Aloud can’t hear you until this is on." = "Ohne das kann Aloud dich nicht hören.";
+"Aloud can’t type for you until this is on." = "Ohne das kann Aloud nicht für dich schreiben.";
 "Microphone" = "Mikrofon";
 "System default" = "Systemstandard";
 "Reduce background noise" = "Hintergrundgeräusche reduzieren";
-"Turn this on in a noisy room: it filters room noise, keyboard clatter, and sound from your Mac’s speakers before Aloud listens. Leave it off if your voice sounds thin with it on." = "Schalte es in einer lauten Umgebung ein: Es filtert Raumgeräusche, Tastaturgeklapper und den Ton der Mac-Lautsprecher heraus, bevor Aloud zuhört. Lass es aus, wenn deine Stimme damit dünn klingt.";
+"The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again." = "Der Filter arbeitet über die eingebauten Lautsprecher des Mac und pausiert daher, solange der Ton an %@ geht. Er kehrt — mitsamt deiner Einstellung — zurück, sobald die Lautsprecher wieder die Ausgabe sind.";
+"Not available with %@." = "Mit %@ nicht verfügbar.";
+"Getting ready…" = "Wird vorbereitet…";
+"%@ (Bluetooth)" = "%@ (Bluetooth)";
+"A Bluetooth mic puts the whole headset into mono call audio while Aloud listens." = "Ein Bluetooth-Mikrofon schaltet das ganze Headset auf Mono-Anrufton, solange Aloud zuhört.";
+"Your headphones are also your speakers, so Aloud listens through the built-in mic to keep their sound." = "Deine Kopfhörer sind auch deine Lautsprecher — Aloud hört über das eingebaute Mikrofon zu, damit ihr Klang bleibt.";
+"Where Aloud listens. System default follows the Mac." = "Wo Aloud zuhört. „Systemstandard“ folgt dem Mac.";
+"Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin." = "Filtert Raumgeräusche, Tastaturgeklapper und den Ton deiner Mac-Lautsprecher. Lass es aus, wenn deine Stimme dünn klingt.";
+"More info" = "Mehr Infos";
 "Sound when recording starts" = "Ton beim Start der Aufnahme";
 "Open Aloud at login" = "Aloud beim Anmelden öffnen";
 
 /* Settings — keys */
 "Dictation key" = "Diktiertaste";
-"Hands-free mode" = "Freisprechmodus";
 "Hands-free key" = "Freisprechtaste";
+"Optional. Double-press %@ to keep listening after you let go — Esc finishes and types everything." = "Optional. Drücke %@ zweimal, damit Aloud nach dem Loslassen weiter zuhört — Esc beendet und tippt alles.";
 "Remove the hands-free key" = "Freisprechtaste entfernen";
 "Command key" = "Befehlstaste";
 "Remove the command key" = "Befehlstaste entfernen";
@@ -134,6 +151,11 @@
 "Setting up full accuracy — almost done" = "Volle Genauigkeit wird eingerichtet – fast fertig";
 "Waiting for internet to finish setting up full accuracy" = "Warten auf Internetverbindung, um die volle Genauigkeit fertig einzurichten";
 "Clean-up" = "Bereinigung";
+"Clean-up: %@" = "Bereinigung: %@";
+"Your exact words" = "Deine genauen Wörter";
+"Drops filler words" = "Entfernt Füllwörter";
+"Fillers, spoken fixes, your words" = "Füllwörter, Korrekturen, deine Wörter";
+"Tightens the wording" = "Strafft die Formulierung";
 "The rewrite engine isn’t available right now — Standard clean-up is used instead." = "Die Umschreibefunktion ist gerade nicht verfügbar – stattdessen wird die Bereinigung „Standard“ verwendet.";
 "History always keeps your exact words." = "Der Verlauf behält immer deinen genauen Wortlaut.";
 "Languages" = "Sprachen";
@@ -204,6 +226,7 @@
 "Clear History" = "Verlauf löschen";
 "less than a minute ago" = "vor weniger als einer Minute";
 "Show original" = "Original einblenden";
+"Original" = "Original";
 "Hide original" = "Original ausblenden";
 "Fix" = "Korrigieren";
 "Correct this dictation and teach Aloud the right words" = "Dieses Diktat korrigieren und Aloud die richtigen Wörter beibringen";
@@ -289,9 +312,7 @@
 "Polishing…" = "Wird verfeinert …";
 "Kept your exact words — Aloud never rewrites here" = "Ihre exakten Worte wurden übernommen – Aloud formuliert hier nie um";
 "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier." = "%@ halten zum Sprechen, loslassen zum Tippen. Esc währenddessen bricht ab. Zusätzliche Maustasten funktionieren auch – allein oder mit einer Zusatztaste.";
-"Double-press %@ to keep listening after you let go. Esc finishes and types everything." = "%@ zweimal drücken, damit Aloud nach dem Loslassen weiter zuhört. Esc beendet und tippt alles.";
 "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "%1$@ drücken, um das Zuhören zu starten, dann Esc – oder erneut %1$@ – zum Beenden und Tippen. Zweimal %2$@ funktioniert weiterhin.";
-"Off — %@ only listens while you hold it." = "Aus – %@ hört nur zu, solange du sie hältst.";
 "Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Optional. Wähle eine Taste, halte sie und sag, was zu tun ist: markierten Text umschreiben oder übersetzen oder etwas Neues an der Einfügemarke schreiben.";
 "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "%@ halten und sagen, was zu tun ist: markierten Text umschreiben oder übersetzen oder etwas Neues an der Einfügemarke schreiben.";
 "Tip: press %@ to keep listening hands-free. Esc finishes." = "Tipp: %@ drücken, um freihändig weiterzudiktieren. Esc beendet.";
