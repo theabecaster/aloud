@@ -73,6 +73,13 @@ final class CorrectionLearner: ObservableObject {
     /// and pairs already covered by a standing replacement are ignored.
     /// Returns the suggestions that crossed `threshold` in THIS call, so the
     /// caller can surface a hint exactly once.
+    ///
+    /// One sighting is enough to ask. Waiting for a repeat reads as the app
+    /// ignoring a fix it plainly saw, and asking costs the user a glance at a
+    /// card they can wave off — a "no" is remembered forever, so a pair the
+    /// user doesn't want can only ever interrupt them once. What keeps this
+    /// from being noise is the gate upstream (`passiveCandidates`): only a
+    /// respelling of a word Aloud actually typed gets this far.
     // A pending pair the user hasn't re-confirmed in this long was a one-off,
     // not a habit; letting it linger means a stray edit from a month ago can
     // combine with one today into a suggestion that reads as random.
@@ -81,7 +88,7 @@ final class CorrectionLearner: ObservableObject {
     @discardableResult
     func observe(_ candidates: [CorrectionDiff.Candidate],
                  settings: SettingsStore,
-                 threshold: Int = 2) -> [Suggestion] {
+                 threshold: Int = 1) -> [Suggestion] {
         let now = Date()
         suggestions.removeAll {
             $0.status == .pending && now.timeIntervalSince($0.lastSeen) > Self.pendingLifetime

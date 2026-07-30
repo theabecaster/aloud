@@ -104,9 +104,19 @@ final class DictationController: ObservableObject {
     private var editTrackerBaseline = ""
     private var editTrackerMonitor: Any?
     private var editTrackerTimeout: Task<Void, Never>?
+    // Fires once editing has settled, so a fix is asked about while the user
+    // is still looking at it rather than a dictation later.
+    private var editTrackerIdle: Task<Void, Never>?
+    // Pairs already learned from the injection being tracked — the same fix
+    // must not be counted again by a later harvest of the same window.
+    private var editTrackerLearned: Set<String> = []
     // Long enough to fix a name at a thoughtful pace; short enough that the
     // observer never outstays the moment it exists for.
     private static let editTrackerWindow: TimeInterval = 90
+    // Quiet keyboard for this long means the correction is finished. Long
+    // enough to sit out the pauses inside one, short enough to still feel
+    // like a response to what the user just did.
+    private static let editSettleDelay: TimeInterval = 2.5
 
     // A failed dictation's audio is on disk and can be retried (menu item).
     @Published private(set) var retryAvailable = AudioBackup.exists
@@ -1059,12 +1069,22 @@ final class DictationController: ObservableObject {
 
     private func trackEdit(_ input: EditTracker.Input) {
         guard let phase = editTracker?.phase, phase != .done else { return }
-        if editTracker?.consume(input) == .done {
-            // The model is final — no point watching further keys. The result
-            // waits for its conclusion (next session or timeout).
+        let done = editTracker?.consume(input) == .done
+        if done {
+            // The model is final — no point watching further keys.
             if let monitor = editTrackerMonitor { NSEvent.removeMonitor(monitor) }
             editTrackerMonitor = nil
             Self.learningLog.notice("edit tracker done")
+        }
+        // A fix is worth asking about the moment it's made, not a dictation
+        // later — so learning runs as soon as editing settles rather than
+        // waiting for the window to close. Restarted on every key, so it
+        // fires once the user actually stops, mid-word pauses included.
+        editTrackerIdle?.cancel()
+        editTrackerIdle = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.editSettleDelay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.harvestTrackedEdits(reason: done ? "edit finished" : "editing settled")
         }
     }
 
@@ -1091,19 +1111,13 @@ final class DictationController: ObservableObject {
         }
     }
 
-    // Settle the tracked injection: tear the observer down and learn from
-    // whatever the tracker established — the exactly-replayed text, plus any
-    // typed bursts that fuzzy-match a single home in the injection. If
-    // neither yields anything, `lastInjection` stays put so the snapshot
-    // read-back still gets its chance in apps where it works.
-    private func concludeEditTracking(reason: String) {
-        editTrackerTimeout?.cancel()
-        editTrackerTimeout = nil
-        if let monitor = editTrackerMonitor { NSEvent.removeMonitor(monitor) }
-        editTrackerMonitor = nil
-        guard let tracker = editTracker else { return }
-        editTracker = nil
-        guard let previous = lastInjection else { return }
+    // Learn from what the tracker has established so far — the exactly-
+    // replayed text, plus any typed bursts that fuzzy-match a single home in
+    // the injection. Non-destructive: tracking continues, so a second fix a
+    // moment later is caught too, and pairs already learned in this window
+    // are never counted twice.
+    private func harvestTrackedEdits(reason: String) {
+        guard let tracker = editTracker, let previous = lastInjection else { return }
         let outcome = tracker.outcome
 
         var candidates: [CorrectionDiff.Candidate] = []
@@ -1118,10 +1132,33 @@ final class DictationController: ObservableObject {
                   }) else { continue }
             candidates.append(guess)
         }
-        guard !candidates.isEmpty else { return }
-        Self.learningLog.notice("edit tracker (\(reason, privacy: .public)): \(candidates.count) candidate(s), \(outcome.bursts.count) burst(s)")
+        let unseen = candidates.filter { !editTrackerLearned.contains(Self.pairKey($0)) }
+        guard !unseen.isEmpty else { return }
+        Self.learningLog.notice("edit tracker (\(reason, privacy: .public)): \(unseen.count) candidate(s), \(outcome.bursts.count) burst(s)")
+        unseen.forEach { editTrackerLearned.insert(Self.pairKey($0)) }
+        // The read-back path must not rediscover an edit already counted here.
         lastInjection = nil
-        learn(candidates, from: previous.text)
+        learn(unseen, from: previous.text)
+    }
+
+    private nonisolated static func pairKey(_ candidate: CorrectionDiff.Candidate) -> String {
+        "\(candidate.from.lowercased())→\(candidate.to.lowercased())"
+    }
+
+    // Settle the tracked injection for good: harvest anything still unlearned,
+    // then tear the observer down. When nothing was ever found, `lastInjection`
+    // stays put so the snapshot read-back still gets its chance in apps where
+    // it works.
+    private func concludeEditTracking(reason: String) {
+        editTrackerTimeout?.cancel()
+        editTrackerTimeout = nil
+        editTrackerIdle?.cancel()
+        editTrackerIdle = nil
+        if let monitor = editTrackerMonitor { NSEvent.removeMonitor(monitor) }
+        editTrackerMonitor = nil
+        harvestTrackedEdits(reason: reason)
+        editTracker = nil
+        editTrackerLearned = []
     }
 
     // Shared tail of every capture path: retire inverses, count, and maybe

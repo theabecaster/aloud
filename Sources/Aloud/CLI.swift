@@ -1015,13 +1015,21 @@ enum CLI {
             let learner = CorrectionLearner(fileURL: tmp.appendingPathComponent("corrections.json"))
             let first = learner.observe(candidates, settings: learnSettings)
             let second = learner.observe(candidates, settings: learnSettings)
-            expect(first.isEmpty && !second.isEmpty,
-                   "learning: a fix suggests only once it repeats")
+            expect(!first.isEmpty, "learning: a fix is suggested as soon as it is made")
+            expect(second.isEmpty, "learning: a suggestion is only announced once")
             if let ready = learner.readySuggestions.first {
                 learner.accept(ready, settings: learnSettings)
             }
             expect(learnSettings.replacements.contains { $0.learned && $0.replacement.contains("Smyth") },
                    "learning: accepting creates a learned replacement")
+            // Declining is remembered: that pair may never ask again.
+            let declined = [CorrectionDiff.Candidate(from: "marcus", to: "marcos")]
+            if let ready = learner.observe(declined, settings: learnSettings).first {
+                learner.dismiss(ready)
+            }
+            expect(learner.observe(declined, settings: learnSettings).isEmpty
+                   && learner.readySuggestions.isEmpty,
+                   "learning: a declined fix is never suggested again")
             d.removePersistentDomain(forName: learnSuite)
         } else { expect(false, "learning: settings suite") }
 

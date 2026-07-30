@@ -27,38 +27,54 @@ final class CorrectionLearnerTests: XCTestCase {
         CorrectionDiff.Candidate(from: from, to: to)
     }
 
+    func testFirstSightingAsksByDefault() {
+        // A fix the user just made is worth asking about immediately; a "no"
+        // is remembered forever, so an unwanted pair interrupts only once.
+        let learner = CorrectionLearner(fileURL: fileURL)
+        let first = learner.observe([candidate("jon", "Jon")], settings: settings)
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(first.first?.from, "jon")
+        XCTAssertEqual(learner.readySuggestions.count, 1)
+
+        // Already ready — a second sighting must not report it as newly ready.
+        let second = learner.observe([candidate("jon", "Jon")], settings: settings)
+        XCTAssertTrue(second.isEmpty)
+        XCTAssertEqual(learner.readySuggestions.first?.count, 2)
+    }
+
     func testThresholdPromotion() {
         let learner = CorrectionLearner(fileURL: fileURL)
 
-        let first = learner.observe([candidate("jon", "Jon")], settings: settings)
-        XCTAssertTrue(first.isEmpty, "one sighting is not a pattern")
+        let first = learner.observe([candidate("jon", "Jon")], settings: settings, threshold: 2)
+        XCTAssertTrue(first.isEmpty, "one sighting is not a pattern at this threshold")
         XCTAssertEqual(learner.suggestions.first?.status, .pending)
         XCTAssertTrue(learner.readySuggestions.isEmpty)
 
-        let second = learner.observe([candidate("jon", "Jon")], settings: settings)
+        let second = learner.observe([candidate("jon", "Jon")], settings: settings, threshold: 2)
         XCTAssertEqual(second.count, 1)
         XCTAssertEqual(second.first?.from, "jon")
         XCTAssertEqual(second.first?.to, "Jon")
         XCTAssertEqual(learner.readySuggestions.count, 1)
         XCTAssertEqual(learner.readySuggestions.first?.count, 2)
 
-        // Already ready — a third sighting must not report it as newly ready.
-        let third = learner.observe([candidate("jon", "Jon")], settings: settings)
+        let third = learner.observe([candidate("jon", "Jon")], settings: settings, threshold: 2)
         XCTAssertTrue(third.isEmpty)
         XCTAssertEqual(learner.readySuggestions.first?.count, 3)
     }
 
     func testMatchIsCaseInsensitiveAndToClampsToLatest() {
         let learner = CorrectionLearner(fileURL: fileURL)
-        learner.observe([candidate("shelly", "Chellie")], settings: settings)
-        let ready = learner.observe([candidate("Shelly", "chellie")], settings: settings)
-        XCTAssertEqual(ready.count, 1, "case-different from counts toward the same pair")
-        XCTAssertEqual(ready.first?.to, "chellie", "latest observed spelling wins")
+        let ready = learner.observe([candidate("shelly", "Chellie")], settings: settings)
+        XCTAssertEqual(ready.count, 1)
+        learner.observe([candidate("Shelly", "chellie")], settings: settings)
+        XCTAssertEqual(learner.readySuggestions.count, 1,
+                       "case-different from counts toward the same pair")
+        XCTAssertEqual(learner.readySuggestions.first?.to, "chellie",
+                       "latest observed spelling wins")
     }
 
     func testDismissIsSticky() {
         let learner = CorrectionLearner(fileURL: fileURL)
-        learner.observe([candidate("teh", "the")], settings: settings)
         let ready = learner.observe([candidate("teh", "the")], settings: settings)
         learner.dismiss(ready[0])
         XCTAssertTrue(learner.readySuggestions.isEmpty)
@@ -68,12 +84,11 @@ final class CorrectionLearnerTests: XCTestCase {
             XCTAssertTrue(again.isEmpty, "a dismissed pair never comes back")
         }
         XCTAssertTrue(learner.readySuggestions.isEmpty)
-        XCTAssertEqual(learner.suggestions.first?.count, 2, "counting stopped at dismissal")
+        XCTAssertEqual(learner.suggestions.first?.count, 1, "counting stopped at dismissal")
     }
 
     func testDismissSurvivesReload() {
         let learner = CorrectionLearner(fileURL: fileURL)
-        learner.observe([candidate("teh", "the")], settings: settings)
         let ready = learner.observe([candidate("teh", "the")], settings: settings)
         learner.dismiss(ready[0])
         waitForPersist()
@@ -117,7 +132,7 @@ final class CorrectionLearnerTests: XCTestCase {
         XCTAssertFalse(learner.suggestions.contains { $0.from == "stale" })
         // A fresh sighting after decay starts the count over.
         let ready = learner.observe([candidate("stale", "stail")], settings: settings)
-        XCTAssertTrue(ready.isEmpty)
+        XCTAssertEqual(ready.count, 1, "forgotten, so it reads as a first sighting")
         XCTAssertEqual(learner.suggestions.first { $0.from == "stale" }?.count, 1)
     }
 
@@ -136,7 +151,6 @@ final class CorrectionLearnerTests: XCTestCase {
 
     func testAcceptCreatesLearnedReplacementAndDropsSuggestion() {
         let learner = CorrectionLearner(fileURL: fileURL)
-        learner.observe([candidate("jon", "Jon")], settings: settings)
         let ready = learner.observe([candidate("jon", "Jon")], settings: settings)
         learner.accept(ready[0], settings: settings)
 
@@ -190,16 +204,15 @@ final class CorrectionLearnerTests: XCTestCase {
 
         let reloaded = CorrectionLearner(fileURL: fileURL)
         XCTAssertEqual(reloaded.suggestions, learner.suggestions)
-        XCTAssertEqual(reloaded.readySuggestions.count, 1)
-        XCTAssertEqual(reloaded.readySuggestions.first?.from, "jon")
+        XCTAssertEqual(reloaded.readySuggestions.count, 2)
+        XCTAssertEqual(Set(reloaded.readySuggestions.map(\.from)), ["jon", "teh"])
     }
 
     func testCapDropsOldestPendingFirst() {
         let learner = CorrectionLearner(fileURL: fileURL)
-        learner.observe([candidate("keeper", "Keeper")], settings: settings)
         learner.observe([candidate("keeper", "Keeper")], settings: settings)   // ready
         for i in 0..<CorrectionLearner.maxSuggestions {
-            learner.observe([candidate("word\(i)", "Word\(i)")], settings: settings)
+            learner.observe([candidate("word\(i)", "Word\(i)")], settings: settings, threshold: 2)
         }
         XCTAssertEqual(learner.suggestions.count, CorrectionLearner.maxSuggestions)
         XCTAssertEqual(learner.readySuggestions.first?.from, "keeper",
@@ -211,7 +224,6 @@ final class CorrectionLearnerTests: XCTestCase {
     func testResetDismissalsForgetsOnlyMatchingDismissedPairs() {
         let learner = CorrectionLearner(fileURL: fileURL)
         learner.observe([candidate("jon", "Jon"), candidate("acme", "ACME")], settings: settings)
-        learner.observe([candidate("jon", "Jon"), candidate("acme", "ACME")], settings: settings)
         for ready in learner.readySuggestions { learner.dismiss(ready) }
         learner.observe([candidate("bob", "Bob")], settings: settings)
 
@@ -222,12 +234,12 @@ final class CorrectionLearnerTests: XCTestCase {
                        "the matching dismissal is forgotten")
         XCTAssertEqual(learner.suggestions.first { $0.from == "acme" }?.status, .dismissed,
                        "an unrelated dismissal stays dismissed")
-        XCTAssertEqual(learner.suggestions.first { $0.from == "bob" }?.status, .pending,
+        XCTAssertEqual(learner.suggestions.first { $0.from == "bob" }?.status, .ready,
                        "a live pair with a different pattern is untouched")
 
         // A pattern matching only non-dismissed pairs removes nothing.
         learner.resetDismissals(matchingPattern: "bob")
-        XCTAssertEqual(learner.suggestions.first { $0.from == "bob" }?.status, .pending)
+        XCTAssertEqual(learner.suggestions.first { $0.from == "bob" }?.status, .ready)
 
         // The removal survives a reload.
         waitForPersist()

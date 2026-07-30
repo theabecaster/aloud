@@ -102,7 +102,7 @@ struct StatusMenuView: View {
         VStack(spacing: 0) {
             header
 
-            if !attentionActions.isEmpty || !pendingSuggestions.isEmpty {
+            if showsAttention {
                 attention
                 Divider()
             }
@@ -124,6 +124,13 @@ struct StatusMenuView: View {
     // off — the stored pairs stay put, but the questions go quiet with it.
     private var pendingSuggestions: [CorrectionLearner.Suggestion] {
         settings.learnCorrections ? learner.readySuggestions : []
+    }
+
+    // Whether anything sits above the quick actions — which decides whether
+    // they need their own top inset: the header brings its own breathing
+    // room, a divider does not.
+    private var showsAttention: Bool {
+        !attentionActions.isEmpty || !pendingSuggestions.isEmpty
     }
 
     private var header: some View {
@@ -360,6 +367,7 @@ struct StatusMenuView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
+            .padding(.top, showsAttention ? 10 : 0)
             .padding(.bottom, 4)
         }
     }
