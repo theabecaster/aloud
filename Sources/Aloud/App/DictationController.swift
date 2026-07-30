@@ -906,21 +906,22 @@ final class DictationController: ObservableObject {
     }
 
     private func trackEdit(_ input: EditTracker.Input) {
-        guard editTracker?.state == .tracking else { return }
-        if editTracker?.consume(input) == .frozen {
+        guard let phase = editTracker?.phase, phase != .done else { return }
+        if editTracker?.consume(input) == .done {
             // The model is final — no point watching further keys. The result
             // waits for its conclusion (next session or timeout).
             if let monitor = editTrackerMonitor { NSEvent.removeMonitor(monitor) }
             editTrackerMonitor = nil
-            Self.learningLog.debug("edit tracker froze")
+            Self.learningLog.debug("edit tracker done")
         }
     }
 
-    // Everything the replay model understands; the rest freezes it. Arrows
-    // carry the .function flag on macOS, so only command/control/option mark
-    // a chord.
+    // Everything the tracker understands. Mouse and ↑/↓/Home/End keep the
+    // model alive in its approximate phase; only chords and keys that can
+    // change text in untypeable ways end it. Arrows carry the .function flag
+    // on macOS, so only command/control/option mark a chord.
     private nonisolated static func trackerInput(from event: NSEvent) -> EditTracker.Input {
-        guard event.type == .keyDown else { return .other }
+        guard event.type == .keyDown else { return .click }
         let chord = event.modifierFlags.intersection([.command, .control, .option])
         guard chord.isEmpty else { return .other }
         let shifted = event.modifierFlags.contains(.shift)
@@ -929,17 +930,19 @@ final class DictationController: ObservableObject {
         case kVK_ForwardDelete: return .forwardDelete
         case kVK_LeftArrow: return shifted ? .shiftLeft : .left
         case kVK_RightArrow: return shifted ? .shiftRight : .right
-        case kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown,
-             kVK_Return, kVK_ANSI_KeypadEnter, kVK_Tab, kVK_Escape:
+        case kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown:
+            return .nav
+        case kVK_Return, kVK_ANSI_KeypadEnter, kVK_Tab, kVK_Escape:
             return .other
         default:
             return .text(event.characters ?? "")
         }
     }
 
-    // Settle the tracked injection: tear the observer down and, if the user
-    // provably edited the text, learn from the reconstruction. An untouched
-    // or never-usable model leaves `lastInjection` alone so the snapshot
+    // Settle the tracked injection: tear the observer down and learn from
+    // whatever the tracker established — the exactly-replayed text, plus any
+    // typed bursts that fuzzy-match a single home in the injection. If
+    // neither yields anything, `lastInjection` stays put so the snapshot
     // read-back still gets its chance in apps where it works.
     private func concludeEditTracking(reason: String) {
         editTrackerTimeout?.cancel()
@@ -948,16 +951,30 @@ final class DictationController: ObservableObject {
         editTrackerMonitor = nil
         guard let tracker = editTracker else { return }
         editTracker = nil
-        guard tracker.edited, let previous = lastInjection else { return }
-        Self.learningLog.info("edit tracker (\(reason, privacy: .public)): reconstructed an edit")
+        guard let previous = lastInjection else { return }
+        let outcome = tracker.outcome
+
+        var candidates: [CorrectionDiff.Candidate] = []
+        if outcome.exactEdited {
+            candidates += CorrectionLearner.passiveCandidates(original: previous.text,
+                                                              corrected: outcome.exactText)
+        }
+        for burst in outcome.bursts {
+            guard let guess = CorrectionGuess.candidate(injected: previous.text, typed: burst),
+                  !candidates.contains(where: {
+                      $0.from.caseInsensitiveCompare(guess.from) == .orderedSame
+                  }) else { continue }
+            candidates.append(guess)
+        }
+        guard !candidates.isEmpty else { return }
+        Self.learningLog.info("edit tracker (\(reason, privacy: .public)): \(candidates.count) candidate(s), \(outcome.bursts.count) burst(s)")
         lastInjection = nil
-        learn(original: previous.text, corrected: tracker.text)
+        learn(candidates)
     }
 
-    // Shared tail of both capture paths: diff, count, and maybe queue the
-    // one-time pill hint.
-    private func learn(original: String, corrected: String) {
-        let candidates = CorrectionLearner.passiveCandidates(original: original, corrected: corrected)
+    // Shared tail of every capture path: retire inverses, count, and maybe
+    // queue the one-time pill hint.
+    private func learn(_ candidates: [CorrectionDiff.Candidate]) {
         let fresh = CorrectionLearner.shared.filteringInverses(candidates, settings: settings)
         let ready = CorrectionLearner.shared.observe(fresh, settings: settings)
         Self.learningLog.info("learning: observed \(fresh.count), newly ready \(ready.count)")
@@ -1004,7 +1021,8 @@ final class DictationController: ObservableObject {
                 if self.lastInjection?.date == previous.date {
                     self.lastInjection = nil
                 }
-                self.learn(original: previous.text, corrected: corrected)
+                self.learn(CorrectionLearner.passiveCandidates(original: previous.text,
+                                                               corrected: corrected))
             }
         }
     }

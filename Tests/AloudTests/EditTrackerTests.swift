@@ -9,148 +9,213 @@ final class EditTrackerTests: XCTestCase {
         return tracker
     }
 
-    // MARK: replaying ordinary edits
+    // MARK: exact phase — replaying ordinary edits
 
     func testUntouchedIsNotEdited() {
         let t = track("say hi to John Smith", [])
-        XCTAssertEqual(t.state, .tracking)
-        XCTAssertFalse(t.edited)
+        XCTAssertEqual(t.phase, .exact)
+        XCTAssertFalse(t.outcome.exactEdited)
+        XCTAssertTrue(t.outcome.bursts.isEmpty)
     }
 
     func testBackspaceAndRetypeAtEnd() {
         let t = track("say hi to John Smith",
                       Array(repeating: .backspace, count: 5) + [.text("Smyth")])
-        XCTAssertEqual(t.text, "say hi to John Smyth")
-        XCTAssertTrue(t.edited)
-        XCTAssertEqual(t.state, .tracking)
+        XCTAssertEqual(t.outcome.exactText, "say hi to John Smyth")
+        XCTAssertTrue(t.outcome.exactEdited)
+        XCTAssertEqual(t.phase, .exact)
     }
 
     func testRetypingTheSameTextIsNotAnEdit() {
         let t = track("say hi to John Smith",
                       Array(repeating: .backspace, count: 5) + [.text("Smith")])
-        XCTAssertFalse(t.edited)
+        XCTAssertFalse(t.outcome.exactEdited)
     }
 
     func testArrowIntoMiddleAndForwardDelete() {
-        // "abcdef" → cursor to after "abc", forward-delete "d", type "D"
         let t = track("abcdef",
                       Array(repeating: .left, count: 3) + [.forwardDelete, .text("D")])
-        XCTAssertEqual(t.text, "abcDef")
-    }
-
-    func testCharactersArriveOneKeystrokeAtATime() {
-        let t = track("hi", [.text("!"), .text("!")])
-        XCTAssertEqual(t.text, "hi!!")
+        XCTAssertEqual(t.outcome.exactText, "abcDef")
     }
 
     func testShiftSelectionReplacedByTyping() {
         let t = track("John Smith",
                       Array(repeating: .shiftLeft, count: 5) + [.text("Smyth")])
-        XCTAssertEqual(t.text, "John Smyth")
+        XCTAssertEqual(t.outcome.exactText, "John Smyth")
     }
 
     func testShiftSelectionDeletedByBackspace() {
         let t = track("John Smith X",
                       Array(repeating: .shiftLeft, count: 2) + [.backspace])
-        XCTAssertEqual(t.text, "John Smith")
+        XCTAssertEqual(t.outcome.exactText, "John Smith")
     }
 
     func testPlainArrowCollapsesSelectionToItsEdge() {
-        // Select "th" backwards, then plain left collapses to the selection
-        // start; typing inserts there rather than replacing.
         let t = track("Smith",
                       [.shiftLeft, .shiftLeft, .left, .text("y")])
-        XCTAssertEqual(t.text, "Smiyth")
+        XCTAssertEqual(t.outcome.exactText, "Smiyth")
     }
 
     func testShiftBackAndForthLeavesNoSelection() {
-        // Selection dragged out and back to its anchor is no selection at
-        // all — the next backspace must delete one character, not a phantom
-        // selected range.
         let t = track("abc", [.shiftLeft, .shiftRight, .backspace])
-        XCTAssertEqual(t.text, "ab")
+        XCTAssertEqual(t.outcome.exactText, "ab")
     }
 
     func testGraphemeClusterDeletesAsOne() {
         let t = track("hi 👨‍👩‍👧‍👦", [.backspace])
-        XCTAssertEqual(t.text, "hi ")
+        XCTAssertEqual(t.outcome.exactText, "hi ")
     }
-
-    // MARK: freezing on anything unreplayable
-
-    func testClickFreezesButKeepsEditsSoFar() {
-        var t = track("John Smith",
-                      Array(repeating: .backspace, count: 5) + [.text("Smyth")])
-        XCTAssertEqual(t.consume(.other), .frozen)
-        XCTAssertEqual(t.text, "John Smyth")
-        XCTAssertTrue(t.edited)
-    }
-
-    func testFrozenModelIgnoresFurtherInput() {
-        var t = track("abc", [.other])
-        t.consume(.backspace)
-        t.consume(.text("x"))
-        XCTAssertEqual(t.text, "abc")
-        XCTAssertFalse(t.edited)
-    }
-
-    func testLeavingTheSpanFreezes() {
-        // Off the left edge…
-        var t = track("ab", [.left, .left])
-        XCTAssertEqual(t.consume(.left), .frozen)
-        // …off the right edge…
-        t = track("ab", [])
-        XCTAssertEqual(t.consume(.right), .frozen)
-        // …backspacing into text before the injection…
-        t = track("ab", [.left, .left])
-        XCTAssertEqual(t.consume(.backspace), .frozen)
-        // …and forward-deleting into text after it.
-        t = track("ab", [])
-        XCTAssertEqual(t.consume(.forwardDelete), .frozen)
-    }
-
-    func testShiftSelectionPastEdgesFreezes() {
-        var t = track("a", [.shiftLeft])
-        XCTAssertEqual(t.consume(.shiftLeft), .frozen)
-        t = track("a", [])
-        XCTAssertEqual(t.consume(.shiftRight), .frozen)
-    }
-
-    func testEmptyOrControlKeystrokeFreezes() {
-        // A dead key mid-compose or a function key delivers no insertable
-        // text; the field state is no longer knowable.
-        var t = track("abc", [])
-        XCTAssertEqual(t.consume(.text("")), .frozen)
-        t = track("abc", [])
-        XCTAssertEqual(t.consume(.text("\u{F700}")), .frozen)
-    }
-
-    func testEditsBeforeAFreezeStillCount() {
-        // Fix the name, then click elsewhere: the fix is real and kept.
-        var t = track("say hi to John Smith",
-                      Array(repeating: .backspace, count: 5) + [.text("Smyth")])
-        t.consume(.other)
-        XCTAssertEqual(t.text, "say hi to John Smyth")
-        XCTAssertTrue(t.edited)
-    }
-
-    // MARK: realistic correction shapes
 
     func testFixingAWordInTheMiddle() {
-        // "meet at the cafe tomorrow" → select "cafe" backwards from just
-        // after it and retype.
         let t = track("meet at the cafe tomorrow",
-                      Array(repeating: .left, count: 9)      // cursor after "cafe"
+                      Array(repeating: .left, count: 9)
                       + Array(repeating: .shiftLeft, count: 4)
                       + [.text("café")])
-        XCTAssertEqual(t.text, "meet at the café tomorrow")
+        XCTAssertEqual(t.outcome.exactText, "meet at the café tomorrow")
+    }
+
+    // MARK: demoting to approximate instead of giving up
+
+    func testClickDemotesAndKeepsExactEditsSoFar() {
+        let t = track("John Smith",
+                      Array(repeating: .backspace, count: 5) + [.text("Smyth"), .click])
+        XCTAssertEqual(t.phase, .approximate)
+        XCTAssertEqual(t.outcome.exactText, "John Smyth")
+        XCTAssertTrue(t.outcome.exactEdited)
+    }
+
+    func testTypingAfterAClickBecomesABurst() {
+        let t = track("say hi to John Smith", [.click, .text("S"), .text("myth")])
+        XCTAssertEqual(t.outcome.bursts, ["Smyth"])
+        XCTAssertFalse(t.outcome.exactEdited)
+    }
+
+    func testBackspaceInsideABurstEditsTheBurst() {
+        let t = track("John Smith", [.click, .text("Smytj"), .backspace, .text("h")])
+        XCTAssertEqual(t.outcome.bursts, ["Smyth"])
+    }
+
+    func testBackspacePastTheBurstIsHarmless() {
+        // Deleting selection remnants before typing: the burst is content,
+        // not position, so unknown deletions cost nothing.
+        let t = track("John Smith", [.click, .backspace, .backspace, .text("Smyth")])
+        XCTAssertEqual(t.outcome.bursts, ["Smyth"])
+    }
+
+    func testCursorJumpsSeparateBursts() {
+        let t = track("meet Jon at the cafe",
+                      [.click, .text("John"), .click, .text("café")])
+        XCTAssertEqual(t.outcome.bursts, ["John", "café"])
+    }
+
+    func testArrowsActAsBurstSeparatorsWhenApproximate() {
+        let t = track("abc def", [.nav, .text("one"), .left, .text("two")])
+        XCTAssertEqual(t.outcome.bursts, ["one", "two"])
+    }
+
+    func testLeavingTheSpanDemotesRatherThanEnds() {
+        var t = track("ab", [.left, .left])
+        XCTAssertEqual(t.consume(.left), .approximate)
+        t = track("ab", [])
+        XCTAssertEqual(t.consume(.right), .approximate)
+        t = track("ab", [.left, .left])
+        XCTAssertEqual(t.consume(.backspace), .approximate)
+        t = track("ab", [])
+        XCTAssertEqual(t.consume(.forwardDelete), .approximate)
+    }
+
+    // MARK: ending outright on the unknowable
+
+    func testChordEndsTrackingAndKeepsEverything() {
+        var t = track("John Smith",
+                      Array(repeating: .backspace, count: 5)
+                      + [.text("Smyth"), .click, .text("café")])
+        XCTAssertEqual(t.consume(.other), .done)
+        XCTAssertEqual(t.outcome.exactText, "John Smyth")
+        XCTAssertEqual(t.outcome.bursts, ["café"])
+        t.consume(.text("ignored"))
+        XCTAssertEqual(t.outcome.bursts, ["café"])
+    }
+
+    func testDeadKeyEndsTrackingInEitherPhase() {
+        var t = track("abc", [])
+        XCTAssertEqual(t.consume(.text("")), .done)
+        t = track("abc", [.click])
+        XCTAssertEqual(t.consume(.text("\u{F700}")), .done)
+    }
+
+    func testBurstCapEndsTracking() {
+        var inputs: [EditTracker.Input] = [.click]
+        for i in 0..<EditTracker.maxBursts {
+            inputs += [.text("word\(i)"), .click]
+        }
+        let t = track("some dictated text", inputs)
+        XCTAssertEqual(t.phase, .done)
+        XCTAssertEqual(t.outcome.bursts.count, EditTracker.maxBursts)
     }
 
     func testAppendingMoreTextIsAnEditButPureInsertion() {
-        // The tracker reports it; downstream diffing decides no vocabulary
-        // pair comes out of a pure insertion.
         let t = track("hello", [.text(" there")])
-        XCTAssertEqual(t.text, "hello there")
-        XCTAssertTrue(t.edited)
+        XCTAssertEqual(t.outcome.exactText, "hello there")
+        XCTAssertTrue(t.outcome.exactEdited)
+    }
+}
+
+final class CorrectionGuessTests: XCTestCase {
+
+    func testUniqueNearMatchIsTheReplacedWord() {
+        let c = CorrectionGuess.candidate(injected: "say hi to John Smith for me", typed: "Smyth")
+        XCTAssertEqual(c, CorrectionDiff.Candidate(from: "Smith", to: "Smyth"))
+    }
+
+    func testUnrelatedTypingMatchesNothing() {
+        XCTAssertNil(CorrectionGuess.candidate(injected: "say hi to John Smith", typed: "banana"))
+    }
+
+    func testRetypingAnExistingWordIsNoCorrection() {
+        XCTAssertNil(CorrectionGuess.candidate(injected: "say hi to John Smith", typed: "Smith"))
+        // Case-only difference is sentence position, not vocabulary.
+        XCTAssertNil(CorrectionGuess.candidate(injected: "say hi to John Smith", typed: "smith"))
+    }
+
+    func testTwoEquallyCloseHomesMeansNoGuess() {
+        XCTAssertNil(CorrectionGuess.candidate(injected: "the bat saw the cat", typed: "rat"))
+    }
+
+    func testCloserHomeWinsOverFartherOne() {
+        // Both surnames are within tolerance for their length; the closer
+        // one is the only sensible home.
+        let c = CorrectionGuess.candidate(injected: "ask Gonzalez or Gonzalvo", typed: "Gonzales")
+        XCTAssertEqual(c?.from, "Gonzalez")
+    }
+
+    func testMultiWordPhraseMatches() {
+        let c = CorrectionGuess.candidate(injected: "email Jon Smith about the deck", typed: "John Smyth")
+        XCTAssertEqual(c, CorrectionDiff.Candidate(from: "Jon Smith", to: "John Smyth"))
+    }
+
+    func testTinyBurstsNeverMatch() {
+        XCTAssertNil(CorrectionGuess.candidate(injected: "say hi to it", typed: "at"))
+    }
+
+    func testDistanceScalesWithLengthNotGenerosity() {
+        // "the" → "there" is 2 edits on a 3-letter word: new writing, not a fix.
+        XCTAssertNil(CorrectionGuess.candidate(injected: "put the box down", typed: "there"))
+    }
+
+    func testLongBurstsAreNewWritingNotFixes() {
+        let essay = String(repeating: "reconsidering ", count: 6)
+        XCTAssertNil(CorrectionGuess.candidate(injected: "a short note", typed: essay))
+    }
+
+    func testPunctuationAroundTheBurstIsIgnored() {
+        let c = CorrectionGuess.candidate(injected: "call Marc tomorrow", typed: "Mark,")
+        XCTAssertEqual(c, CorrectionDiff.Candidate(from: "Marc", to: "Mark"))
+    }
+
+    func testRepeatedWordStillMatchesWhenBothHomesAgree() {
+        // Two homes with the same surface are one answer, not an ambiguity.
+        let c = CorrectionGuess.candidate(injected: "Smith called Smith back", typed: "Smyth")
+        XCTAssertEqual(c?.from, "Smith")
     }
 }

@@ -945,6 +945,12 @@ enum CLI {
                    "learning: the edit becomes a vocabulary candidate")
             expect(!candidates.contains { $0.from.lowercased() == $0.to.lowercased() },
                    "learning: sentence-position casing is never a candidate")
+            // The mouse path: a word retyped at an unknown position finds
+            // its one home in the injection — and refuses to guess between two.
+            expect(CorrectionGuess.candidate(injected: injected, typed: "Smyth")?.from == "smith",
+                   "learning: a retyped word is matched to the word it replaced")
+            expect(CorrectionGuess.candidate(injected: "the bat saw the cat", typed: "rat") == nil,
+                   "learning: an ambiguous retype is never guessed at")
             let learner = CorrectionLearner(fileURL: tmp.appendingPathComponent("corrections.json"))
             let first = learner.observe(candidates, settings: learnSettings)
             let second = learner.observe(candidates, settings: learnSettings)
