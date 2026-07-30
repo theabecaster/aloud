@@ -40,6 +40,8 @@ final class DictationController: ObservableObject {
     private var liveUpdatesTask: Task<Void, Never>?
     private let liveTyper = LiveTyper()
     private var mouseMonitor: Any?
+    // Mid-dictation correction watch — see SessionEditAudit.
+    private var sessionAudit: SessionEditAudit?
 
     // Test-observable last result (used by the "Try it" onboarding step too).
     @Published private(set) var lastTranscription: String = ""
@@ -81,6 +83,9 @@ final class DictationController: ObservableObject {
     // even in apps whose accessibility trees expose nothing to read back
     // (see EditTracker). Armed per injection, disarmed by conclusion.
     private var editTracker: EditTracker?
+    // What the tracker's exact replay runs against — the real screen text,
+    // which is not the canonical result once mid-session edits happened.
+    private var editTrackerBaseline = ""
     private var editTrackerMonitor: Any?
     private var editTrackerTimeout: Task<Void, Never>?
     // Long enough to fix a name at a thoughtful pace; short enough that the
@@ -595,13 +600,21 @@ final class DictationController: ObservableObject {
         // screen be, keep dictating at the new cursor position. Aloud's own
         // synthetic keystrokes are stamped and ignored; Esc and a non-modifier
         // hotkey are session control, not editing.
+        sessionAudit = (settings.learnCorrections && !sessionTargetIsSelf) ? SessionEditAudit() : nil
         let hotkey = settings.hotkey
         let handsFreeKey = settings.handsFreeHotkey
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
             let isKeystroke = event.type == .keyDown
+            let input = Self.trackerInput(from: event)
+            if isKeystroke,
+               event.cgEvent?.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.marker {
+                // Aloud's own typing: not a reason to rebase, but the audit
+                // needs it to know what the field would hold on its own.
+                Task { @MainActor in self?.sessionAudit?.consumeSynthetic(input) }
+                return
+            }
             if isKeystroke {
-                if event.cgEvent?.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.marker { return }
                 if event.keyCode == UInt16(kVK_Escape) || event.keyCode == hotkey.keyCode { return }
                 if let hk = handsFreeKey, !hk.isMouseButton, event.keyCode == hk.keyCode { return }
             }
@@ -613,6 +626,7 @@ final class DictationController: ObservableObject {
             }
             Task { @MainActor in
                 guard let self else { return }
+                self.sessionAudit?.consumeUser(input)
                 if isKeystroke { self.lastUserKeystroke = Date() }
                 self.liveTyper.rebase()
             }
@@ -661,6 +675,9 @@ final class DictationController: ObservableObject {
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
         mouseMonitor = nil
         liveTyper.reset()
+        // A committed session already settled its audit; on every abandoned
+        // path what was watched is discarded, never learned.
+        sessionAudit = nil
     }
 
     // Live commit: the streaming session was only ever a preview. The final
@@ -749,7 +766,7 @@ final class DictationController: ObservableObject {
                     await waitForUserEditQuiet()
                     liveTyper.apply(text)
                     recordUndoState(typed: text, verbatim: raw, enhanced: enhanced, sent: sendReturn)
-                    recordInjection(text)
+                    settleSessionLearning(canonical: text)
                     history.append(HistoryEntry(text: text, rawText: raw, duration: duration,
                                                 appName: sessionApp.name, appBundleID: sessionApp.bundleID,
                                                 languageCode: LanguageDetection.code(for: raw)),
@@ -871,26 +888,61 @@ final class DictationController: ObservableObject {
     // unified log only; counts and app IDs, never the text itself.
     private nonisolated static let learningLog = Logger(subsystem: AppPaths.bundleID, category: "learning")
 
+    // A live session's learning settles in two parts: whatever the audit saw
+    // the user change mid-dictation is learned now, and the post-commit
+    // tracker is armed against the field's real final text — which is the
+    // canonical result only when the user never touched the screen.
+    // Deferred one hop so monitor events already in flight land first.
+    private func settleSessionLearning(canonical: String) {
+        let audit = sessionAudit
+        sessionAudit = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var baseline = canonical
+            var screenKnown = true
+            if let audit, audit.userTouched {
+                let conclusion = audit.conclude()
+                if !conclusion.candidates.isEmpty {
+                    Self.learningLog.notice("session audit: \(conclusion.candidates.count) candidate(s) from mid-dictation edits")
+                    self.learn(conclusion.candidates, from: canonical)
+                }
+                if let screen = conclusion.screenText {
+                    baseline = screen
+                } else {
+                    screenKnown = false
+                }
+            }
+            self.recordInjection(baseline, canonical: canonical, screenKnown: screenKnown)
+        }
+    }
+
     // Remember what just landed so the next session can read back what the
     // user made of it. Only real targets count: our own windows re-render
     // text instead of keeping a field, so there is nothing to read back.
-    private func recordInjection(_ text: String) {
+    // `baseline` is what is actually on screen; `canonical` what Aloud
+    // produced — they differ when the user edited mid-dictation.
+    private func recordInjection(_ baseline: String, canonical: String? = nil,
+                                 screenKnown: Bool = true) {
         guard settings.learnCorrections,
               let bundleID = sessionApp.bundleID,
               bundleID != AppPaths.bundleID else { return }
-        lastInjection = (text, bundleID, Date())
-        Self.learningLog.debug("injection recorded app=\(bundleID, privacy: .public) chars=\(text.count)")
-        armEditTracker(for: text)
+        lastInjection = (canonical ?? baseline, bundleID, Date())
+        Self.learningLog.notice("injection recorded app=\(bundleID, privacy: .public) chars=\(baseline.count)")
+        armEditTracker(for: baseline, screenKnown: screenKnown)
     }
 
     // Start replaying the user's editing keys against the text just typed.
     // The monitor exists for at most `editTrackerWindow` seconds and its
     // events are interpreted only against Aloud's own injection; the moment
-    // one can't be (a click, a chord, a Return), the model freezes and the
-    // monitor comes straight down.
-    private func armEditTracker(for text: String) {
+    // one can't be (a click, a chord, a Return), the model degrades or ends
+    // and, once ended, the monitor comes straight down.
+    private func armEditTracker(for text: String, screenKnown: Bool = true) {
         concludeEditTracking(reason: "superseded")
+        editTrackerBaseline = text
         editTracker = EditTracker(injected: text)
+        // Mid-session edits ended somewhere unknowable: exact replay against
+        // any baseline would be fiction, but positionless bursts still match.
+        if !screenKnown { editTracker?.consume(.nav) }
         editTrackerMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             if event.type == .keyDown,
@@ -912,7 +964,7 @@ final class DictationController: ObservableObject {
             // waits for its conclusion (next session or timeout).
             if let monitor = editTrackerMonitor { NSEvent.removeMonitor(monitor) }
             editTrackerMonitor = nil
-            Self.learningLog.debug("edit tracker done")
+            Self.learningLog.notice("edit tracker done")
         }
     }
 
@@ -956,7 +1008,7 @@ final class DictationController: ObservableObject {
 
         var candidates: [CorrectionDiff.Candidate] = []
         if outcome.exactEdited {
-            candidates += CorrectionLearner.passiveCandidates(original: previous.text,
+            candidates += CorrectionLearner.passiveCandidates(original: editTrackerBaseline,
                                                               corrected: outcome.exactText)
         }
         for burst in outcome.bursts {
@@ -967,17 +1019,22 @@ final class DictationController: ObservableObject {
             candidates.append(guess)
         }
         guard !candidates.isEmpty else { return }
-        Self.learningLog.info("edit tracker (\(reason, privacy: .public)): \(candidates.count) candidate(s), \(outcome.bursts.count) burst(s)")
+        Self.learningLog.notice("edit tracker (\(reason, privacy: .public)): \(candidates.count) candidate(s), \(outcome.bursts.count) burst(s)")
         lastInjection = nil
-        learn(candidates)
+        learn(candidates, from: previous.text)
     }
 
     // Shared tail of every capture path: retire inverses, count, and maybe
-    // queue the one-time pill hint.
-    private func learn(_ candidates: [CorrectionDiff.Candidate]) {
-        let fresh = CorrectionLearner.shared.filteringInverses(candidates, settings: settings)
+    // queue the one-time pill hint. `original` is what Aloud actually
+    // produced — a pair whose `from` never appeared in it corrects the
+    // user's own words, not ours, and is no rule to learn.
+    private func learn(_ candidates: [CorrectionDiff.Candidate], from original: String) {
+        let source = original.lowercased()
+        let plausible = candidates.filter { source.contains($0.from.lowercased()) }
+        guard !plausible.isEmpty else { return }
+        let fresh = CorrectionLearner.shared.filteringInverses(plausible, settings: settings)
         let ready = CorrectionLearner.shared.observe(fresh, settings: settings)
-        Self.learningLog.info("learning: observed \(fresh.count), newly ready \(ready.count)")
+        Self.learningLog.notice("learning: observed \(fresh.count), newly ready \(ready.count)")
         if !ready.isEmpty { suggestionHintPending = true }
     }
 
@@ -990,28 +1047,28 @@ final class DictationController: ObservableObject {
     private func harvestCorrection(from snapshot: FocusSnapshot) {
         guard settings.learnCorrections else { return }
         guard let previous = lastInjection else {
-            Self.learningLog.debug("harvest skipped: no prior injection")
+            Self.learningLog.notice("harvest skipped: no prior injection")
             return
         }
         guard previous.bundleID == snapshot.appBundleID else {
-            Self.learningLog.debug("harvest skipped: app changed \(previous.bundleID, privacy: .public) -> \(snapshot.appBundleID ?? "?", privacy: .public)")
+            Self.learningLog.notice("harvest skipped: app changed \(previous.bundleID, privacy: .public) -> \(snapshot.appBundleID ?? "?", privacy: .public)")
             return
         }
         guard Date().timeIntervalSince(previous.date) < Self.correctionCaptureWindow else {
-            Self.learningLog.debug("harvest skipped: injection too old")
+            Self.learningLog.notice("harvest skipped: injection too old")
             return
         }
         guard let fieldText = snapshot.fieldText else {
-            Self.learningLog.info("harvest skipped: no field text from \(snapshot.appBundleID ?? "?", privacy: .public) — app exposes no readable AX value")
+            Self.learningLog.notice("harvest skipped: no field text from \(snapshot.appBundleID ?? "?", privacy: .public) — app exposes no readable AX value")
             return
         }
         Task.detached(priority: .utility) { [weak self] in
             guard let corrected = CorrectionCapture.editedSpan(injected: previous.text,
                                                                fieldText: fieldText) else {
-                Self.learningLog.debug("harvest: no edited span (unchanged, clipped, ambiguous, or rewritten) injected=\(previous.text.count) field=\(fieldText.count) chars")
+                Self.learningLog.notice("harvest: no edited span (unchanged, clipped, ambiguous, or rewritten) injected=\(previous.text.count) field=\(fieldText.count) chars")
                 return
             }
-            Self.learningLog.info("harvest: edited span found")
+            Self.learningLog.notice("harvest: edited span found")
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 // The edit has been seen and judged — never count it twice.
@@ -1022,7 +1079,8 @@ final class DictationController: ObservableObject {
                     self.lastInjection = nil
                 }
                 self.learn(CorrectionLearner.passiveCandidates(original: previous.text,
-                                                               corrected: corrected))
+                                                               corrected: corrected),
+                           from: previous.text)
             }
         }
     }
