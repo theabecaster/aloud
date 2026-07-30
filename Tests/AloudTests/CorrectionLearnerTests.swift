@@ -94,6 +94,19 @@ final class CorrectionLearnerTests: XCTestCase {
         XCTAssertTrue(learner.suggestions.isEmpty, "a standing rule already covers the pair")
     }
 
+    func testCorrectingARuleOutputIsNeverANewRule() {
+        // "DentAI" on screen came from the user's own vocabulary rule; the
+        // user changing it means that rule (or the booster) misfired — a
+        // suggestion to rewrite DentAI would corrupt every legitimate use.
+        settings.replacements = [Replacement(pattern: "Dente Eye", replacement: "DentAI")]
+        let learner = CorrectionLearner(fileURL: fileURL)
+        for _ in 0..<3 {
+            let ready = learner.observe([candidate("DentAI", "Smyth")], settings: settings)
+            XCTAssertTrue(ready.isEmpty)
+        }
+        XCTAssertTrue(learner.suggestions.isEmpty)
+    }
+
     func testAcceptCreatesLearnedReplacementAndDropsSuggestion() {
         let learner = CorrectionLearner(fileURL: fileURL)
         learner.observe([candidate("jon", "Jon")], settings: settings)

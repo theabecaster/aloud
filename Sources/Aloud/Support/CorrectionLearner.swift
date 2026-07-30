@@ -76,6 +76,13 @@ final class CorrectionLearner: ObservableObject {
         let now = Date()
         var becameReady: [Suggestion] = []
         for candidate in candidates {
+            // Correcting the *output* of a standing rule means that rule
+            // misfired on this dictation — a problem for the rule (or the
+            // booster behind it), never grounds for a new rule that would
+            // rewrite the term everywhere it legitimately appears.
+            if settings.replacements.contains(where: {
+                $0.replacement.caseInsensitiveCompare(candidate.from) == .orderedSame
+            }) { continue }
             if settings.replacements.contains(where: {
                 $0.pattern.caseInsensitiveCompare(candidate.from) == .orderedSame
             }) { continue }

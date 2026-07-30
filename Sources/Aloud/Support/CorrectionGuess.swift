@@ -73,8 +73,9 @@ enum CorrectionGuess {
     }
 
     // Levenshtein with a cutoff: nil the moment the distance must exceed
-    // `limit`. Inputs here are a few dozen characters at most.
-    private static func editDistance(_ a: String, _ b: String, limit: Int) -> Int? {
+    // `limit`. Inputs here are a few dozen characters at most. Internal —
+    // the vocabulary booster's plausibility gate leans on the same measure.
+    static func editDistance(_ a: String, _ b: String, limit: Int) -> Int? {
         let x = Array(a), y = Array(b)
         if abs(x.count - y.count) > limit { return nil }
         var previous = Array(0...y.count)

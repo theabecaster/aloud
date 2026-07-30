@@ -61,7 +61,15 @@ actor VocabularyBooster {
                 frameDuration: spotted.frameDuration,
                 cbw: tuning.cbw,
                 minSimilarity: tuning.minSimilarity)
-            return output.wasModified ? output.text : nil
+            guard output.wasModified else { return nil }
+            // The acoustic score alone can misfire spectacularly — an
+            // out-of-vocabulary name the model has never seen scores poorly
+            // as itself and a boosted term wins by default, planting a
+            // vocabulary word over something that sounds nothing like it.
+            // Only accept a rescore whose every swap is textually plausible.
+            guard Self.plausibleRescore(original: text, rescored: output.text,
+                                        terms: terms) else { return nil }
+            return output.text
         } catch {
             return nil
         }
@@ -71,6 +79,30 @@ actor VocabularyBooster {
     // characters anyway, so filter to what can actually take effect.
     private func usable(_ terms: [Replacement]) -> [Replacement] {
         terms.filter { $0.replacement.trimmingCharacters(in: .whitespaces).count >= 3 }
+    }
+
+    // A rescore is believed only when every word it swapped could actually be
+    // confused, in writing, with the term that replaced it — either with the
+    // term itself or with its alias, the misspelling this voice is known to
+    // produce for it. Acoustic evidence proposes; text disposes. One
+    // implausible swap rejects the whole rescore: a transcript that needed
+    // that swap to happen was scored on the wrong footing throughout.
+    static func plausibleRescore(original: String, rescored: String,
+                                 terms: [Replacement]) -> Bool {
+        let swaps = CorrectionDiff.candidates(original: original, corrected: rescored)
+        for swap in swaps {
+            guard let term = terms.first(where: {
+                swap.to.range(of: $0.replacement, options: .caseInsensitive) != nil
+            }) else { return false }   // changed something no term accounts for
+            let from = swap.from.lowercased()
+            let confusable = [term.replacement, term.pattern].contains { target in
+                let t = target.lowercased()
+                let allowed = max(2, min(from.count, t.count) / 3)
+                return CorrectionGuess.editDistance(from, t, limit: allowed) != nil
+            }
+            guard confusable else { return false }
+        }
+        return true
     }
 
     private func scheduleRebuild(for terms: [Replacement]) {
