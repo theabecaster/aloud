@@ -11,6 +11,9 @@ final class LocalizationTests: XCTestCase {
     // A spread of keys across surfaces: menu bar, status line, settings,
     // onboarding, indicator, uninstall.
     private static let knownKeys = [
+        "Suggested Fixes",
+        "Review %ld suggested fixes",
+        "Aloud noticed these corrections. Accepting one fixes that word automatically from now on.",
         "Quit Aloud",
         "Hold %@ to dictate",
         "Welcome to Aloud",

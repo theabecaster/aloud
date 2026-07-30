@@ -6,6 +6,11 @@ import SwiftUI
 extension Notification.Name {
     /// Posted by Settings › About; the delegate runs the check and any install.
     static let aloudCheckForUpdates = Notification.Name("AloudCheckForUpdates")
+    /// Posted by the status menu around a popover of its own (`object` is a
+    /// Bool: shown). A transient popover closes the moment another window
+    /// takes an event, which would take the whole menu down on the first
+    /// click inside that child — so it stops being transient while one is up.
+    static let aloudStatusMenuModal = Notification.Name("AloudStatusMenuModal")
 }
 
 // Menu bar app: NSStatusItem + menu, onboarding/settings windows, silent
@@ -122,6 +127,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NotificationCenter.default.addObserver(forName: .aloudCheckForUpdates,
                                                object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkForUpdates() }
+        }
+
+        // The status menu is putting up a popover of its own; hold the menu
+        // open for as long as it lasts (see the notification's note).
+        NotificationCenter.default.addObserver(forName: .aloudStatusMenuModal,
+                                               object: nil, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                let shown = note.object as? Bool ?? false
+                self?.statusPopover?.behavior = shown ? .applicationDefined : .transient
+                // Going transient again only takes effect on the next event,
+                // so a menu the user has already clicked away from would
+                // linger — close it here instead.
+                if !shown, let popover = self?.statusPopover, popover.isShown,
+                   NSApp.keyWindow !== popover.contentViewController?.view.window {
+                    popover.performClose(nil)
+                }
+            }
         }
 
         // Harness hook: ALOUD_OPEN_SETTINGS=1 opens the Settings window at

@@ -92,10 +92,7 @@ struct StatusMenuView: View {
 
     @State private var historyContentHeight: CGFloat = 0
 
-    // Three or more pending suggestions collapse into one cell that expands
-    // into a review list. Once open, the list stays a list even as answers
-    // bring the count under the collapse threshold — mid-review the rows must
-    // not reshuffle into standalone cells under the pointer.
+    // Whether the grouped suggestions are open for review in their own popover.
     @State private var reviewingSuggestions = false
 
     var body: some View {
@@ -117,6 +114,16 @@ struct StatusMenuView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .onChange(of: pendingSuggestions.isEmpty) { _, empty in
             if empty { reviewingSuggestions = false }
+        }
+        // Answering the last question closes the review; the menu behind it
+        // must go back to closing on its own the moment it does.
+        .onChange(of: reviewingSuggestions) { _, shown in
+            NotificationCenter.default.post(name: .aloudStatusMenuModal, object: shown)
+        }
+        .onDisappear {
+            if reviewingSuggestions {
+                NotificationCenter.default.post(name: .aloudStatusMenuModal, object: false)
+            }
         }
     }
 
@@ -210,24 +217,22 @@ struct StatusMenuView: View {
     @ViewBuilder
     private var suggestionCells: some View {
         let pending = pendingSuggestions
-        if pending.count >= 3 || (reviewingSuggestions && !pending.isEmpty) {
-            SuggestionReviewCell(
-                suggestions: pending,
-                expanded: $reviewingSuggestions,
-                onAccept: acceptSuggestion,
-                onDeny: denySuggestion,
-                onAcceptAll: {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        for s in pending { learner.accept(s, settings: settings) }
-                    }
-                },
-                onDenyAll: {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        for s in pending { learner.dismiss(s) }
-                    }
+        if pending.count >= 3 {
+            // Past a couple of questions the stack would crowd the menu, so
+            // they collapse to one row that opens the lot in a popover of its
+            // own — the menu keeps its size, and the review arrives as its own
+            // small panel rather than by shoving everything below it down.
+            SuggestionSummaryCell(count: pending.count) { reviewingSuggestions = true }
+                .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                .popover(isPresented: $reviewingSuggestions, arrowEdge: .bottom) {
+                    SuggestionReviewPopover(
+                        suggestions: pending,
+                        onAccept: acceptSuggestion,
+                        onDeny: denySuggestion,
+                        onAcceptAll: { for s in pending { learner.accept(s, settings: settings) } },
+                        onDenyAll: { for s in pending { learner.dismiss(s) } }
+                    )
                 }
-            )
-            .transition(.opacity.combined(with: .scale(scale: 0.97)))
         } else {
             ForEach(pending) { suggestion in
                 SuggestionCell(suggestion: suggestion,
@@ -692,72 +697,31 @@ private struct SuggestionAnswerButtons: View {
     }
 }
 
-// Three or more pending fixes as one cell — the stack must never grow into a
-// wall of questions. Expanding it in place keeps the review where the
-// suggestions already live; a sheet over a transient popover fights the
-// popover's own dismissal.
-private struct SuggestionReviewCell: View {
-    let suggestions: [CorrectionLearner.Suggestion]
-    @Binding var expanded: Bool
-    let onAccept: (CorrectionLearner.Suggestion) -> Void
-    let onDeny: (CorrectionLearner.Suggestion) -> Void
-    let onAcceptAll: () -> Void
-    let onDenyAll: () -> Void
+// Three or more pending fixes as one row — the stack must never grow into a
+// wall of questions. The row only announces them and opens the review; the
+// menu keeps the size it had.
+private struct SuggestionSummaryCell: View {
+    let count: Int
+    let onOpen: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Button {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    expanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: "wand.and.sparkles")
-                        .foregroundStyle(Color.aloud)
-                        .frame(width: 18)
-                    Text(loc("%ld suggested fixes", suggestions.count))
-                        .font(.callout.weight(.medium))
-                    Spacer()
-                    Image(systemName: "chevron.down")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(expanded ? 180 : 0))
-                }
-                .contentShape(Rectangle())
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+        Button(action: onOpen) {
+            HStack(spacing: 9) {
+                Image(systemName: "wand.and.sparkles")
+                    .foregroundStyle(Color.aloud)
+                    .frame(width: 18)
+                Text(loc("%ld suggested fixes", count))
+                    .font(.callout.weight(.medium))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
-
-            if expanded {
-                Divider()
-                    .padding(.horizontal, 10)
-                VStack(spacing: 0) {
-                    ForEach(suggestions) { suggestion in
-                        SuggestionReviewRow(suggestion: suggestion,
-                                            onAccept: { onAccept(suggestion) },
-                                            onDeny: { onDeny(suggestion) })
-                        if suggestion.id != suggestions.last?.id {
-                            Divider()
-                                .padding(.leading, 10)
-                        }
-                    }
-                }
-                Divider()
-                    .padding(.horizontal, 10)
-                HStack {
-                    Button(loc("Deny All"), action: onDenyAll)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button(loc("Accept All"), action: onAcceptAll)
-                        .foregroundStyle(Color.aloud)
-                }
-                .buttonStyle(.borderless)
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
         }
+        .buttonStyle(.plain)
         .background(
             Color.aloud.opacity(0.06),
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -766,11 +730,65 @@ private struct SuggestionReviewCell: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.aloud.opacity(0.25), lineWidth: 1)
         )
+        .accessibilityLabel(loc("Review %ld suggested fixes", count))
     }
 }
 
-// A single fix inside the expanded review: the same question as a standalone
-// cell, minus the card chrome the container already provides.
+// The review itself, in a panel of its own — same quiet popover Settings uses
+// for a dictation's original text. Answers can be given one at a time or to
+// the whole list at once; the panel closes itself when none are left.
+private struct SuggestionReviewPopover: View {
+    let suggestions: [CorrectionLearner.Suggestion]
+    let onAccept: (CorrectionLearner.Suggestion) -> Void
+    let onDeny: (CorrectionLearner.Suggestion) -> Void
+    let onAcceptAll: () -> Void
+    let onDenyAll: () -> Void
+
+    // Tall lists scroll rather than growing a panel taller than the menu.
+    private static let maxListHeight: CGFloat = 260
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(loc("Suggested Fixes"))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(loc("Aloud noticed these corrections. Accepting one fixes that word automatically from now on."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(suggestions) { suggestion in
+                        SuggestionReviewRow(suggestion: suggestion,
+                                            onAccept: { onAccept(suggestion) },
+                                            onDeny: { onDeny(suggestion) })
+                        if suggestion.id != suggestions.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: Self.maxListHeight)
+            .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            HStack {
+                Button(loc("Deny All"), action: onDenyAll)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(loc("Accept All"), action: onAcceptAll)
+                    .foregroundStyle(Color.aloud)
+            }
+            .buttonStyle(.borderless)
+            .font(.caption.weight(.medium))
+        }
+        .frame(width: 300, alignment: .leading)
+        .padding(14)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: suggestions)
+    }
+}
+
+// A single fix inside the review: the same question as a standalone cell,
+// minus the card chrome the panel already provides.
 private struct SuggestionReviewRow: View {
     let suggestion: CorrectionLearner.Suggestion
     let onAccept: () -> Void

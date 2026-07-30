@@ -357,6 +357,9 @@
 
 /* Correction suggestions (menu bar cells + Settings — vocabulary) */
 "%ld suggested fixes" = "%ld suggested fixes";
+"Review %ld suggested fixes" = "Review %ld suggested fixes";
+"Suggested Fixes" = "Suggested Fixes";
+"Aloud noticed these corrections. Accepting one fixes that word automatically from now on." = "Aloud noticed these corrections. Accepting one fixes that word automatically from now on.";
 "Accept All" = "Accept All";
 "Deny All" = "Deny All";
 "Fix it automatically next time" = "Fix it automatically next time";

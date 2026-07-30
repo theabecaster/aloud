@@ -357,6 +357,9 @@
 
 /* Correction suggestions (menu bar cells + Settings — vocabulary) */
 "%ld suggested fixes" = "%ld corrections suggérées";
+"Review %ld suggested fixes" = "Examiner %ld corrections suggérées";
+"Suggested Fixes" = "Corrections suggérées";
+"Aloud noticed these corrections. Accepting one fixes that word automatically from now on." = "Aloud a remarqué ces corrections. En accepter une corrigera ce mot automatiquement désormais.";
 "Accept All" = "Tout accepter";
 "Deny All" = "Tout refuser";
 "Fix it automatically next time" = "Corriger automatiquement la prochaine fois";
