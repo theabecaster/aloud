@@ -51,6 +51,19 @@ final class CorrectionLearner: ObservableObject {
         suggestions.filter { $0.status == .ready }.sorted { $0.lastSeen > $1.lastSeen }
     }
 
+    /// What to actually put in front of the user. `observe` turns away pairs a
+    /// standing rule already covers, but a rule can arrive after a suggestion
+    /// is ready — the user types the same correction in by hand — and asking
+    /// about a word that is already handled reads as the app not knowing its
+    /// own mind. Answering it would write the rule a second time.
+    func openSuggestions(given settings: SettingsStore) -> [Suggestion] {
+        readySuggestions.filter { suggestion in
+            !settings.replacements.contains {
+                $0.pattern.caseInsensitiveCompare(suggestion.from) == .orderedSame
+            }
+        }
+    }
+
     /// Candidates safe to learn from a passive capture. An explicit History
     /// "Fix" may keep case-only changes — the user typed them at us on
     /// purpose — but a passive capture cannot tell vocabulary casing from
@@ -133,10 +146,23 @@ final class CorrectionLearner: ObservableObject {
 
     /// User accepted: the pair becomes a standing Replacement, marked as
     /// learned so the poison guard is allowed to retire it later.
+    ///
+    /// Answering the same suggestion twice must not write the rule twice. The
+    /// UI holds a brief acknowledgement before it reports an accept, so an
+    /// "Accept All" — or a decline — can land inside that beat and arrive
+    /// first; only a suggestion still awaiting an answer is acted on.
     func accept(_ suggestion: Suggestion, settings: SettingsStore) {
-        settings.replacements.append(
-            Replacement(pattern: suggestion.from, replacement: suggestion.to, learned: true))
+        guard suggestions.contains(where: { $0.id == suggestion.id && $0.status != .dismissed })
+        else { return }
         suggestions.removeAll { $0.id == suggestion.id }
+        // A pattern the user already has covered — by hand or by an earlier
+        // accept — stays as they left it rather than gaining a rival rule.
+        if !settings.replacements.contains(where: {
+            $0.pattern.caseInsensitiveCompare(suggestion.from) == .orderedSame
+        }) {
+            settings.replacements.append(
+                Replacement(pattern: suggestion.from, replacement: suggestion.to, learned: true))
+        }
         persist()
     }
 

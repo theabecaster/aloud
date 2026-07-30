@@ -136,6 +136,52 @@ final class CorrectionLearnerTests: XCTestCase {
         XCTAssertEqual(learner.suggestions.first { $0.from == "stale" }?.count, 1)
     }
 
+    func testAcceptingTwiceWritesOneRule() {
+        // The UI holds a beat before reporting an accept, so "Accept All" can
+        // land inside it and arrive first. The late one must be a no-op.
+        let learner = CorrectionLearner(fileURL: fileURL)
+        let ready = learner.observe([candidate("teh", "the")], settings: settings)
+        learner.accept(ready[0], settings: settings)
+        learner.accept(ready[0], settings: settings)
+        XCTAssertEqual(settings.replacements.count, 1)
+    }
+
+    func testDecliningInsideTheAcceptBeatWins() {
+        // Same race, other order: a decline that lands first must not then be
+        // overturned by the accept still waiting out its acknowledgement.
+        let learner = CorrectionLearner(fileURL: fileURL)
+        let ready = learner.observe([candidate("teh", "the")], settings: settings)
+        learner.dismiss(ready[0])
+        learner.accept(ready[0], settings: settings)
+        XCTAssertTrue(settings.replacements.isEmpty, "a declined pair never becomes a rule")
+        XCTAssertEqual(learner.suggestions.first?.status, .dismissed)
+    }
+
+    func testAcceptNeverRivalsAnExistingRule() {
+        settings.replacements = [Replacement(pattern: "teh", replacement: "THE")]
+        let learner = CorrectionLearner(fileURL: fileURL)
+        let suggestion = CorrectionLearner.Suggestion(id: UUID(), from: "teh", to: "the",
+                                                      count: 1, firstSeen: Date(),
+                                                      lastSeen: Date(), status: .ready)
+        learner.accept(suggestion, settings: settings)
+        XCTAssertEqual(settings.replacements.count, 1)
+        XCTAssertEqual(settings.replacements.first?.replacement, "THE",
+                       "the user's own rule is left as they left it")
+    }
+
+    func testASuggestionCoveredByANewRuleStopsBeingOffered() throws {
+        // The pair went ready, then the user typed the same correction in by
+        // hand. Asking about it now would be asking about a solved problem —
+        // and answering would write the rule twice.
+        let learner = CorrectionLearner(fileURL: fileURL)
+        learner.observe([candidate("teh", "the")], settings: settings)
+        XCTAssertEqual(learner.openSuggestions(given: settings).count, 1)
+        settings.replacements = [Replacement(pattern: "Teh", replacement: "the")]
+        XCTAssertTrue(learner.openSuggestions(given: settings).isEmpty,
+                      "case-insensitive, like every other pattern match")
+        XCTAssertEqual(learner.readySuggestions.count, 1, "still stored, just not asked")
+    }
+
     func testCorrectingARuleOutputIsNeverANewRule() {
         // "DentAI" on screen came from the user's own vocabulary rule; the
         // user changing it means that rule (or the booster) misfired — a

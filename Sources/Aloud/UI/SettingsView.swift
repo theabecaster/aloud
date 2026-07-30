@@ -1248,7 +1248,7 @@ struct VocabularySettings: View {
     @State private var newReplacement = ""
 
     private var suggestions: [CorrectionLearner.Suggestion] {
-        settings.learnCorrections ? learner.readySuggestions : []
+        settings.learnCorrections ? learner.openSuggestions(given: settings) : []
     }
 
     var body: some View {

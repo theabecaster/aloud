@@ -135,14 +135,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                                                object: nil, queue: .main) { [weak self] note in
             MainActor.assumeIsolated {
                 let shown = note.object as? Bool ?? false
+                // Restoring transience is enough: the menu closes on the next
+                // click outside it, the same as any other time. Trying to
+                // decide here whether the user had already clicked away meant
+                // reading which window was key mid-teardown, and losing that
+                // race closed the whole menu out from under an answer.
                 self?.statusPopover?.behavior = shown ? .applicationDefined : .transient
-                // Going transient again only takes effect on the next event,
-                // so a menu the user has already clicked away from would
-                // linger — close it here instead.
-                if !shown, let popover = self?.statusPopover, popover.isShown,
-                   NSApp.keyWindow !== popover.contentViewController?.view.window {
-                    popover.performClose(nil)
-                }
             }
         }
 
@@ -418,6 +416,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             statusPopover = popover
             return popover
         }()
+        // Transient again for every opening, whatever the last session left
+        // behind: a menu that has stopped closing on its own is unrecoverable
+        // without this, and the flag is only ever meant to last as long as one
+        // child popover (see aloudStatusMenuModal).
+        popover.behavior = .transient
         // No fixed contentSize: the hosting controller publishes the SwiftUI
         // fitting size so the popover hugs its content and grows/shrinks live.
         let host = NSHostingController(rootView: makeStatusMenuView())
@@ -432,6 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         statusItem.button?.highlight(false)
+        statusPopover?.behavior = .transient
     }
 
     private func closeStatusPopover() {

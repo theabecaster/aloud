@@ -112,6 +112,10 @@ struct StatusMenuView: View {
         }
         .frame(width: 360)
         .background(Color(nsColor: .windowBackgroundColor))
+        // Keyed here rather than inside `attention`: a subtree can't animate
+        // its own removal, and answering the last question takes the cells,
+        // the divider and the quick actions' inset away in one frame.
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: showsAttention)
         .onChange(of: pendingSuggestions.isEmpty) { _, empty in
             if empty { reviewingSuggestions = false }
         }
@@ -130,7 +134,7 @@ struct StatusMenuView: View {
     // Suggestions awaiting an answer. Hidden while the feature is switched
     // off — the stored pairs stay put, but the questions go quiet with it.
     private var pendingSuggestions: [CorrectionLearner.Suggestion] {
-        settings.learnCorrections ? learner.readySuggestions : []
+        settings.learnCorrections ? learner.openSuggestions(given: settings) : []
     }
 
     // Whether anything sits above the quick actions — which decides whether
@@ -217,7 +221,13 @@ struct StatusMenuView: View {
     @ViewBuilder
     private var suggestionCells: some View {
         let pending = pendingSuggestions
-        if pending.count >= 3 {
+        // Answering rows inside the review drops the count, and collapsing
+        // back to individual cards mid-review would take the panel's own
+        // anchor out of the view tree with it — SwiftUI tears the panel down
+        // without reporting it dismissed, so the menu would be left holding a
+        // lock it never hears about. The summary row stays for as long as the
+        // review does.
+        if !pending.isEmpty, pending.count >= 3 || reviewingSuggestions {
             // Past a couple of questions the stack would crowd the menu, so
             // they collapse to one row that opens the lot in a popover of its
             // own — the menu keeps its size, and the review arrives as its own
