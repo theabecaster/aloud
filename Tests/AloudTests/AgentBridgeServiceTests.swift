@@ -21,22 +21,43 @@ final class AgentBridgeServiceTests: XCTestCase {
         var speakError: Error?
         var listenError: Error?
 
+        // Ordered log of everything the host was asked to do, so a test can
+        // assert the microphone opens AFTER the prompt has been spoken.
+        var events: [String] = []
         func speak(_ text: String) async throws {
             if let speakError { throw speakError }
             spoken.append(text)
+            events.append("speak")
+        }
+        func beginConsentCapture() async {
+            listenedForConsent = true
+            events.append("mic")
         }
         // The pill's accept/deny are captured so a test can answer the way a
         // user clicking the indicator would, not just via the service API.
         var acceptFromPill: (() -> Void)?
         var declineFromPill: (() -> Void)?
+        // `heardFromMic` is the seam that was missing in the app: the host
+        // opens the microphone during a confirm-by-voice prompt and reports
+        // what it hears. A fake that did not expose it let the whole mode look
+        // tested while nothing ever fed the policy a word.
+        var heardFromMic: ((String) -> Void)?
+        var listenedForConsent = false
+        var dismissedAccepted: [Bool] = []
         func presentConsent(_ prompt: ConsentPrompt,
                             onAccept: @escaping () -> Void,
-                            onDecline: @escaping () -> Void) async {
+                            onDecline: @escaping () -> Void,
+                            onHeard: @escaping (String) -> Void) async {
             prompts.append(prompt)
             acceptFromPill = onAccept
             declineFromPill = onDecline
+            heardFromMic = onHeard
+            events.append("prompt")
         }
-        func dismissConsent() async { dismissals += 1 }
+        func dismissConsent(accepted: Bool) async {
+            dismissals += 1
+            dismissedAccepted.append(accepted)
+        }
         func listen(from: Date) async throws -> AgentTranscript {
             listenCount += 1
             listenFrom = from
@@ -188,6 +209,54 @@ final class AgentBridgeServiceTests: XCTestCase {
         let response = await claim.value
         XCTAssertTrue(response.ok)
         XCTAssertEqual(host.dismissals, 1, "the prompt comes down once answered")
+    }
+
+    // The bug a real run found: confirm-by-voice is the DEFAULT mode, and
+    // nothing opened the microphone or fed the policy a word. The consent
+    // policy classified utterances perfectly in 24 tests and was never handed
+    // one, so saying "accept" did nothing and the prompt could only time out.
+    func testSpeakingAcceptIsActuallyHeard() async {
+        let service = makeService(mode: .confirmByVoice)
+        let claim = Task { await service.handle(self.request(.claim), peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 60_000_000)
+
+        XCTAssertTrue(host.listenedForConsent,
+                      "confirm-by-voice has to open the microphone — it is the only way to answer")
+        let heard = try? XCTUnwrap(host.heardFromMic)
+        heard?("accept")
+
+        let response = await claim.value
+        XCTAssertTrue(response.ok, "a spoken accept must grant the lease")
+    }
+
+    // The bug a real run found, after the mic was finally opened at all:
+    // opening it BEFORE speaking meant Aloud transcribed its own prompt and the
+    // user's reply arrived glued to the end of it — "…say accept or decline.
+    // Accept." — which the matcher correctly refused as not-an-answer. So
+    // speaking never worked, and the log showed the recogniser doing its job on
+    // poisoned input. speak() returns when playback ends; ordering is the gate.
+    func testTheMicrophoneOpensOnlyAfterThePromptHasBeenSpoken() async {
+        let service = makeService(mode: .confirmByVoice)
+        let claim = Task { await service.handle(self.request(.claim), peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 60_000_000)
+
+        XCTAssertEqual(host.events, ["prompt", "speak", "mic"],
+                       "the microphone must not be open while Aloud is talking into it")
+        host.heardFromMic?("accept")
+        _ = await claim.value
+    }
+
+    // The other half of what a real run showed: a prompt that is refused or
+    // expires left the pill on screen with nothing behind it.
+    func testARefusedPromptTakesTheIndicatorDownAgain() async {
+        let service = makeService(mode: .confirmByVoice)
+        let claim = Task { await service.handle(self.request(.claim), peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        host.heardFromMic?("decline")
+        _ = await claim.value
+
+        XCTAssertEqual(host.dismissedAccepted, [false],
+                       "the host has to be told the session is not proceeding, or the pill stays up")
     }
 
     func testDecliningRefusesWithDeniedAndFreesTheLease() async {

@@ -24,10 +24,21 @@ protocol AgentVoiceHost: AnyObject, Sendable {
     // Put a pending consent request on the indicator, or take it down. Mode 2
     // draws accept/deny controls; mode 3 shows the same prompt while it is
     // spoken, so the user can also just click.
+    // `onHeard` is how a spoken answer reaches the policy: in confirm-by-voice
+    // the host opens the microphone for the prompt and reports what it hears.
+    // Without it that mode has no ears — the policy can classify an utterance
+    // perfectly and never be handed one.
     func presentConsent(_ prompt: ConsentPrompt,
                         onAccept: @escaping () -> Void,
-                        onDecline: @escaping () -> Void) async
-    func dismissConsent() async
+                        onDecline: @escaping () -> Void,
+                        onHeard: @escaping (String) -> Void) async
+    // `accepted` decides whether the pill carries on into the session or comes
+    // off screen. A refused or expired prompt that only changes phase leaves an
+    // agent indicator sitting there forever.
+    // Opened only after the prompt has finished playing. `speak` returns when
+    // playback ends, so ordering is the whole half-duplex gate here.
+    func beginConsentCapture() async
+    func dismissConsent(accepted: Bool) async
 
     // Capture and transcribe until the speaker stops. `from` is the instant
     // consent was granted: nothing captured before it is in scope, which is
@@ -253,12 +264,20 @@ final class AgentBridgeService {
         let lease = prompt.lease
         await host?.presentConsent(prompt,
                                    onAccept: { [weak self] in self?.acceptConsent(lease: lease) },
-                                   onDecline: { [weak self] in self?.declineConsent(lease: lease) })
+                                   onDecline: { [weak self] in self?.declineConsent(lease: lease) },
+                                   onHeard: { [weak self] said in
+                                       self?.heardConsent(said, lease: lease)
+                                   })
         if prompt.mode == .confirmByVoice {
             // Spoken through whichever voice is available. A failure here is
             // not fatal on its own — the pill is still showing the same words —
             // but it does mean a user looking away never learns they were asked.
             try? await host?.speak(prompt.text)
+            // Only now. Opening the microphone first means Aloud transcribes
+            // its own prompt and the user's reply arrives glued to the end of
+            // it — "…say accept or decline. Accept." — which is correctly
+            // refused as not-an-answer, so speaking never worked at all.
+            await host?.beginConsentCapture()
         }
 
         let deadline = prompt.deadline
@@ -272,7 +291,11 @@ final class AgentBridgeService {
                 self?.timeOutConsent(lease: lease)
             }
         }
-        await host?.dismissConsent()
+        if case .accepted = resolution {
+            await host?.dismissConsent(accepted: true)
+        } else {
+            await host?.dismissConsent(accepted: false)
+        }
         return resolution
     }
 

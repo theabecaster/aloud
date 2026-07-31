@@ -38,6 +38,10 @@ final class DictationController: ObservableObject {
     // An agent-initiated capture. Kept distinct from a command session so
     // every existing guard that asks "is this a dictation?" still answers no.
     private var isAgentSession = false
+    // The pre-consent microphone for confirm-by-voice.
+    private var pendingConsentHeard: ((String) -> Void)?
+    private var consentSession: StreamingTranscription?
+    private var consentPump: Task<Void, Never>?
     // Who the current agent session belongs to, for the indicator's label.
     var agentHarnessName: String?
 
@@ -1829,13 +1833,86 @@ extension DictationController: AgentVoiceHost {
 
     func presentConsent(_ prompt: ConsentPrompt,
                         onAccept: @escaping () -> Void,
-                        onDecline: @escaping () -> Void) async {
+                        onDecline: @escaping () -> Void,
+                        onHeard: @escaping (String) -> Void) async {
         // The pill is the only place a user who isn't looking at the agent's
         // window learns they were asked anything.
         indicatorShowConsent(prompt, onAccept: onAccept, onDecline: onDecline)
+        pendingConsentHeard = onHeard
     }
 
-    func dismissConsent() async {
+    func beginConsentCapture() async {
+        guard let onHeard = pendingConsentHeard else { return }
+        await startConsentListening(onHeard: onHeard)
+    }
+
+    func dismissConsent(accepted: Bool) async {
+        stopConsentListening()
         indicatorDismissConsent()
+        // A prompt that was refused or ran out is the end of it. Only an
+        // accepted one carries on into a session, so anything else must take
+        // the pill off screen rather than leaving an agent indicator parked
+        // there with nothing behind it.
+        if !accepted {
+            indicator.hide()
+            phase = .idle
+        }
+    }
+
+    // MARK: hearing the consent word
+
+    // Confirm-by-voice needs the microphone open *before* consent exists —
+    // that is the whole point, the user is not looking at the screen and the
+    // only way to answer is out loud. These samples are classified and thrown
+    // away: they are never transcribed into anything the agent receives, and
+    // the agent's own stream does not begin until the moment of accept.
+    private func startConsentListening(onHeard: @escaping (String) -> Void) async {
+        // Every bail here used to be silent, which is how this shipped not
+        // working at all: the microphone never opened and nothing said so.
+        func note(_ why: String) {
+            FileHandle.standardError.write(Data("[consent] \(why)\n".utf8))
+        }
+        guard consentSession == nil else { return note("already listening") }
+        guard phase == .idle || phase.isError else { return note("busy: phase=\(phase)") }
+        guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
+            return note("no speech model: state=\(transcriber.state)")
+        }
+        await ensureTranscriberReady()
+        guard let stream = transcriber.makeStreamingTranscription() else {
+            return note("engine cannot stream — confirm-by-voice needs live transcription")
+        }
+
+        consentSession = stream
+        do {
+            _ = try await startAgentCapture()
+        } catch {
+            consentSession = nil
+            return note("microphone refused: \(error.localizedDescription)")
+        }
+        note("listening for accept/decline")
+        recorder.onChunk = { [weak stream] chunk in stream?.append(samples: chunk) }
+        consentPump = Task { [weak self] in
+            for await update in stream.updates {
+                guard self != nil else { return }
+                let said = update.full
+                guard !said.isEmpty else { continue }
+                FileHandle.standardError.write(Data("[consent] heard: \(said)\n".utf8))
+                onHeard(said)
+            }
+        }
+    }
+
+    private func stopConsentListening() {
+        pendingConsentHeard = nil
+        guard let stream = consentSession else { return }
+        consentSession = nil
+        consentPump?.cancel()
+        consentPump = nil
+        recorder.onChunk = nil
+        _ = recorder.stop()
+        // Discarded, never finished: finishing would produce a transcript, and
+        // a transcript of the pre-consent window is the one thing that must
+        // never exist.
+        Task { await stream.cancel() }
     }
 }
