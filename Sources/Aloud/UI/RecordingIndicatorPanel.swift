@@ -431,14 +431,19 @@ final class RecordingIndicatorPanel {
     // state (a lock, a notice, a Basic tag) and no previous agent's words can
     // ride along.
     private func enterAgentMode() {
-        guard model.mode != .agent else { return }
-        levelTimer?.invalidate()
-        levelTimer = nil
-        model.mode = .agent
+        // The carry-over clears run on EVERY session start, not just the
+        // transition into agent mode: two agent sessions can follow each other
+        // faster than the pill's fade-out, so `mode` is still `.agent` when
+        // the second begins and the old guard skipped the whole reset —
+        // leaving the previous conversation's transcript on the new pill.
         model.agentTranscript = ""
         model.consent = nil
         model.onAcceptConsent = nil
         model.onDeclineConsent = nil
+        guard model.mode != .agent else { return }
+        levelTimer?.invalidate()
+        levelTimer = nil
+        model.mode = .agent
         model.hint = nil
         model.notice = nil
         model.isLocked = false

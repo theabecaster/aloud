@@ -480,6 +480,13 @@ final class AgentBridgeService {
             // agent would read as "the user heard me".
             if let refusal = validate(lease) { return refusal }
             return .success()
+        } catch AgentListenError.busy {
+            // The microphone is open — a user dictation, or another speak in
+            // flight. Transient, so `queued`+retry, not `unavailable`, which
+            // the skill teaches agents to read as "the feature is gone".
+            var response = BridgeResponse.failure(.queued, "Aloud is busy right now.")
+            response.retryAfter = 3
+            return response
         } catch {
             return .failure(.unavailable, error.localizedDescription)
         }
@@ -508,6 +515,13 @@ final class AgentBridgeService {
         case .granted(let granted):
             grant = granted
         case .awaiting(let prompt):
+            // Same guard `claim` carries: a prompt for this lease already open
+            // means a second `ask` would overwrite its continuation and hang
+            // the first caller. Reachable here when the mode was tightened
+            // mid-session and two listens race on one lease.
+            if pendingConsent[lease] != nil {
+                return .failure(.queued, "A consent prompt for this session is already open.")
+            }
             switch await ask(prompt) {
             case .accepted(let granted, _):
                 grant = granted

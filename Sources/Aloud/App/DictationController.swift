@@ -1942,19 +1942,29 @@ final class DictationController: ObservableObject {
         guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
             throw AgentListenError.notReady
         }
-        await ensureTranscriberReady()
-        guard let stream = transcriber.makeStreamingTranscription() else {
-            // No streaming engine on this Mac — the fallback path is batch
-            // only. Refusing is better than pretending: an agent polling a
-            // session that will never update would wait out its own ceiling.
-            throw AgentListenError.notReady
-        }
 
+        // Claim the busy state BEFORE the first suspension, exactly as the
+        // blocking listen does. `ensureTranscriberReady` can await for seconds
+        // on a cold model, and this actor is reentrant: leaving `phase` idle
+        // across it let a user hotkey press start a real dictation — or a
+        // second `listen --start` pass the `agentPoll == nil` guard — right on
+        // top of the session about to open here.
         sessionGeneration += 1
         isAgentSession = true
         agentManualDone = false
         phase = .recording
         indicatorShowAgentSession(harness: agentSessionHolder?.name ?? agentHarnessName ?? "")
+
+        await ensureTranscriberReady()
+        guard let stream = transcriber.makeStreamingTranscription() else {
+            // No streaming engine on this Mac — the fallback path is batch
+            // only. Refusing is better than pretending: an agent polling a
+            // session that will never update would wait out its own ceiling.
+            isAgentSession = false
+            phase = .idle
+            indicator.hide()
+            throw AgentListenError.notReady
+        }
 
         let session = AgentPollSession(id: "S\(sessionGeneration)-\(UInt32.random(in: 0..<UInt32.max))",
                                        stream: stream)

@@ -220,6 +220,47 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertEqual(installer().refreshInstalled(), [])
     }
 
+    // The bundle moved after install: the skill's path is refreshed, and the
+    // allowlist entries have to follow it or the first `listen` prompts.
+    func testRefreshMigratesAllowlistEntriesWhenTheBundleMoves() throws {
+        let old = "/Applications/Aloud.app/Contents/MacOS/Aloud"
+        let new = "/opt/tools/Aloud.app/Contents/MacOS/Aloud"
+        _ = try HarnessInstaller(home: home, command: old).install(.claudeCode)
+        XCTAssertTrue(try allowList().contains { $0.contains(old) })
+
+        let moved = HarnessInstaller(home: home, command: new)
+        XCTAssertEqual(moved.refreshInstalled(), [.claudeCode])
+        let after = try allowList()
+        XCTAssertTrue(after.contains { $0.contains(new) }, "entries must name the new path")
+        XCTAssertFalse(after.contains { $0.contains(old) }, "the stale-path entries must be gone")
+        XCTAssertEqual(after.filter { AgentVoiceInstructions.isPermissionEntry($0, style: .claudeSettings) }.count,
+                       AgentVoiceInstructions.verbs.count, "no duplicates, no drops")
+    }
+
+    // A refresh must never re-grant an entry the user deliberately removed —
+    // the reason permissions are otherwise written only on the explicit
+    // install. Removing one entry (leaving the rest at the current path) is a
+    // revocation, not a move, so the refresh leaves it removed.
+    func testRefreshDoesNotReAddARevokedAllowlistEntry() throws {
+        _ = try installer().install(.claudeCode)
+        var allow = try allowList()
+        let removed = allow.removeLast()
+        XCTAssertTrue(AgentVoiceInstructions.isPermissionEntry(removed, style: .claudeSettings))
+        try writeAllow(allow)
+
+        XCTAssertEqual(installer().refreshInstalled(), [])
+        XCTAssertFalse(try allowList().contains(removed), "a revoked entry stays revoked")
+    }
+
+    private func writeAllow(_ entries: [String]) throws {
+        var root = try settingsJSON()
+        var permissions = (root["permissions"] as? [String: Any]) ?? [:]
+        permissions["allow"] = entries
+        root["permissions"] = permissions
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted])
+        try data.write(to: home.appendingPathComponent(".claude/settings.json"))
+    }
+
     // A harness the user never installed is not installed by a refresh. The
     // refresh keeps opt-ins current; it does not create them.
     func testRefreshDoesNotInstallIntoHarnessesTheUserNeverChose() throws {
@@ -405,8 +446,11 @@ final class HarnessInstallerTests: XCTestCase {
         }
         let skill = home.appendingPathComponent(".cursor/skills/aloud-voice/SKILL.md")
         let config = home.appendingPathComponent(Self.cursorConfigPath)
-        XCTAssertEqual(changed, [skill, config],
-                       "Cursor takes both halves: the skill, and the allowlist that keeps the first `listen` from prompting")
+        // Allowlist first, skill second — so a failure writing the allowlist
+        // leaves the harness not-installed and cleanly retryable rather than
+        // skill-present-permission-absent, which looks installed and prompts.
+        XCTAssertEqual(changed, [config, skill],
+                       "Cursor takes both halves: the allowlist that keeps the first `listen` from prompting, then the skill")
         XCTAssertTrue(fm.fileExists(atPath: skill.path))
         XCTAssertTrue(installer().isInstalled(.cursor))
 

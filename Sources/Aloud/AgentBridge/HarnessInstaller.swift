@@ -632,7 +632,7 @@ struct HarnessInstaller {
     func refreshInstalled() -> [AgentHarness] {
         AgentHarness.allCases.filter { harness in
             guard harness.scope == .global, isInstalled(harness) else { return false }
-            guard case .installed(let changed)? = try? install(harness, permissions: false)
+            guard case .installed(let changed)? = try? install(harness, permissions: .migrate)
             else { return false }
             return !changed.isEmpty
         }
@@ -661,7 +661,7 @@ struct HarnessInstaller {
     // installs without a new branch here. `permissions: false` is the refresh
     // path: update what the agent is told, leave what the agent is allowed
     // strictly alone.
-    func install(_ harness: AgentHarness, permissions: Bool = true) throws -> InstallResult {
+    func install(_ harness: AgentHarness, permissions: AllowlistOp = .add) throws -> InstallResult {
         let block = AgentVoiceInstructions.markedBlock(
             AgentVoiceInstructions.body(harness: harness, command: command))
 
@@ -681,20 +681,25 @@ struct HarnessInstaller {
             // file is the only thing here that can refuse, so parse it before
             // writing anything — a failure must not leave a half-installed
             // skill behind.
-            let allowlist = permissions ? allowlistURL(for: harness) : nil
+            let allowlist = allowlistURL(for: harness)
             var updated: Data?
             if let allowlist {
-                updated = try allowlistJSON(at: allowlist, for: harness, addingEntries: true)
+                updated = try allowlistJSON(at: allowlist, for: harness, op: permissions)
             }
 
+            // Allowlist first, skill second. If the allowlist write fails
+            // (disk full, EPERM) the skill is not yet on disk, so the harness
+            // reads as not-installed and the click is cleanly retried — better
+            // than a skill that is present while its permission entry is
+            // missing, which looks installed and prompts on the first listen.
             var changed: [URL] = []
-            let skill = home.appendingPathComponent(harness.instructionPath)
-            let file = AgentVoiceInstructions.skillFile(harness: harness, command: command)
-            if try writeIfDifferent(file, to: skill) { changed.append(skill) }
             if let data = updated, let allowlist {
                 try write(data, to: allowlist)
                 changed.append(allowlist)
             }
+            let skill = home.appendingPathComponent(harness.instructionPath)
+            let file = AgentVoiceInstructions.skillFile(harness: harness, command: command)
+            if try writeIfDifferent(file, to: skill) { changed.append(skill) }
             return .installed(changed: changed)
         }
     }
@@ -738,7 +743,7 @@ struct HarnessInstaller {
             guard let allowlist = allowlistURL(for: harness) else { return }
             // A malformed config on the way out is still not ours to rewrite —
             // surface it so the pane can say the allowlist is stale.
-            if let data = try allowlistJSON(at: allowlist, for: harness, addingEntries: false) {
+            if let data = try allowlistJSON(at: allowlist, for: harness, op: .remove) {
                 try write(data, to: allowlist)
             }
             removeBackup(of: allowlist)
@@ -764,9 +769,16 @@ struct HarnessInstaller {
     // Returns the bytes to write, or nil when nothing needs changing — which is
     // what makes a second install byte-identical rather than merely equivalent.
     // Throws rather than writing if the file is not JSON we understand.
+    // What a write to the allowlist is doing. `add` is the user's install;
+    // `remove` is uninstall; `migrate` is the launch-time refresh, which
+    // follows the binary if it moved but never re-grants an entry the user
+    // took away.
+    enum AllowlistOp { case add, remove, migrate }
+
     private func allowlistJSON(at url: URL,
                                for harness: AgentHarness,
-                               addingEntries adding: Bool) throws -> Data? {
+                               op: AllowlistOp) throws -> Data? {
+        let adding = (op == .add)
         guard let style = harness.permissionAllowlist else { return nil }
         let snippet = permissionSnippet(for: harness)
         var root: [String: Any] = [:]
@@ -810,20 +822,40 @@ struct HarnessInstaller {
             allow = list
         }
 
+        let currentEntries = permissionEntries(for: harness)
         var changed = false
-        if adding {
+        switch op {
+        case .add:
             let present = Set(allow.compactMap { $0 as? String })
-            for entry in permissionEntries(for: harness) where !present.contains(entry) {
+            for entry in currentEntries where !present.contains(entry) {
                 allow.append(entry)
                 changed = true
             }
-        } else {
+        case .remove:
             let before = allow.count
             allow.removeAll { element in
                 guard let entry = element as? String else { return false }
                 return AgentVoiceInstructions.isPermissionEntry(entry, style: style)
             }
             changed = allow.count != before
+        case .migrate:
+            // Only follow a moved bundle — never re-grant a revoked entry.
+            // Every Aloud entry we already wrote matches `isPermissionEntry`
+            // whatever its path; the tell for "moved" is that none of them are
+            // at the CURRENT path. If any current-path entry is present the
+            // install lives here (perhaps with some entries the user
+            // deliberately deleted), and we leave it exactly as it is.
+            let ours = allow.compactMap { $0 as? String }
+                .filter { AgentVoiceInstructions.isPermissionEntry($0, style: style) }
+            let currentSet = Set(currentEntries)
+            if !ours.isEmpty, !ours.contains(where: { currentSet.contains($0) }) {
+                allow.removeAll { element in
+                    guard let entry = element as? String else { return false }
+                    return AgentVoiceInstructions.isPermissionEntry(entry, style: style)
+                }
+                allow.append(contentsOf: currentEntries)
+                changed = true
+            }
         }
         guard changed else { return nil }
 
