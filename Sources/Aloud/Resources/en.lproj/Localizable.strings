@@ -378,8 +378,8 @@
 /* Agent Speak — the spoken consent prompt. This is the string that
    tells someone a decision is being asked of them, so it must never
    fall back to English. */
-"An agent wants to listen — say accept or decline" = "An agent wants to listen — say accept or decline";
-"%@ wants to listen — say accept or decline" = "%@ wants to listen — say accept or decline";
+"An agent wants to listen — say yes or no" = "An agent wants to listen — say yes or no";
+"%@ wants to listen — say yes or no" = "%@ wants to listen — say yes or no";
 
 /* Agent Speak — Settings → Agents. The master switch, how a listen is
    approved, and the agent tools Aloud can set itself up in. */

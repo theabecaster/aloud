@@ -15,8 +15,8 @@ final class LocalizationTests: XCTestCase {
         // and it is what tells someone a decision is being asked of them — a
         // silent fallback to English is a non-English user not knowing to
         // answer at all.
-        "An agent wants to listen — say accept or decline",
-        "%@ wants to listen — say accept or decline",
+        "An agent wants to listen — say yes or no",
+        "%@ wants to listen — say yes or no",
         // Settings → Agents and the onboarding opt-in. Agent Speak hands local
         // processes the mic and the speakers, so the screens that say so — and
         // the switch that takes it back — cannot fall back to English.

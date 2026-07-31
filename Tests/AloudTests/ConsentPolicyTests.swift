@@ -81,7 +81,7 @@ final class ConsentPolicyTests: XCTestCase {
         // Capture starts with the prompt so the answer is not clipped — and the
         // type says what that audio is for, and only that.
         XCTAssertEqual(prompt.capture, .forConsentOnly)
-        XCTAssertTrue(prompt.text.contains("accept"))
+        XCTAssertTrue(prompt.text.contains("yes or no"), prompt.text)
 
         let at = t0.addingTimeInterval(2)
         guard case .accepted(let grant, let audio) = p.heard("yes", lease: "L1", now: at) else {
@@ -339,10 +339,11 @@ final class ConsentPolicyTests: XCTestCase {
         XCTAssertTrue(crowded.contains("Claude Code"), crowded)
         XCTAssertFalse(crowded.contains("%@"), "the format argument must be substituted")
 
-        // Both wordings have to say what the user is supposed to do about it.
+        // Both wordings have to say what the user is supposed to do about it —
+        // in the words the recognizer can actually hear, which is why this is
+        // "yes or no" and not "accept or decline" (see promptText).
         for text in [alone, crowded] {
-            XCTAssertTrue(text.contains("accept"), text)
-            XCTAssertTrue(text.contains("decline"), text)
+            XCTAssertTrue(text.contains("yes or no"), text)
         }
     }
 

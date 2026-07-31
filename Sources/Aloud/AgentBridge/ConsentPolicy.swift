@@ -9,8 +9,8 @@ import Foundation
 //   open            — allowed immediately, no prompt.
 //   confirmOnScreen — the pill opens pending, with accept / deny controls.
 //   confirmByVoice  — capture starts at once, Aloud speaks "… wants to listen —
-//                     say accept or decline", and nothing reaches the agent
-//                     until the user says accept.
+//                     say yes or no", and nothing reaches the agent
+//                     until the user agrees.
 //
 // Two invariants are load-bearing and are modelled in the types rather than
 // left to the caller's discipline:
@@ -269,11 +269,20 @@ final class ConsentPolicy {
     // The prompt names the harness only when more than one is installed. With
     // a single harness "Claude Code wants to listen" is noise — the user knows
     // who it is — so the name appears only when there is real ambiguity.
+    //
+    // It asks for "yes or no" rather than "accept or decline" because those are
+    // the words the recognizer can actually hear. Measured on the shipping
+    // engine, a spoken "accept" came back as "Except for the same thing" —
+    // near-homophone, one isolated word, no context for the model to lean on,
+    // so its language prior wins and pads it into a sentence. The same voice
+    // saying "yes" transcribed as "Yes." every time. Accept and decline stay in
+    // the keyword set for anyone who says them; the fix is to stop *asking* for
+    // a word we cannot hear, rather than to loosen what counts as consent.
     static func promptText(harness: String, installedHarnesses: Int) -> String {
         guard installedHarnesses > 1 else {
-            return loc("An agent wants to listen — say accept or decline")
+            return loc("An agent wants to listen — say yes or no")
         }
-        return loc("%@ wants to listen — say accept or decline", displayName(forHarness: harness))
+        return loc("%@ wants to listen — say yes or no", displayName(forHarness: harness))
     }
 
     // "claude-code" → "Claude Code". A label for the user's benefit, never
