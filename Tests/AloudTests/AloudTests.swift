@@ -726,9 +726,22 @@ final class LanguageDetectionTests: XCTestCase {
 }
 
 final class SettingsStoreTests: XCTestCase {
+    // One fixed suite, emptied on the way in rather than a fresh UUID per run.
+    // removePersistentDomain empties the domain but cfprefsd rewrites the plist
+    // asynchronously afterwards, so a random name leaves a file in
+    // ~/Library/Preferences every time that race is lost. A stable name still
+    // isolates and can leave at most one.
+    private static let suite = "aloud-tests-settings-store"
+
+    private func freshDefaults() -> UserDefaults {
+        let defaults = UserDefaults(suiteName: Self.suite)!
+        defaults.removePersistentDomain(forName: Self.suite)
+        return defaults
+    }
+
     func testRoundTrip() {
-        let suite = "aloud-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = Self.suite
+        let defaults = freshDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let s1 = SettingsStore(defaults: defaults)
@@ -749,8 +762,8 @@ final class SettingsStoreTests: XCTestCase {
     // A key in two slots means one of them silently never fires: the dictation
     // key keeps it, the hands-free key beats the command key, losers clear.
     func testCollidingKeysAreDropped() {
-        let suite = "aloud-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = Self.suite
+        let defaults = freshDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let settings = SettingsStore(defaults: defaults)

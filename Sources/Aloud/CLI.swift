@@ -1259,7 +1259,10 @@ extension CLI {
         }
 
         // 10. Settings store round-trip in an isolated suite.
-        let suiteName = "aloud-selftest-\(getpid())"
+        // Fixed rather than pid-keyed: removePersistentDomain empties the
+        // domain but cfprefsd rewrites the plist afterwards, so a new name per
+        // run left a file in ~/Library/Preferences every time selftest ran.
+        let suiteName = "aloud-selftest-settings"
         if let d = UserDefaults(suiteName: suiteName) {
             d.removePersistentDomain(forName: suiteName)
             let s = SettingsStore(defaults: d)
@@ -1294,7 +1297,7 @@ extension CLI {
         // dictation is found (edited) in a later field snapshot, the edit
         // becomes a candidate, two sightings promote it, accepting it lands
         // a learned replacement.
-        let learnSuite = "aloud-selftest-learn-\(getpid())"
+        let learnSuite = "aloud-selftest-learn"
         if let d = UserDefaults(suiteName: learnSuite) {
             d.removePersistentDomain(forName: learnSuite)
             let learnSettings = SettingsStore(defaults: d)
