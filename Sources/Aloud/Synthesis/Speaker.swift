@@ -70,4 +70,17 @@ protocol Speaker: AnyObject {
     func speak(_ text: String) async throws
     // Cut playback short. Safe to call when nothing is playing.
     func stop()
+
+    // 0…1 loudness of what is being said at this instant, 0 when silent. For
+    // anything that has to *show* the voice rather than describe it.
+    var currentLevel: Float { get }
+}
+
+extension Speaker {
+    // Not every engine can answer this. The system voice speaks straight
+    // through AVSpeechSynthesizer and never hands us the samples, so it has no
+    // level to report — a drawing that needs one is expected to keep moving
+    // without it, because "Aloud is talking" is the part that matters and
+    // "how loud" is the part that is nice to have.
+    var currentLevel: Float { 0 }
 }

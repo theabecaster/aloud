@@ -84,6 +84,43 @@ struct AgentIndicatorContent: View {
     private static let tailLimit = 96
 
     var body: some View {
+        Group {
+            if model.consent != nil { asking } else { session }
+        }
+        .animation(.spring(duration: 0.28), value: model.consent)
+        .animation(.spring(duration: 0.28), value: tail.isEmpty)
+        .animation(.spring(duration: 0.28), value: model.agentPhase)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(loc("Agent Speak"))
+    }
+
+    // A question and two buttons. One row, sized to its content — the session
+    // layout below is built around a transcript that this state never has, and
+    // wearing it made a yes/no question the largest thing on the screen.
+    //
+    // Everything in the row moves at the swap, because one changing thing was
+    // easy to miss: the glyph turns from a raised hand into a microphone at the
+    // same moment the voice becomes a meter, alongside the start cue. Aloud
+    // asking and Aloud listening should not look alike.
+    private var asking: some View {
+        HStack(spacing: 8) {
+            phaseGlyph
+            Text(headline)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            if isSpeaking {
+                voice
+            } else if micIsOpen {
+                meter
+            }
+            consentControls
+        }
+        .fixedSize()
+    }
+
+    private var session: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
                 phaseGlyph
@@ -94,12 +131,11 @@ struct AgentIndicatorContent: View {
                     .minimumScaleFactor(0.75)
                 Spacer(minLength: 6)
                 // The trailing slot answers "what does this want from me": the
-                // decision while one is outstanding, the level once the mic is
-                // live. The meter appears only while the microphone is
-                // genuinely open — a resting meter under a question would say
-                // it was on before it is.
-                if model.consent != nil {
-                    consentControls
+                // voice while Aloud is talking, the level once the mic is live.
+                // The meter appears only while the microphone is genuinely
+                // open — a resting meter would say it was on before it is.
+                if isSpeaking {
+                    voice
                 } else if micIsOpen {
                     meter
                 }
@@ -108,24 +144,11 @@ struct AgentIndicatorContent: View {
             // row the right-hand edge has crept several points inwards, and
             // without this the meter's last bars sit on the border.
             .padding(.trailing, 6)
-            // The second row is where the words appear. Until they do, a
-            // confirm-by-voice question puts the meter there — the microphone
-            // is open to hear the answer, and the pill says so in the place
-            // that is about to fill up.
-            if model.consent != nil {
-                // Indented to the headline's own left edge: flush with the
-                // glyph it would sit on the capsule's curve.
-                if micIsOpen { meter.padding(.leading, 26) }
-            } else if !tail.isEmpty {
+            if !tail.isEmpty {
                 transcript
             }
         }
         .frame(width: Self.width, alignment: .leading)
-        .animation(.spring(duration: 0.28), value: model.consent)
-        .animation(.spring(duration: 0.28), value: tail.isEmpty)
-        .animation(.spring(duration: 0.28), value: model.agentPhase)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(loc("Agent Speak"))
     }
 
     // MARK: pieces
@@ -189,11 +212,16 @@ struct AgentIndicatorContent: View {
             .frame(width: 58, height: 16)
     }
 
+    private var voice: some View {
+        VoiceWave(level: model.level, tint: .agent)
+            .frame(width: 44, height: 16)
+    }
+
     private func consentGlyph(_ symbol: String, filled: Bool) -> some View {
         Image(systemName: symbol)
-            .font(.system(size: 12, weight: .bold))
+            .font(.system(size: 11, weight: .bold))
             .foregroundStyle(filled ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-            .frame(width: 26, height: 26)
+            .frame(width: 22, height: 22)
             .background {
                 Circle().fill(filled ? AnyShapeStyle(Color.agent) : AnyShapeStyle(.regularMaterial))
             }
@@ -213,12 +241,14 @@ struct AgentIndicatorContent: View {
             ?? loc("An agent wants to listen")
     }
 
-    // In confirm-by-voice the microphone is already open — capturing only so
-    // the answer isn't clipped — and the pill says so rather than hiding it.
-    private var micIsOpen: Bool {
-        if let consent = model.consent { return consent.capture == .forConsentOnly }
-        return model.agentPhase == .listening
-    }
+    private var isSpeaking: Bool { model.agentPhase == .speaking }
+
+    // Whether the microphone is actually capturing, asked of the controller
+    // rather than inferred from the consent mode. Confirm-by-voice does open
+    // the mic before consent exists, but not until the spoken question has
+    // finished playing — inferring it from the mode drew a meter over a closed
+    // microphone for those several seconds.
+    private var micIsOpen: Bool { model.micIsLive }
 
     private var tail: String { Self.tail(model.agentTranscript, limit: Self.tailLimit) }
 

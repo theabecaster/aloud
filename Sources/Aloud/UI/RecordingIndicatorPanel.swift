@@ -366,7 +366,9 @@ final class RecordingIndicatorPanel {
     // microphone that never opened, and that is a failure this feature has
     // already had. A dead meter must mean a dead microphone.
     func attachMeter(levelProvider: @escaping () -> Float,
-                     bandsProvider: (() -> [Float])? = nil) {
+                     bandsProvider: (() -> [Float])? = nil,
+                     micIsLive: Bool = true) {
+        model.micIsLive = micIsLive
         levelTimer?.invalidate()
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             let level = levelProvider()
@@ -384,6 +386,10 @@ final class RecordingIndicatorPanel {
     // The phase alone, for a session that is already up.
     func updateAgentPhase(_ phase: AgentIndicatorPhase) {
         model.agentPhase = phase
+    }
+
+    func setMicIsLive(_ live: Bool) {
+        model.micIsLive = live
     }
 
     // What has been heard so far, in full — the pill keeps only the tail of it.
@@ -476,6 +482,7 @@ final class RecordingIndicatorPanel {
         levelTimer = nil
         model.level = 0   // let the meter drain rather than freeze mid-fade
         model.bands = SpectrumAnalyzer.silent
+        model.micIsLive = false
         guard let panel, isShowing else { return }
         isShowing = false
         panel.ignoresMouseEvents = true
@@ -647,6 +654,15 @@ final class IndicatorModel: ObservableObject {
     // A decision the user has not made yet: while this is set the pill wears
     // its accept/deny controls.
     @Published var consent: ConsentPrompt?
+
+    // Whether the microphone is genuinely capturing right now. Set by the
+    // controller when capture starts and clears when it stops, rather than
+    // inferred from the consent mode: confirm-by-voice keeps the mic shut for
+    // the several seconds it takes to speak the question, so a pill that
+    // inferred "mode 3 means listening" drew a level meter over a closed
+    // microphone — a listening affordance at the one moment nothing is
+    // listening, and indistinguishable from a microphone that had failed.
+    @Published var micIsLive = false
     var onAcceptConsent: (() -> Void)?
     var onDeclineConsent: (() -> Void)?
     var onStop: (() -> Void)?
@@ -1007,6 +1023,85 @@ private struct StillListeningCaption: View {
 // gap, so the meter always says "the mic is on" even when nobody is talking.
 // System colours, rounded rectangles, no markings — nothing to read, only
 // something to recognise.
+// Aloud talking, drawn as two strands winding around each other — a helix seen
+// side on. It exists to answer one question the meter cannot: the meter means
+// "we are listening to you", and during a spoken prompt the microphone is
+// deliberately shut, so a meter there is a listening affordance shown at the
+// exact moment nothing is listening. Someone watching it saw a flat meter and
+// reasonably concluded the microphone was broken.
+//
+// Two properties carry the meaning. It always *moves* while Aloud speaks, so
+// "not listening, talking" reads at a glance even from the corner of the eye.
+// And it *reacts*, so the movement is this sentence rather than a spinner: the
+// strands swell on words and pinch to a line in the gaps. Where the engine
+// cannot tell us the level — the system voice never hands over its samples —
+// the motion continues at a resting amplitude, which is the honest picture of
+// "speaking, loudness unknown".
+struct VoiceWave: View {
+    var level: Float
+    var tint: Color
+
+    // Turns across the width. Few enough to read as a helix rather than a
+    // texture at this size.
+    private let turns: Double = 2.2
+    private let strandWidth: CGFloat = 2
+    // Never fully closed: a helix pinched to a line reads as "stopped", and it
+    // is speaking even between two words.
+    private let restAmplitude: CGFloat = 0.18
+    private let rungs = 11
+
+    var body: some View {
+        // .animation drives this from the display link, so the phase advances
+        // on its own and the drawing is never waiting on an audio frame.
+        TimelineView(.animation) { context in
+            Canvas { ctx, size in
+                let t = context.date.timeIntervalSinceReferenceDate
+                let mid = size.height / 2
+                let swell = restAmplitude + (1 - restAmplitude) * CGFloat(min(max(level, 0), 1))
+                let amplitude = mid * swell
+
+                func strand(_ offset: Double) -> Path {
+                    var path = Path()
+                    let steps = 48
+                    for step in 0...steps {
+                        let fraction = Double(step) / Double(steps)
+                        let angle = fraction * turns * 2 * .pi + t * 3.2 + offset
+                        // Waist the ends so the strands meet rather than being
+                        // sliced off by the frame — that join is what makes it
+                        // read as one twisting ribbon.
+                        let taper = sin(fraction * .pi)
+                        let point = CGPoint(x: fraction * size.width,
+                                            y: mid + sin(angle) * amplitude * taper)
+                        step == 0 ? path.move(to: point) : path.addLine(to: point)
+                    }
+                    return path
+                }
+
+                let front = strand(0)
+                let back = strand(.pi)
+                // The rungs are what separate a helix from two sine waves. They
+                // fade as the strands cross, which is the visual shorthand for
+                // the far side of the twist.
+                for rung in 0..<rungs {
+                    let fraction = (Double(rung) + 0.5) / Double(rungs)
+                    let angle = fraction * turns * 2 * .pi + t * 3.2
+                    let taper = sin(fraction * .pi)
+                    let y = sin(angle) * amplitude * taper
+                    var bar = Path()
+                    bar.move(to: CGPoint(x: fraction * size.width, y: mid + y))
+                    bar.addLine(to: CGPoint(x: fraction * size.width, y: mid - y))
+                    ctx.stroke(bar, with: .color(tint.opacity(0.10 + 0.30 * abs(sin(angle)))),
+                               lineWidth: 1)
+                }
+                ctx.stroke(back, with: .color(tint.opacity(0.45)),
+                           style: StrokeStyle(lineWidth: strandWidth, lineCap: .round))
+                ctx.stroke(front, with: .color(tint.opacity(0.95)),
+                           style: StrokeStyle(lineWidth: strandWidth, lineCap: .round))
+            }
+        }
+    }
+}
+
 struct SpectrumMeter: View {
     var bands: [Float]
     var tint: Color

@@ -1900,6 +1900,23 @@ enum AgentListenError: LocalizedError {
 // consent — lives in AgentBridgeService, which knows nothing about audio.
 extension DictationController: AgentVoiceHost {
     func speak(_ text: String) async throws {
+        // The pill carries the speaking too, not just the listening. Half of
+        // this feature is Aloud talking to someone who is not looking at the
+        // screen, and until now that half was invisible: `speak` put nothing on
+        // screen at all, and the consent prompt showed a level meter — the
+        // listening picture — while the microphone was still shut.
+        let wasAsking = pendingConsentHeard != nil
+        indicator.showAgentSession(harness: agentHarnessName ?? "",
+                                   phase: .speaking,
+                                   levelProvider: { Self.agentSpeaker.currentLevel })
+        indicator.setMicIsLive(false)
+        defer {
+            // A bare `speak` has nothing to say once it stops talking, so the
+            // pill goes rather than sitting there in a state it is no longer
+            // in. A consent prompt keeps it: the question is still on screen
+            // and the microphone is about to open.
+            if !wasAsking { indicator.hide() }
+        }
         try await speakForAgent(text)
     }
 
@@ -2077,6 +2094,7 @@ extension DictationController: AgentVoiceHost {
         consentPump?.cancel()
         consentPump = nil
         recorder.onChunk = nil
+        indicator.setMicIsLive(false)
         // The samples go with it: the pre-consent window is captured to hear one
         // word and for nothing else, so nothing keeps a copy and nothing is
         // finished into a transcript that could outlive the question.

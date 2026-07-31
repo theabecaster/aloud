@@ -13,6 +13,32 @@ final class SpeechPlayer {
     private var wired = false
     private var currentFormat: AVAudioFormat?
 
+    // What is being said right now, for anything drawing the voice. Written
+    // here on the playback path and read from the main thread at display rate,
+    // so it carries its own lock rather than trusting the two to agree.
+    private let levelLock = NSLock()
+    private var envelope = SpeechEnvelope(frames: [])
+    private var startedAt: TimeInterval?
+
+    // 0…1, and 0 whenever nothing is playing.
+    var currentLevel: Float {
+        levelLock.lock(); defer { levelLock.unlock() }
+        guard let startedAt else { return 0 }
+        return envelope.level(at: ProcessInfo.processInfo.systemUptime - startedAt)
+    }
+
+    private func beginLevels(_ speech: Speech) {
+        let built = SpeechEnvelope(samples: speech.samples, sampleRate: speech.sampleRate)
+        levelLock.lock(); defer { levelLock.unlock() }
+        envelope = built
+        startedAt = ProcessInfo.processInfo.systemUptime
+    }
+
+    private func endLevels() {
+        levelLock.lock(); defer { levelLock.unlock() }
+        startedAt = nil
+    }
+
     // Resolves when playback finishes, or immediately if it was interrupted by
     // a newer utterance or by stop().
     func play(_ speech: Speech) async throws {
@@ -52,6 +78,11 @@ final class SpeechPlayer {
         // soon as the buffer has been handed to the render thread, which is
         // well before the user has heard it.
         var scheduleFailure: String?
+        // Started here rather than at the top: everything above can still
+        // throw, and a level clock running for audio that never played would
+        // draw a voice nobody heard.
+        beginLevels(speech)
+        defer { endLevels() }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             // AVFAudio still raises from here on format edge cases we haven't
             // hit; a failed utterance must degrade, never abort the process.

@@ -101,6 +101,8 @@ final class NeuralSpeaker: Speaker {
 
     func stop() { player.stop() }
 
+    var currentLevel: Float { player.currentLevel }
+
     // PocketTTS returns a WAV container rather than raw samples. Parsing it
     // here keeps `Speech` uniform across engines so the player and every
     // timing comparison stay engine-agnostic.
