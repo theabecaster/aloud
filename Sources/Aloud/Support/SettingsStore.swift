@@ -41,6 +41,18 @@ final class SettingsStore: ObservableObject {
         pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
         noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? false
         learnCorrections = defaults.object(forKey: Keys.learnCorrections) as? Bool ?? true
+        installedHarnesses = defaults.object(forKey: Keys.installedHarnesses) as? [String] ?? []
+        agentConsentMode = (defaults.string(forKey: Keys.agentConsentMode))
+            .flatMap(AgentConsentMode.init) ?? .confirmByVoice
+        // Off until a harness is installed, because before that there is
+        // nothing to grant access to. Installing the first one is the act of
+        // consent (see noteHarnessesChanged); the switch is how it gets taken
+        // back without unpicking every config file. Once the user has touched
+        // it, their choice wins and installs stop moving it.
+        let configured = defaults.bool(forKey: Keys.agentVoiceConfigured)
+        agentVoiceEnabled = configured
+            ? defaults.bool(forKey: Keys.agentVoiceEnabled)
+            : !(defaults.object(forKey: Keys.installedHarnesses) as? [String] ?? []).isEmpty
     }
 
     private static func resolveDefaults() -> UserDefaults {
@@ -72,6 +84,10 @@ final class SettingsStore: ObservableObject {
         static let noiseReduction = "noiseReduction"
         static let learnCorrections = "learnCorrections"
         static let deafDevices = "noiseReductionDeafDevices"
+        static let agentVoiceEnabled = "agentVoiceEnabled"
+        static let agentVoiceConfigured = "agentVoiceConfigured"
+        static let agentConsentMode = "agentConsentMode"
+        static let installedHarnesses = "installedHarnesses"
     }
 
     @Published var hotkey: Hotkey {
@@ -172,6 +188,47 @@ final class SettingsStore: ObservableObject {
     // already learned stay where they are.
     @Published var learnCorrections: Bool {
         didSet { defaults.set(learnCorrections, forKey: Keys.learnCorrections) }
+    }
+
+    // MARK: agent voice
+
+    // The master switch. Off refuses every agent call — `listen` and `speak`
+    // both — with a reason that tells the agent to stop asking rather than to
+    // retry. Setting it marks the preference as the user's own, so later
+    // harness installs never move it back.
+    @Published var agentVoiceEnabled: Bool {
+        didSet {
+            defaults.set(agentVoiceEnabled, forKey: Keys.agentVoiceEnabled)
+            defaults.set(true, forKey: Keys.agentVoiceConfigured)
+        }
+    }
+    // How an agent's request to listen is approved. Chosen on the onboarding
+    // install page rather than buried here, because that is the screen where
+    // the user is actually weighing it up.
+    @Published var agentConsentMode: AgentConsentMode {
+        didSet { defaults.set(agentConsentMode.rawValue, forKey: Keys.agentConsentMode) }
+    }
+    // Harness ids the installer has wired up. Drives whether the spoken prompt
+    // names the caller: with one installed "an agent wants to listen" is
+    // clearer than naming it, so the name only appears when there is genuine
+    // ambiguity to resolve.
+    @Published var installedHarnesses: [String] {
+        didSet { defaults.set(installedHarnesses, forKey: Keys.installedHarnesses) }
+    }
+
+    var namesHarnessWhenSpeaking: Bool { installedHarnesses.count > 1 }
+
+    // Called after the installer adds or removes harnesses. Turning the
+    // feature on for the first install is the whole point of the default; it
+    // must never override a user who has already made the choice themselves.
+    func noteHarnessesChanged() {
+        guard !defaults.bool(forKey: Keys.agentVoiceConfigured) else { return }
+        let derived = !installedHarnesses.isEmpty
+        guard derived != agentVoiceEnabled else { return }
+        agentVoiceEnabled = derived
+        // agentVoiceEnabled's didSet marks it configured; undo that, since this
+        // was our inference and not the user's decision.
+        defaults.set(false, forKey: Keys.agentVoiceConfigured)
     }
 
     // Microphones that went completely silent under macOS voice processing.
