@@ -11,6 +11,12 @@ final class LocalizationTests: XCTestCase {
     // A spread of keys across surfaces: menu bar, status line, settings,
     // onboarding, indicator, uninstall.
     private static let knownKeys = [
+        // The spoken consent prompt. Unlike most strings this one is *heard*,
+        // and it is what tells someone a decision is being asked of them — a
+        // silent fallback to English is a non-English user not knowing to
+        // answer at all.
+        "An agent wants to listen — say accept or decline",
+        "%@ wants to listen — say accept or decline",
         "Suggested Fixes",
         "Suggested",
         "Corrections Aloud saw you make. Accept one and it joins the list below; decline and it won’t be suggested again.",

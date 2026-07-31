@@ -372,3 +372,9 @@
 "Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac." = "Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac.";
 "Learned from your edits" = "Learned from your edits";
 "Aloud noticed a fix — review it in the menu bar" = "Aloud noticed a fix — review it in the menu bar";
+
+/* Agent voice — the spoken consent prompt. This is the string that
+   tells someone a decision is being asked of them, so it must never
+   fall back to English. */
+"An agent wants to listen — say accept or decline" = "An agent wants to listen — say accept or decline";
+"%@ wants to listen — say accept or decline" = "%@ wants to listen — say accept or decline";

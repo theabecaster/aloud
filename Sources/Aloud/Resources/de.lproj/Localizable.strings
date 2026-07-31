@@ -372,3 +372,9 @@
 "Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac." = "Aloud bemerkt, wenn du ein Diktat direkt im Text korrigierst, und bietet an, es beim nächsten Mal automatisch zu korrigieren. Nichts verlässt diesen Mac.";
 "Learned from your edits" = "Aus deinen Änderungen gelernt";
 "Aloud noticed a fix — review it in the menu bar" = "Aloud hat eine Korrektur bemerkt – prüfe sie im Menüleisten-Menü";
+
+/* Agent voice — the spoken consent prompt. This is the string that
+   tells someone a decision is being asked of them, so it must never
+   fall back to English. */
+"An agent wants to listen — say accept or decline" = "Ein Agent möchte zuhören – sage annehmen oder ablehnen";
+"%@ wants to listen — say accept or decline" = "%@ möchte zuhören – sage annehmen oder ablehnen";
