@@ -6,17 +6,31 @@ import XCTest
 // agent call is refused. These pin the "off unless asked for" contract, since
 // a gate that quietly turns itself on is worse than no gate.
 final class AgentSettingsTests: XCTestCase {
+    // One fixed suite for the whole class, wiped before each test rather than a
+    // fresh UUID per run. cfprefsd rewrites the plist asynchronously after
+    // tearDown, so a random name loses that race and leaves a file behind every
+    // single time — hundreds had accumulated in ~/Library/Preferences. A stable
+    // name still isolates (the domain is emptied on the way in) and can leave
+    // at most one file.
+    private static let suiteName = "aloud-agent-settings"
     private var suiteName = ""
     private var defaults: UserDefaults!
 
     override func setUp() {
         super.setUp()
-        suiteName = "aloud-agent-settings-\(UUID().uuidString)"
+        suiteName = Self.suiteName
         defaults = UserDefaults(suiteName: suiteName)
+        defaults.removePersistentDomain(forName: suiteName)
     }
 
     override func tearDown() {
         defaults.removePersistentDomain(forName: suiteName)
+        // removePersistentDomain empties the domain but leaves the plist on
+        // disk, so a per-run suite name drops a file in ~/Library/Preferences
+        // every single time. Hundreds had piled up before anyone noticed.
+        let plist = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/\(suiteName).plist")
+        try? FileManager.default.removeItem(at: plist)
         super.tearDown()
     }
 
