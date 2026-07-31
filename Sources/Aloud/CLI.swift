@@ -6,12 +6,43 @@ import Foundation
 // Headless verbs so agents and CI can verify subsystems with no GUI and no
 // human. Every path here must run without TCC permissions
 // except --inject (Accessibility) and --transcribe with live capture.
+//
+// Only the verbs in `run` below exist in a distributed build. Everything else
+// is development tooling and is compiled out when ALOUD_PROD_CLI is defined —
+// see `runDevelopmentVerb`.
 enum CLI {
     static func run(_ args: [String]) async -> Int32 {
         switch args.first {
         case "--version":
             print(Updater.currentVersion())
             return 0
+        default:
+            return await runDevelopmentVerb(args)
+        }
+    }
+
+    #if ALOUD_PROD_CLI
+    // Distribution build: the development verbs are not compiled in at all.
+    // They type into the focused app (--inject), open the microphone
+    // (--mic-check, --transcribe), and print the user's paths and input device
+    // names (--doctor). A signed Developer-ID binary that already holds
+    // Accessibility and Microphone grants has no business offering any of that
+    // to whatever process happens to invoke it.
+    //
+    // scripts/make-app.sh defines this flag for every bundle it stages;
+    // ALOUD_DEV_CLI=1 opts back out, for the tests that must drive an installed
+    // app (scripts/loop-test.sh).
+    private static func runDevelopmentVerb(_ args: [String]) async -> Int32 {
+        FileHandle.standardError.write(Data("unknown flag \(args.first ?? "")\n".utf8))
+        return 2
+    }
+    #endif
+}
+
+#if !ALOUD_PROD_CLI
+extension CLI {
+    private static func runDevelopmentVerb(_ args: [String]) async -> Int32 {
+        switch args.first {
         case "--doctor":
             return doctor()
         case "--enhance":
@@ -1037,3 +1068,4 @@ enum CLI {
         return failures.isEmpty ? 0 : 1
     }
 }
+#endif
