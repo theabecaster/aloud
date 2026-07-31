@@ -485,7 +485,7 @@ enum AgentVoiceInstructions {
 
         ```sh
         \#(command) claim   --harness \#(id) --owner-pid $PPID --name "fixing tests"
-        # {"lease":"L1","status":"granted"}
+        # {"lease":"L1","ok":true}
         \#(command) speak   --harness \#(id) --lease L1 "The migration test is failing. Roll it back, or fix it forward?"
         \#(command) listen  --harness \#(id) --lease L1        # blocks, returns {"text":"..."}
         \#(command) release --harness \#(id) --lease L1        # always, even after an error
@@ -504,7 +504,7 @@ enum AgentVoiceInstructions {
           Aloud release your session the moment you exit, rather than leaving the
           microphone held until the lease times out. Without it you are anonymous
           and simply wait your turn.
-        - `claim` returns immediately. If it comes back `{"status":"queued"}`, ask
+        - `claim` returns immediately. If it comes back `{"ok":false,"reason":"queued"}`, ask
           your question in text instead — do not spin on it, and do not sleep and
           retry.
         - `listen` blocks and ends on silence, returning the final transcript. That
