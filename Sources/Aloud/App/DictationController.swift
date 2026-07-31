@@ -58,8 +58,7 @@ final class DictationController: ObservableObject {
     var agentSessionHolder: AgentSession? { agentSessions.first(where: \.isHolder) }
 
     func agentSessionsChanged(to sessions: [AgentSession]) {
-        FileHandle.standardError.write(
-            Data("[sessions] \(sessions.map(\.name))\n".utf8))
+        DevDiag.note("sessions", "\(sessions.map(\.name))")
         agentSessions = sessions
     }
 
@@ -605,7 +604,7 @@ final class DictationController: ObservableObject {
             // Never silent. A rewrite that is refused looks exactly like one
             // that was never attempted, and this is the seam where the Concise
             // validator's rejections would otherwise disappear without trace.
-            FileHandle.standardError.write(Data("[rewrite] concise produced nothing: \(why)\n".utf8))
+            DevDiag.note("rewrite", "concise produced nothing: \(why)")
         }
         switch outcome {
         case .rewritten(let text):
@@ -1810,12 +1809,12 @@ final class DictationController: ObservableObject {
         let began = Date()
         func note(_ why: String) {
             let elapsed = Date().timeIntervalSince(began)
-            FileHandle.standardError.write(
-                Data(String(format: "[listen] %@ after %.1fs (spoke: %@, quiet: %@)\n",
-                            why, elapsed,
-                            speechActivity.hasHeardSpeech ? "yes" : "no",
-                            speechActivity.secondsSinceSpeech
-                                .map { String(format: "%.2f", $0) } ?? "nil").utf8))
+            DevDiag.note("listen",
+                         String(format: "%@ after %.1fs (spoke: %@, quiet: %@)",
+                                why, elapsed,
+                                speechActivity.hasHeardSpeech ? "yes" : "no",
+                                speechActivity.secondsSinceSpeech
+                                    .map { String(format: "%.2f", $0) } ?? "nil"))
         }
         while true {
             try? await Task.sleep(nanoseconds: UInt64(AgentListen.poll * 1_000_000_000))
@@ -2090,7 +2089,7 @@ extension DictationController: AgentVoiceHost {
         // Every bail here used to be silent, which is how this shipped not
         // working at all: the microphone never opened and nothing said so.
         func note(_ why: String) {
-            FileHandle.standardError.write(Data("[consent] \(why)\n".utf8))
+            DevDiag.note("consent", why)
         }
         guard consentAudio == nil else { return note("already listening") }
         guard phase == .idle || phase.isError else { return note("busy: phase=\(phase)") }
@@ -2162,7 +2161,7 @@ extension DictationController: AgentVoiceHost {
         // that hears nothing looks identical whether the microphone is shut,
         // the detector is asleep or the transcript came back empty.
         func note(_ why: String) {
-            FileHandle.standardError.write(Data("[consent] \(why)\n".utf8))
+            DevDiag.note("consent", why)
         }
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: UInt64(ConsentListen.attemptEvery * 1_000_000_000))

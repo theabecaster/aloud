@@ -384,7 +384,7 @@ final class AgentBridgeService {
     }
 
     private func note(_ what: String) {
-        FileHandle.standardError.write(Data("[consent] \(what)\n".utf8))
+        DevDiag.note("consent", what)
     }
 
     // A spoken answer. `unrecognized` deliberately does not resolve: babble

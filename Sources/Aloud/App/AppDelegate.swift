@@ -248,8 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             // CLI in a form that has moved on. Writes only what differs.
             let refreshed = HarnessInstaller(home: HarnessInstaller.userHome).refreshInstalled()
             if !refreshed.isEmpty {
-                FileHandle.standardError.write(
-                    Data("[install] refreshed: \(refreshed.map(\.id).joined(separator: ", "))\n".utf8))
+                DevDiag.note("install", "refreshed: \(refreshed.map(\.id).joined(separator: ", "))")
             }
             // Nothing else will notice an abandoned session. Every other reap
             // rides in on a bridge call, and the case that strands the pill on
