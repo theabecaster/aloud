@@ -610,38 +610,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         } else {
             window.center()
         }
-        // A window's very first orderFront can race two things: the hosting
-        // view's initial layout, and — in a menu-bar (LSUIElement) app on
-        // macOS 14's cooperative activation — the app's activation itself,
-        // which can land a beat after the window is already on screen. Either
-        // race paints every toggle as an empty track, stuck until something
-        // forces AppKit to redraw the switches (a click, or the window
-        // resigning and reclaiming key — which is why refocusing "fixes" it).
-        // The fix: the window stays invisible until it is key *and* its
-        // controls have been repainted in that state — the redraw a manual
-        // refocus forces, done before the user ever sees a frame. A short
-        // fallback reveals it regardless, so a window that somehow never
-        // becomes key doesn't stay hidden.
+        // A window's very first paint can race the app's own activation: in a
+        // menu-bar (LSUIElement) app on macOS 14's cooperative activation,
+        // activate() is a *request* that completes a beat later, and a window
+        // ordered front inside that beat takes its first paint half-activated
+        // — every toggle an empty track, stuck until something makes the
+        // controls rebuild (a click, or refocusing the window). Becoming key
+        // is not the same thing: the window routinely goes key before the app
+        // is active, which is why revealing on didBecomeKey still shipped the
+        // broken frame. So: don't order the window front until the app is
+        // actually active, and keep it invisible until its controls have been
+        // rebuilt in that final state (revealAfterFirstPaint). A short
+        // fallback bounds both waits so the window can never fail to appear.
         let firstPresentation = !window.isVisible
-        NSApp.activate(ignoringOtherApps: true)
         if firstPresentation { window.alphaValue = 0 }
-        window.makeKeyAndOrderFront(nil)
-        if firstPresentation {
-            revealAfterFirstPaint(window)
+        let order = { [weak self] in
+            window.makeKeyAndOrderFront(nil)
+            if firstPresentation { self?.revealAfterFirstPaint(window) }
+        }
+        if NSApp.isActive {
+            order()
+        } else {
+            whenActive(within: 0.4, then: order)
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
-    // Repaints every control and only then makes the window visible — once
+    /// Runs `body` once the app is active — on the didBecomeActive that a
+    /// pending activate() earns, or after `timeout` if activation never lands
+    /// (another app can decline to yield it).
+    private func whenActive(within timeout: TimeInterval, then body: @escaping @MainActor () -> Void) {
+        final class TokenBox: @unchecked Sendable {
+            var value: NSObjectProtocol?
+            var done = false
+        }
+        let box = TokenBox()
+        let fire = { @MainActor in
+            guard !box.done else { return }
+            box.done = true
+            if let token = box.value {
+                NotificationCenter.default.removeObserver(token)
+                box.value = nil
+            }
+            body()
+        }
+        box.value = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { fire() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { fire() }
+    }
+
+    // Rebuilds every control and only then makes the window visible — once
     // it is key (immediately if it already is), or after a short fallback.
     private func revealAfterFirstPaint(_ window: NSWindow) {
         func reveal() {
             guard window.alphaValue == 0 else { return }
-            func markDirty(_ view: NSView) {
-                view.needsDisplay = true
-                view.subviews.forEach(markDirty)
-            }
             window.contentView?.layoutSubtreeIfNeeded()
-            window.contentView.map(markDirty)
+            // needsDisplay isn't enough: a switch that painted half-activated
+            // redraws the same stale layer content. An appearance round-trip
+            // is the programmatic version of a system theme flip — every view
+            // discards and rebuilds its layers in the now-active, now-key
+            // state. Invisible behind alpha 0, and the window ends back on
+            // the inherited appearance it started with.
+            let flipped: NSAppearance.Name =
+                window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                    ? .aqua : .darkAqua
+            let inherited = window.appearance
+            window.appearance = NSAppearance(named: flipped)
+            window.appearance = inherited
             window.displayIfNeeded()
             window.alphaValue = 1
         }

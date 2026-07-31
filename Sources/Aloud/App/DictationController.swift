@@ -82,6 +82,28 @@ final class DictationController: ObservableObject {
     // and must not stamp its verdict (or its field snapshot) on that session.
     private var sessionGeneration = 0
 
+    // "Getting ready…" is a fallback, not a first frame. The pill opens as
+    // the live meter the moment the key goes down, and only admits it's
+    // waiting if the engine start outlives this grace — most starts finish
+    // well inside it, and the label used to flash for a blink on its way to
+    // the meter, which read as a glitch.
+    private static let startGrace: Duration = .milliseconds(350)
+    private var startGraceTask: Task<Void, Never>?
+
+    /// If the engine start for `generation` is still pending once the grace
+    /// runs out, flip the pill to "Getting ready…". The start callback
+    /// cancels this; a session that ended early fails the guards instead.
+    private func armStartGrace(generation: Int) {
+        startGraceTask?.cancel()
+        startGraceTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.startGrace)
+            guard !Task.isCancelled, let self,
+                  self.sessionGeneration == generation, self.phase == .recording,
+                  !self.indicator.isHandsFreeLocked else { return }
+            self.indicator.showTranscribing(label: loc("Getting ready…"))
+        }
+    }
+
     // The last dictation that landed in another app, kept so the next
     // session's focus snapshot can reveal what the user made of it (see
     // harvestCorrection). One observation per injection: consumed when an
@@ -403,7 +425,12 @@ final class DictationController: ObservableObject {
         case .begin: beginRecording()
         case .commit: commitRecording()
         case .cancel: cancelRecording()
-        case .lock: indicator.showLocked()   // recording continues hands-free
+        case .lock:
+            // A lock confirms the session is real — "Getting ready…" exists to
+            // absorb accidental taps, and flipping a locked pill into it would
+            // take the stop button away during a slow engine start.
+            startGraceTask?.cancel()
+            indicator.showLocked()   // recording continues hands-free
         case .beginCommand: beginCommandRecording()
         case .commitCommand: commitCommandRecording()
         case .cancelCommand: cancelCommandRecording()
@@ -605,15 +632,18 @@ final class DictationController: ObservableObject {
                 }
             }
         }
-        // The pill appears the instant the key goes down — as "Getting
-        // ready…" — because starting capture can take over a second on a
-        // Bluetooth microphone negotiating its profile, and a hotkey that
-        // seems to do nothing for that long reads as broken. The engine
-        // starts off the main thread; the pill flips to the live meter (and
-        // the cue plays) when the microphone is actually listening.
+        // The pill appears the instant the key goes down — a hotkey that
+        // seems to do nothing reads as broken — and it appears as the live
+        // meter, reading silence until the engine runs. "Getting ready…"
+        // waits behind the grace window for the starts that are genuinely
+        // slow (a Bluetooth microphone negotiating its profile can take over
+        // a second). The engine starts off the main thread; the cue plays
+        // only when the microphone is actually listening.
         phase = .recording
-        indicator.showTranscribing(label: loc("Getting ready…"))
+        indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
+                       bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
         let startGeneration = sessionGeneration
+        armStartGrace(generation: startGeneration)
         recorder.startAsync(deviceUID: settings.microphoneUID,
                             noiseReduction: settings.noiseReduction && AudioDevices.voiceProcessingAllowed()) { [weak self] error in
             guard let self else { return }
@@ -624,6 +654,7 @@ final class DictationController: ObservableObject {
                 self.recorder.cancel()
                 return
             }
+            self.startGraceTask?.cancel()
             if let error {
                 self.phase = .error(error.localizedDescription)
                 self.indicator.showHint(loc("Couldn’t access the microphone"))
@@ -1321,12 +1352,16 @@ final class DictationController: ObservableObject {
         // still in flight so its verdict can't flash over this recording.
         sessionGeneration += 1
         sessionTypingBlocked = false
-        // Same instant-feedback contract as a dictation hold: pill first,
-        // engine off-thread, live state when the microphone actually hears.
+        // Same instant-feedback contract as a dictation hold: the live pill
+        // first, engine off-thread, "Getting ready…" only past the grace
+        // window when a start is genuinely slow.
         phase = .recording
         isCommandSession = true
-        indicator.showTranscribing(label: loc("Getting ready…"))
+        indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
+                       bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent },
+                       command: true)
         let startGeneration = sessionGeneration
+        armStartGrace(generation: startGeneration)
         recorder.startAsync(deviceUID: settings.microphoneUID,
                             noiseReduction: settings.noiseReduction && AudioDevices.voiceProcessingAllowed()) { [weak self] error in
             guard let self else { return }
@@ -1335,6 +1370,7 @@ final class DictationController: ObservableObject {
                 self.recorder.cancel()
                 return
             }
+            self.startGraceTask?.cancel()
             if let error {
                 self.phase = .error(error.localizedDescription)
                 self.isCommandSession = false
