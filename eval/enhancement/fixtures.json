@@ -24,5 +24,7 @@
   {"id": "tone-1", "task": "formal",
    "transcript": "Hey just wanted to check if you got my last email about the contract. Lemme know when you can."},
   {"id": "question-1", "task": "concise",
-   "transcript": "In the Mac menu what do I have to type into the terminal to see the logs or the tmux or whatever session?"}
+   "transcript": "In the Mac menu what do I have to type into the terminal to see the logs or the tmux or whatever session?"},
+  {"id": "truncated-1", "task": "concise",
+   "transcript": "Okay, so I'm talking about this thing and then when I'm going on about it and then I'm actually trying to build this up and I'm very excited about it, I think it's gonna be a very good"}
 ]

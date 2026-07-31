@@ -178,6 +178,20 @@ enum EnhancerOutputCheck {
             let kept = written.count { spoken.contains($0) }
             guard Double(kept) / Double(written.count) >= 0.6 else { return nil }
         }
+        // A sentence that was cut off must stay cut off. Observed live (an
+        // agent listen ended by the hotkey mid-word): "…I think it's gonna be
+        // a very good" came back as "…gonna be a good response." — the model
+        // invented "response" to finish a sentence the speaker never finished.
+        // One fabricated word survives the kept-ratio net above, so this
+        // convicts on the tail alone: a transcript with no terminal
+        // punctuation whose rewrite ends in a content word the transcript
+        // never contained has been completed, not tightened.
+        if let rawLast = original.trimmingCharacters(in: .whitespacesAndNewlines).last,
+           !".!?…".contains(rawLast),
+           let lastWritten = written.last,
+           !Set(Self.contentWords(original)).contains(lastWritten) {
+            return nil
+        }
         return trimmed
     }
 
