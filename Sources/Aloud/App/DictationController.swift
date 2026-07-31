@@ -40,7 +40,7 @@ final class DictationController: ObservableObject {
     private var isAgentSession = false
     // The pre-consent microphone for confirm-by-voice.
     private var pendingConsentHeard: ((String) -> Void)?
-    private var consentSession: StreamingTranscription?
+    private var consentAudio: ConsentAudioBuffer?
     private var consentPump: Task<Void, Never>?
     // Who the current agent session belongs to, for the indicator's label.
     var agentHarnessName: String?
@@ -1872,47 +1872,166 @@ extension DictationController: AgentVoiceHost {
         func note(_ why: String) {
             FileHandle.standardError.write(Data("[consent] \(why)\n".utf8))
         }
-        guard consentSession == nil else { return note("already listening") }
+        guard consentAudio == nil else { return note("already listening") }
         guard phase == .idle || phase.isError else { return note("busy: phase=\(phase)") }
         guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
             return note("no speech model: state=\(transcriber.state)")
         }
         await ensureTranscriberReady()
-        guard let stream = transcriber.makeStreamingTranscription() else {
-            return note("engine cannot stream — confirm-by-voice needs live transcription")
-        }
 
-        consentSession = stream
+        let audio = ConsentAudioBuffer()
+        consentAudio = audio
         do {
             _ = try await startAgentCapture()
         } catch {
-            consentSession = nil
+            consentAudio = nil
             return note("microphone refused: \(error.localizedDescription)")
         }
         note("listening for accept/decline")
-        recorder.onChunk = { [weak stream] chunk in stream?.append(samples: chunk) }
+        recorder.onChunk = { [weak audio] chunk in audio?.append(chunk) }
+        // The meter is the only sign the microphone is live. The pill has been
+        // on screen since before playback started, so it has to be attached
+        // here rather than at show time.
+        indicator.attachMeter(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
+                              bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
         consentPump = Task { [weak self] in
-            for await update in stream.updates {
-                guard self != nil else { return }
-                let said = update.full
-                guard !said.isEmpty else { continue }
-                FileHandle.standardError.write(Data("[consent] heard: \(said)\n".utf8))
-                onHeard(said)
+            await self?.pumpConsentAnswers(from: audio, onHeard: onHeard)
+        }
+    }
+
+    // Transcribe what was just said, on a cadence, and let the matcher judge it.
+    //
+    // Two things this deliberately does not do, both learned the hard way here.
+    //
+    // It does not read the live stream. Everywhere else in the app the streaming
+    // transcript is a *preview* — `commitLive` re-transcribes the whole
+    // recording and settles the text on that result, because the preview revises
+    // itself as it decodes. Consent was the one place making a decision on a
+    // preview, on the hardest input it has: one short word with no surrounding
+    // context. "Accept" came back as *exactly / exact / except*, and it was
+    // never the microphone or the model — it was reading a draft.
+    //
+    // And it does not endpoint on the speech detector. That was the obvious
+    // design and it does not survive contact: `SpeechActivity` missed a spoken
+    // "accept" outright, reporting no speech for ten seconds after the user had
+    // already answered. A consent answer is one short word, which is the case a
+    // VAD is worst at, and a missed word means the prompt can only time out. So
+    // the cadence is fixed — every attempt looks at the trailing few seconds,
+    // whatever the detector thinks.
+    //
+    // A rolling window also fixes the original bug by construction. Keywords
+    // match only as the whole utterance or its leading token, and the matcher
+    // was being handed the cumulative transcript since mic-open — so anything
+    // said before the answer poisoned the window for its full 20 s. A trailing
+    // window is short by definition, which is what the matcher was built for.
+    private func pumpConsentAnswers(from audio: ConsentAudioBuffer,
+                                    onHeard: @escaping (String) -> Void) async {
+        // Nothing in here may fail quietly. Every previous bug in this feature
+        // was a path that did nothing and said nothing, and a consent prompt
+        // that hears nothing looks identical whether the microphone is shut,
+        // the detector is asleep or the transcript came back empty.
+        func note(_ why: String) {
+            FileHandle.standardError.write(Data("[consent] \(why)\n".utf8))
+        }
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: UInt64(ConsentListen.attemptEvery * 1_000_000_000))
+            guard !Task.isCancelled, consentAudio === audio else { return }
+
+            let (samples, peak) = audio.trailing(seconds: ConsentListen.window)
+            let seconds = Double(samples.count) / AudioRecorder.targetSampleRate
+            guard seconds >= ConsentListen.minAnswer else {
+                note(String(format: "only %.1fs captured — the microphone is not delivering", seconds))
+                continue
             }
+            // Do not ask the model to transcribe an empty room. Left to itself
+            // it invents words — a 12 s silence came back as "No, hey, book it,
+            // that's idiot" — and a hallucination is not a harmless one here:
+            // the text it invents is fed straight to the consent matcher, and
+            // an invented "yes" would open the microphone nobody agreed to
+            // open. Speech peaks well above this; a quiet room does not.
+            guard peak >= ConsentListen.speechPeak else {
+                note(String(format: "quiet (peak %.3f) — nothing to transcribe", peak))
+                continue
+            }
+            note(String(format: "%.1fs at peak %.3f, transcribing", seconds, peak))
+            let result: Transcription
+            do {
+                result = try await transcriber.transcribe(samples: samples)
+            } catch {
+                note("transcribe failed: \(error.localizedDescription)")
+                continue
+            }
+            let said = verbatim(result).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !said.isEmpty else {
+                note("transcribed to nothing")
+                continue
+            }
+            guard !Task.isCancelled, consentAudio === audio else { return }
+            note("heard: \(said)")
+            onHeard(said)
         }
     }
 
     private func stopConsentListening() {
         pendingConsentHeard = nil
-        guard let stream = consentSession else { return }
-        consentSession = nil
+        guard consentAudio != nil else { return }
+        consentAudio = nil
         consentPump?.cancel()
         consentPump = nil
         recorder.onChunk = nil
+        // The samples go with it: the pre-consent window is captured to hear one
+        // word and for nothing else, so nothing keeps a copy and nothing is
+        // finished into a transcript that could outlive the question.
         _ = recorder.stop()
-        // Discarded, never finished: finishing would produce a transcript, and
-        // a transcript of the pre-consent window is the one thing that must
-        // never exist.
-        Task { await stream.cancel() }
+    }
+}
+
+// Endpointing constants for the consent answer. Shorter than a dictation turn
+// on purpose: the reply is a word, and a user who has said it is waiting.
+enum ConsentListen {
+    static let attemptEvery: TimeInterval = 1.2     // how often we look
+    static let window: TimeInterval = 3.0           // how much of the recent past we judge
+    static let minAnswer: TimeInterval = 0.25       // shorter than this isn't a word
+    // Below this the room is empty and the model is not asked to transcribe it.
+    // Measured on a quiet room and a normal speaking voice at a laptop
+    // microphone: silence peaked at 0.014–0.019 across a full 20 s prompt,
+    // speech at 0.088–0.549. This sits between them with margin on both sides
+    // rather than hugging the noise floor — the failure it guards against is
+    // the model inventing words over silence ("No, hey, book it, that's idiot"
+    // came out of a 12 s empty room), and an invented "yes" is consent nobody
+    // gave.
+    static let speechPeak: Float = 0.04
+}
+
+// The consent answer as it accumulates. Audio arrives on the capture thread and
+// is drained from the pump, so this owns the lock rather than leaving the two
+// sides to agree about it.
+final class ConsentAudioBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var samples: [Float] = []
+
+    func append(_ chunk: [Float]) {
+        lock.lock(); defer { lock.unlock() }
+        samples.append(contentsOf: chunk)
+    }
+
+    // The most recent `seconds` of audio, with its peak amplitude — the caller
+    // needs both and computing the peak here means walking the samples once,
+    // under the lock we already hold.
+    //
+    // A window rather than a drain: consecutive attempts overlap, so a word
+    // spoken across an attempt boundary is whole in the next one. Re-judging
+    // the same audio is harmless, because the same answer resolves the same
+    // prompt only once.
+    func trailing(seconds: TimeInterval) -> (samples: [Float], peak: Float) {
+        lock.lock(); defer { lock.unlock() }
+        let wanted = Int(seconds * AudioRecorder.targetSampleRate)
+        let window = samples.count > wanted ? Array(samples.suffix(wanted)) : samples
+        var peak: Float = 0
+        for sample in window {
+            let magnitude = abs(sample)
+            if magnitude > peak { peak = magnitude }
+        }
+        return (window, peak)
     }
 }

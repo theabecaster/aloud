@@ -355,6 +355,18 @@ final class RecordingIndicatorPanel {
         // taking clicks at that moment would drop the first one.
         panel?.ignoresMouseEvents = false
         guard let levelProvider else { return }
+        attachMeter(levelProvider: levelProvider, bandsProvider: bandsProvider)
+    }
+
+    // Start the meter on a pill that is already up. Confirm-by-voice needs it:
+    // the question is shown first and the microphone opens only once the spoken
+    // prompt has finished playing, so there is nothing to meter at show time.
+    // Without this the pill renders a resting meter under a question that is
+    // waiting on the user's voice — which is indistinguishable from a
+    // microphone that never opened, and that is a failure this feature has
+    // already had. A dead meter must mean a dead microphone.
+    func attachMeter(levelProvider: @escaping () -> Float,
+                     bandsProvider: (() -> [Float])? = nil) {
         levelTimer?.invalidate()
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             let level = levelProvider()
