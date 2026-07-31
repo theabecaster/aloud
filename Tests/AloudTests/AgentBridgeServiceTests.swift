@@ -38,12 +38,24 @@ final class AgentBridgeServiceTests: XCTestCase {
     private var suiteName = ""
     private var defaults: UserDefaults!
     private var host: FakeHost!
+    // A clock the test drives, so the lease cooldown and the refusal back-off
+    // can be stepped over instead of waited out.
+    private final class Clock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = Date(timeIntervalSince1970: 1_000_000)
+        var current: Date { lock.lock(); defer { lock.unlock() }; return value }
+        func advance(_ seconds: TimeInterval) {
+            lock.lock(); defer { lock.unlock() }; value = value.addingTimeInterval(seconds)
+        }
+    }
+    private var clock: Clock!
 
     override func setUp() {
         super.setUp()
         suiteName = "aloud-bridge-service-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
         host = FakeHost()
+        clock = Clock()
     }
 
     override func tearDown() {
@@ -58,10 +70,12 @@ final class AgentBridgeServiceTests: XCTestCase {
         settings.experimentalAgentVoice = enabled
         settings.installedHarnesses = harnesses
         settings.agentConsentMode = mode
+        let clock = self.clock!
         return AgentBridgeService(leases: LeaseManager(isAlive: { _ in true }),
                                   consent: ConsentPolicy(mode: mode),
                                   settings: settings,
-                                  host: host)
+                                  host: host,
+                                  now: { clock.current })
     }
 
     private func request(_ op: BridgeOperation, lease: String? = nil,
@@ -142,10 +156,48 @@ final class AgentBridgeServiceTests: XCTestCase {
         // Reporting `disabled` here would make the agent give up for good.
         XCTAssertEqual(response.reason, .denied)
         XCTAssertTrue(host.spoken.isEmpty, "on-screen mode never speaks")
+    }
 
-        // And the microphone is free for someone else immediately.
-        let after = await service.handle(request(.claim), peer: peer)
-        XCTAssertNotEqual(after.reason, .queued)
+    // The installed instructions tell agents that `denied` means this request
+    // only and not to retry-loop — but instructions are not enforcement. An
+    // agent that ignores them could re-prompt a user who just said no, over and
+    // over, which is how a feature gets switched off for good. Saying no has to
+    // actually buy quiet.
+    func testAHarnessThatWasRefusedCannotImmediatelyAskAgain() async {
+        let service = makeService(mode: .confirmOnScreen)
+        let claim = Task { await service.handle(self.request(.claim), peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        service.declineConsent(lease: host.prompts.first?.lease ?? "")
+        _ = await claim.value
+
+        let again = await service.handle(request(.claim), peer: peer)
+        XCTAssertEqual(again.reason, .denied)
+        XCTAssertNotNil(again.retryAfter, "an agent has to be told how long to stay quiet for")
+        XCTAssertEqual(host.prompts.count, 1, "the user must not be asked a second time")
+    }
+
+    // The back-off is per harness: one agent being told no says nothing about
+    // whether the user wants to hear from a different one.
+    func testARefusalDoesNotSilenceOtherHarnesses() async {
+        let service = makeService(mode: .confirmOnScreen)
+        let claim = Task { await service.handle(self.request(.claim), peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        service.declineConsent(lease: host.prompts.first?.lease ?? "")
+        _ = await claim.value
+
+        // Past the audio cooldown the declined session started.
+        clock.advance(5)
+
+        var other = request(.claim)
+        other.harness = "codex"
+        other.pid = 5150
+        let second = Task {
+            await service.handle(other, peer: BridgeServer.PeerIdentity(pid: 5150, name: "codex"))
+        }
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        XCTAssertEqual(host.prompts.count, 2, "a different harness still gets to ask")
+        service.declineConsent(lease: host.prompts.last?.lease ?? "")
+        _ = await second.value
     }
 
     // MARK: leases

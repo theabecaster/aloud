@@ -45,6 +45,15 @@ final class AgentBridgeService {
     // continuation per outstanding prompt, resumed exactly once.
     private var pendingConsent: [String: CheckedContinuation<ConsentResolution, Never>] = [:]
 
+    // A harness that was just refused cannot ask again straight away.
+    // The installed instructions tell agents that `denied` means this request
+    // only and not to retry-loop, but instructions are not enforcement: an
+    // agent that ignores them could re-prompt a user who said no, over and
+    // over, which is exactly the behaviour that gets a feature switched off for
+    // good. Saying no has to actually buy quiet.
+    private var refusedUntil: [String: Date] = [:]
+    static let refusalBackoff: TimeInterval = 60
+
     init(leases: LeaseManager = LeaseManager(),
          consent: ConsentPolicy = ConsentPolicy(),
          settings: SettingsStore = .shared,
@@ -110,6 +119,12 @@ final class AgentBridgeService {
         let pid = peer.isKnown ? peer.pid : request.pid
         let at = now()
 
+        if let until = refusedUntil[request.harness], at < until {
+            var response = BridgeResponse.failure(.denied, loc("The user declined."))
+            response.retryAfter = until.timeIntervalSince(at)
+            return response
+        }
+
         switch leases.claim(harness: request.harness, pid: pid, now: at) {
         case .disabled:
             return .failure(.disabled, loc("Voice is turned off in Aloud."))
@@ -139,7 +154,9 @@ final class AgentBridgeService {
                     response.lease = lease
                     return response
                 case .denied:
-                    // No point holding a lease the user just refused.
+                    // No point holding a lease the user just refused, and no
+                    // asking again for a while.
+                    refusedUntil[request.harness] = now().addingTimeInterval(Self.refusalBackoff)
                     leases.release(lease: lease, now: now())
                     return .failure(.denied, loc("The user declined."))
                 case .timedOut:
