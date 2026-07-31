@@ -132,10 +132,16 @@ struct StatusMenuView: View {
             if empty { reviewingSuggestions = false }
         }
         // Ending the last one closes the list rather than leaving an empty
-        // popover pointing at a button that is no longer there.
+        // popover pointing at a button that is no longer there. Dropping to
+        // exactly one does NOT close it: the user is mid-triage, and yanking
+        // the list out from under them to re-present the survivor in the
+        // single-session shape reads as the popover flinching. The shapes are
+        // chosen at click time, so the next open shows the right one.
         .onChange(of: controller.agentSessions) { _, sessions in
-            if sessions.count < 2 { reviewingSessions = false }
-            if sessions.isEmpty { confirmingEnd = nil }
+            if sessions.isEmpty {
+                reviewingSessions = false
+                confirmingEnd = nil
+            }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8),
                    value: controller.agentSessions)
@@ -660,17 +666,26 @@ private struct EndSessionConfirmation: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(loc("End %@’s session?", session.name))
-                .font(.system(size: 13, weight: .semibold))
+            HStack(alignment: .top, spacing: 8) {
+                Text(loc("End %@’s session?", session.name))
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 8)
+                Button(action: onCancel) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.cancelAction)
+                .help(loc("Close"))
+                .accessibilityLabel(loc("Close"))
+            }
             Text(loc("It gives the microphone back and tells the agent the session is over."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 Spacer()
-                Button(loc("Cancel"), action: onCancel)
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.cancelAction)
                 Button(action: onEnd) {
                     Image(systemName: "trash")
                 }

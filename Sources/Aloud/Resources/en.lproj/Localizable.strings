@@ -456,6 +456,7 @@
 "Agent sessions" = "Agent sessions";
 "End %@’s session?" = "End %@’s session?";
 "End all" = "End All";
+"Close" = "Close";
 "End every session, including waiting ones" = "End every session, including waiting ones";
 "End Session" = "End Session";
 "End" = "End";
