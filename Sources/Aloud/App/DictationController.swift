@@ -507,6 +507,89 @@ final class DictationController: ObservableObject {
         return rewritten
     }
 
+    // What actually happened to an agent's transcript. Four outcomes, because
+    // `cleanup` is a promise to the agent about how far to trust the text and
+    // three of these used to collapse into one silent `nil`:
+    //
+    //   rewritten   — Concise ran and tightened it
+    //   notNeeded   — Concise is here; the answer was already short and clean
+    //   unavailable — no system language model on this Mac (macOS 14/15)
+    //   failed      — Concise ran and produced nothing usable
+    //
+    // The first two are `concise`: the text got the best this Mac can do. The
+    // last two are `basic`, and the difference between them matters — one is a
+    // Mac that never had the feature, the other is a rewrite that broke.
+    private enum AgentCleanupOutcome {
+        case rewritten(String)
+        case notNeeded
+        case unavailable
+        case failed(String)
+    }
+
+    // The rewrite for an agent session. Deliberately not `rewriteIfAllowed`,
+    // which asks three questions an agent session has no business answering:
+    //
+    //   - the user's dictation polish level. That is a preference about what
+    //     gets typed into their apps; §3 says agent sessions always run
+    //     Concise. Left as it was, a user who prefers light polish for their
+    //     own dictation silently downgraded every agent's transcript.
+    //   - the focused app's mode rules, resolved from whatever window happens
+    //     to be in front. An agent session injects nothing into that app and
+    //     has no app to infer a tone from — a code-mode editor in the
+    //     foreground switched the rewrite off for a spoken answer that had
+    //     nothing to do with it.
+    //   - that same app's extra tone instructions.
+    //
+    // What is left is the general tone, which is what §3 specifies.
+    private func rewriteForAgent(_ polished: String) async -> AgentCleanupOutcome {
+        guard let enhancer, enhancer.isAvailable else { return .unavailable }
+        guard !polished.isEmpty, EnhancerOutputCheck.isWorthRewriting(polished) else {
+            return .notNeeded
+        }
+        let outcome: AgentCleanupOutcome = await withTaskGroup(of: AgentCleanupOutcome.self) { group in
+            group.addTask {
+                do {
+                    return .rewritten(try await enhancer.enhance(polished, extraInstructions: nil))
+                } catch {
+                    return .failed("\(error)")
+                }
+            }
+            group.addTask {
+                // Budget, not a target: past this the polished text ships as-is.
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                return .failed("timed out")
+            }
+            let first = await group.next() ?? .failed("no result")
+            group.cancelAll()
+            return first
+        }
+        // A rewrite identical to the input is not a failure — there was simply
+        // nothing left to tighten.
+        if case .rewritten(let text) = outcome, text == polished { return .notNeeded }
+        return outcome
+    }
+
+    // One place both listen paths build their answer, so the blocking `listen`
+    // and the streaming `stop` cannot drift apart on what `cleanup` means.
+    private func agentTranscript(raw: String) async -> AgentTranscript {
+        let polished = polishedVariants(from: raw)
+        let outcome = await rewriteForAgent(polished.rewriteInput)
+        if case .failed(let why) = outcome {
+            // Never silent. A rewrite that is refused looks exactly like one
+            // that was never attempted, and this is the seam where the Concise
+            // validator's rejections would otherwise disappear without trace.
+            FileHandle.standardError.write(Data("[rewrite] concise produced nothing: \(why)\n".utf8))
+        }
+        switch outcome {
+        case .rewritten(let text):
+            return AgentTranscript(text: text, raw: raw, cleanup: .concise)
+        case .notNeeded:
+            return AgentTranscript(text: polished.fallback, raw: raw, cleanup: .concise)
+        case .unavailable, .failed:
+            return AgentTranscript(text: polished.fallback, raw: raw, cleanup: .basic)
+        }
+    }
+
     // Onboarding's Clean-up demo runs the real rewrite over its sample
     // sentence rather than showing a written-in-advance imitation of one.
     // nil = show the polished text, exactly what dictation would type here.
@@ -1613,14 +1696,15 @@ final class DictationController: ObservableObject {
             let raw = verbatim(result)
             // Agents always get the best cleanup this Mac can do, at the
             // general tone — there is no focused app to infer a mode from, and
-            // the caller is told which one actually ran because the Concise
-            // rewrite needs Apple Intelligence and we target macOS 14+.
-            let polished = polishedVariants(from: raw)
-            let rewritten = await rewriteIfAllowed(polished.rewriteInput)
+            // the caller is told which tier this Mac *can* do, because the
+            // Concise rewrite needs Apple Intelligence and we target macOS 14+.
+            // Which tier, not whether the text changed: a short clean answer
+            // ("Fix it forward.") needs no rewriting and still got the best
+            // this Mac has. Reporting `basic` for it told the agent to treat a
+            // finished answer as a raw transcript.
+            let transcript = await agentTranscript(raw: raw)
             indicator.hide()
-            return AgentTranscript(text: rewritten ?? polished.fallback,
-                                   raw: raw,
-                                   cleanup: rewritten == nil ? .basic : .concise)
+            return transcript
         } catch {
             indicator.hide()
             throw error
@@ -1777,12 +1861,9 @@ final class DictationController: ObservableObject {
 
         let result = try await session.stream.finish()
         let raw = verbatim(result)
-        let polished = polishedVariants(from: raw)
-        let rewritten = await rewriteIfAllowed(polished.rewriteInput)
+        let transcript = await agentTranscript(raw: raw)
         indicator.hide()
-        return AgentTranscript(text: rewritten ?? polished.fallback,
-                               raw: raw,
-                               cleanup: rewritten == nil ? .basic : .concise)
+        return transcript
     }
 
     // Cut a running agent capture short — the user pulling the plug.
