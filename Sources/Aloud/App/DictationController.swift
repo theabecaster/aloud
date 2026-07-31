@@ -2174,6 +2174,16 @@ extension DictationController: AgentVoiceHost {
     // is over: the pill comes down rather than sitting there indefinitely
     // saying an agent holds a microphone that has already been handed back.
     func endAgentSession() async {
+        // Whether anything of ours is actually up. A lease can be held with
+        // nothing being captured — the agent thinking between calls — and in
+        // that gap the user may start their own dictation. A release or a
+        // reap landing then must not hide their pill or force their phase
+        // idle out from under them (which also strands their open recorder,
+        // since the poll-session stop below is gated on `agentPoll`). If no
+        // agent capture, prompt, or playback is live, the destructive
+        // teardown is skipped entirely.
+        let hadAgentActivity = isAgentSession || agentPoll != nil
+            || agentSpeaking || pendingConsentHeard != nil
         stopConsentListening()
         indicatorDismissConsent()
         // A poll session owns the recorder until its stop call — and once the
@@ -2195,6 +2205,7 @@ extension DictationController: AgentVoiceHost {
         // holds the microphone.
         if agentSpeaking { Self.agentSpeaker.stop() }
         isAgentSession = false
+        guard hadAgentActivity else { return }
         indicator.hide()
         if phase == .recording { phase = .idle }
     }

@@ -416,6 +416,15 @@ enum AgentVoiceInstructions {
     //
     // The name check is what keeps it from being *too* loose: a hand-written
     // `Shell(aloudmixer:listen*)`, or a rule for a verb we do not ship, stays.
+    // The verb an entry grants — the last token of its command line — so a
+    // migration can carry across exactly the verbs the user still has rather
+    // than the whole set. Nil for anything that isn't one of ours.
+    static func verb(of entry: String, style: AgentHarness.PermissionAllowlist) -> String? {
+        guard let line = permittedCommandLine(entry, style: style),
+              let space = line.lastIndex(of: " ") else { return nil }
+        return String(line[line.index(after: space)...])
+    }
+
     static func isPermissionEntry(_ entry: String,
                                   style: AgentHarness.PermissionAllowlist) -> Bool {
         guard let line = permittedCommandLine(entry, style: style),
@@ -617,17 +626,17 @@ struct HarnessInstaller {
     //
     // Deliberately just `install` again rather than a parallel refresh path:
     // it already replaces our block in place and writes only when the content
-    // differs, so an unchanged harness costs a read and touches nothing. A
-    // harness whose config we cannot parse is skipped rather than repaired —
-    // a malformed file is not ours to rewrite here, and the pane is where that
-    // gets surfaced.
-    // Instructions only, never permissions. A refresh runs on every launch
-    // and every gate toggle, and "entry not present in settings.json" is
-    // indistinguishable here from "the user revoked it" — re-adding would
-    // silently re-grant hands-free shell access somebody deliberately took
-    // away. Permissions are written exactly once, by the install the user
-    // clicked. This also keeps a refresh from touching settings.json at all,
-    // so a corrupt permissions file cannot block instruction updates.
+    // differs, so an unchanged harness costs a read and touches nothing.
+    //
+    // A refresh runs on every launch and every gate toggle, so it must never
+    // re-grant a permission the user took away: "entry not present" is
+    // indistinguishable from "revoked". Full permission entries are written
+    // exactly once, by the install the user clicked. The one thing a refresh
+    // does to the allowlist is `.migrate` — following the entries to a new
+    // path when the bundle moved, carrying across only the verbs still there,
+    // never adding one back. And that step is best-effort: a corrupt
+    // settings.json is skipped so it cannot block the instruction update the
+    // refresh is really for.
     @discardableResult
     func refreshInstalled() -> [AgentHarness] {
         AgentHarness.allCases.filter { harness in
@@ -677,25 +686,26 @@ struct HarnessInstaller {
             return .installed(changed: changed ? [url] : [])
 
         case .skillFile:
-            // Order matters for the harnesses with an allowlist. The permission
-            // file is the only thing here that can refuse, so parse it before
-            // writing anything — a failure must not leave a half-installed
-            // skill behind.
-            let allowlist = allowlistURL(for: harness)
-            var updated: Data?
-            if let allowlist {
-                updated = try allowlistJSON(at: allowlist, for: harness, op: permissions)
-            }
-
-            // Allowlist first, skill second. If the allowlist write fails
-            // (disk full, EPERM) the skill is not yet on disk, so the harness
-            // reads as not-installed and the click is cleanly retried — better
-            // than a skill that is present while its permission entry is
-            // missing, which looks installed and prompts on the first listen.
             var changed: [URL] = []
-            if let data = updated, let allowlist {
-                try write(data, to: allowlist)
-                changed.append(allowlist)
+            // Allowlist first, skill second. On a user install (`.add`) the
+            // permission file is mandatory and parsed before the skill is
+            // written, so a corrupt file aborts cleanly and the click retries
+            // rather than leaving a skill present with its permission entry
+            // missing (which looks installed and prompts on turn one).
+            //
+            // On a refresh (`.migrate`) it is best-effort: bringing the
+            // instructions up to date must not be held hostage by a
+            // temporarily-broken settings.json the user or another tool left,
+            // so a throw here is swallowed and the skill is still written.
+            if let allowlist = allowlistURL(for: harness) {
+                do {
+                    if let data = try allowlistJSON(at: allowlist, for: harness, op: permissions) {
+                        try write(data, to: allowlist)
+                        changed.append(allowlist)
+                    }
+                } catch {
+                    if permissions != .migrate { throw error }
+                }
             }
             let skill = home.appendingPathComponent(harness.instructionPath)
             let file = AgentVoiceInstructions.skillFile(harness: harness, command: command)
@@ -849,11 +859,18 @@ struct HarnessInstaller {
                 .filter { AgentVoiceInstructions.isPermissionEntry($0, style: style) }
             let currentSet = Set(currentEntries)
             if !ours.isEmpty, !ours.contains(where: { currentSet.contains($0) }) {
+                // Carry across exactly the verbs the user still has, not the
+                // whole set: someone who deleted `speak` and then moved the
+                // bundle must not have `speak` handed back by the migration.
+                let keptVerbs = Set(ours.compactMap { AgentVoiceInstructions.verb(of: $0, style: style) })
+                let migrated = currentEntries.filter { entry in
+                    AgentVoiceInstructions.verb(of: entry, style: style).map(keptVerbs.contains) ?? false
+                }
                 allow.removeAll { element in
                     guard let entry = element as? String else { return false }
                     return AgentVoiceInstructions.isPermissionEntry(entry, style: style)
                 }
-                allow.append(contentsOf: currentEntries)
+                allow.append(contentsOf: migrated)
                 changed = true
             }
         }

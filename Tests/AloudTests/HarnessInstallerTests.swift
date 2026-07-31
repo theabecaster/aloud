@@ -252,6 +252,39 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertFalse(try allowList().contains(removed), "a revoked entry stays revoked")
     }
 
+    // Partial revoke AND a move at once: the migration follows the surviving
+    // verbs to the new path and must not resurrect the one the user deleted.
+    func testMigrationCarriesOnlyTheVerbsTheUserStillHas() throws {
+        let old = "/Applications/Aloud.app/Contents/MacOS/Aloud"
+        let new = "/opt/tools/Aloud.app/Contents/MacOS/Aloud"
+        _ = try HarnessInstaller(home: home, command: old).install(.claudeCode)
+        var allow = try allowList()
+        // Drop the `speak` grant, leaving three at the old path.
+        allow.removeAll { $0.contains("speak") && AgentVoiceInstructions.isPermissionEntry($0, style: .claudeSettings) }
+        try writeAllow(allow)
+
+        XCTAssertEqual(HarnessInstaller(home: home, command: new).refreshInstalled(), [.claudeCode])
+        let after = try allowList().filter { AgentVoiceInstructions.isPermissionEntry($0, style: .claudeSettings) }
+        XCTAssertEqual(after.count, 3, "three verbs migrate, not four")
+        XCTAssertFalse(after.contains { $0.contains("speak") }, "the revoked verb is not resurrected by the move")
+        XCTAssertTrue(after.allSatisfy { $0.contains(new) }, "the survivors are at the new path")
+    }
+
+    // A refresh must update the instructions even when the permissions file is
+    // corrupt — the instruction update is the point of the refresh, and a
+    // broken settings.json is not allowed to hold it hostage.
+    func testRefreshUpdatesInstructionsEvenWhenSettingsJSONIsCorrupt() throws {
+        _ = try HarnessInstaller(home: home,
+                                 command: "/Applications/Aloud.app/Contents/MacOS/Aloud").install(.claudeCode)
+        try write("{ this is not json", to: ".claude/settings.json")
+        let new = "/opt/tools/Aloud.app/Contents/MacOS/Aloud"
+        _ = HarnessInstaller(home: home, command: new).refreshInstalled()
+        let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        XCTAssertTrue(skill.contains(new), "the skill followed the new path despite the broken settings file")
+        XCTAssertEqual(read(".claude/settings.json"), "{ this is not json",
+                       "the corrupt file is left exactly as it was")
+    }
+
     private func writeAllow(_ entries: [String]) throws {
         var root = try settingsJSON()
         var permissions = (root["permissions"] as? [String: Any]) ?? [:]
