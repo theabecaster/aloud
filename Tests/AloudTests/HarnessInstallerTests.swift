@@ -189,6 +189,45 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertEqual(read(".claude/settings.json"), settingsBefore)
     }
 
+    // What agents are told has to travel with the app.
+    //
+    // `isInstalled` answers on our marker, not on what it contains — right for
+    // "did the user opt in", wrong for "is this current". So an update that
+    // changed the instructions left every harness installed before it running
+    // the old text, reported as "Installed" and looking healthy, while telling
+    // agents to call the CLI in a form that had moved on.
+    func testAnOutdatedSkillIsBroughtUpToDate() throws {
+        _ = try installer().install(.claudeCode)
+        let current = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+
+        // An older Aloud's block: our markers, somebody else's body.
+        let stale = current.replacingOccurrences(of: "--harness claude-code",
+                                                 with: "--harness claude-code --legacy-flag")
+        XCTAssertNotEqual(stale, current)
+        try write(stale, to: ".claude/skills/aloud-voice/SKILL.md")
+        XCTAssertTrue(installer().isInstalled(.claudeCode),
+                      "a stale block still reads as installed — that is the trap")
+
+        XCTAssertEqual(installer().refreshInstalled(), [.claudeCode])
+        XCTAssertEqual(read(".claude/skills/aloud-voice/SKILL.md"), current,
+                       "the instructions must be brought back to what this build says")
+    }
+
+    // …and a harness that is already current is not rewritten, so launching
+    // the app does not churn files or their modification dates.
+    func testRefreshingAnUpToDateInstallWritesNothing() throws {
+        _ = try installer().install(.claudeCode)
+        XCTAssertEqual(installer().refreshInstalled(), [])
+    }
+
+    // A harness the user never installed is not installed by a refresh. The
+    // refresh keeps opt-ins current; it does not create them.
+    func testRefreshDoesNotInstallIntoHarnessesTheUserNeverChose() throws {
+        try makeMarker(".codex")
+        XCTAssertEqual(installer().refreshInstalled(), [])
+        XCTAssertFalse(installer().isInstalled(.codex))
+    }
+
     // Uninstall removes our four entries and leaves the rest of the user's
     // settings — including their other permissions — exactly as they were.
     func testClaudeUninstallLeavesTheRestOfSettingsAlone() throws {

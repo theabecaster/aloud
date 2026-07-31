@@ -237,6 +237,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             try server.start()
             bridgeService = service
             bridge = server
+            // What agents are told has to travel with the app. An update that
+            // changes the instructions would otherwise leave every harness
+            // installed before it running the old text — still marked
+            // "Installed", still looking fine, and telling agents to call the
+            // CLI in a form that has moved on. Writes only what differs.
+            let refreshed = HarnessInstaller(home: HarnessInstaller.userHome).refreshInstalled()
+            if !refreshed.isEmpty {
+                FileHandle.standardError.write(
+                    Data("[install] refreshed: \(refreshed.map(\.id).joined(separator: ", "))\n".utf8))
+            }
             // Nothing else will notice an abandoned session. Every other reap
             // rides in on a bridge call, and the case that strands the pill on
             // screen is precisely the one where no more calls are coming.

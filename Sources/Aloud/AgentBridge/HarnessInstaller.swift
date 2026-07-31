@@ -591,6 +591,31 @@ struct HarnessInstaller {
         }
     }
 
+    // Bring every installed harness's instructions up to date.
+    //
+    // `isInstalled` answers on the presence of our marker, not on what the
+    // marker contains — which is the right question for "did the user opt in",
+    // and the wrong one for "is this current". Without this, an Aloud update
+    // that changes what agents are told leaves every already-installed harness
+    // running the old text forever, reported in the pane as "Installed" and
+    // looking entirely healthy. That is how a harness ends up passing a flag
+    // that no longer exists, or omitting one that now matters.
+    //
+    // Deliberately just `install` again rather than a parallel refresh path:
+    // it already replaces our block in place and writes only when the content
+    // differs, so an unchanged harness costs a read and touches nothing. A
+    // harness whose config we cannot parse is skipped rather than repaired —
+    // a malformed file is not ours to rewrite here, and the pane is where that
+    // gets surfaced.
+    @discardableResult
+    func refreshInstalled() -> [AgentHarness] {
+        AgentHarness.allCases.filter { harness in
+            guard harness.scope == .global, isInstalled(harness) else { return false }
+            guard case .installed(let changed)? = try? install(harness) else { return false }
+            return !changed.isEmpty
+        }
+    }
+
     // MARK: state
 
     // Answered from the instruction file alone, not from settings.json: the
