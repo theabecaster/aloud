@@ -215,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let on = enabled ?? controller.settings.experimentalAgentVoice
         guard on else {
             bridgeService?.forceRelease()
+            controller.agentSessionsChanged(to: [])
             bridgeSweep?.invalidate()
             bridgeSweep = nil
             bridge?.stop()
@@ -226,6 +227,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard bridge == nil else { return }
 
         let service = AgentBridgeService(settings: controller.settings, host: controller)
+        service.onHolderChanged = { [weak self] sessions in
+            self?.controller.agentSessionsChanged(to: sessions)
+        }
         let server = BridgeServer()
         server.handler = { [weak service] request, peer in
             guard let service else {

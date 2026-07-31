@@ -127,6 +127,19 @@ final class AgentBridgeService {
         leases.enabled = settings.agentVoiceAvailable
         consent.mode = settings.agentConsentMode
 
+        // Every path that can take or give up a lease leaves through here, so
+        // the menu bar is told once rather than at four call sites that would
+        // eventually disagree.
+        // A session's job moves on, so any later call may carry a new name.
+        // Deliberately not fatal when it is malformed: a bad label is no
+        // reason to refuse a speak that is otherwise fine, and the claim that
+        // opened the session already enforced the rule.
+        if request.op != .claim, let lease = request.lease,
+           case .success(let renamed) = SessionName.validate(request.name) {
+            leases.rename(lease: lease, to: renamed)
+        }
+
+        defer { publishHolder() }
         switch request.op {
         case .status:  return status()
         case .claim:   return await claim(request, peer: peer)
@@ -173,6 +186,15 @@ final class AgentBridgeService {
         let pid = request.pid > 0 ? request.pid : LeaseManager.noOwnerPid
         let at = now()
 
+        // A session that will not say what it is doing cannot be shown to the
+        // user, and the whole point of the name is that it is there before the
+        // microphone opens rather than after somebody asks who is talking.
+        let name: String
+        switch SessionName.validate(request.name) {
+        case .success(let valid): name = valid
+        case .failure(let why):   return .failure(.badRequest, why.message)
+        }
+
         if let until = refusedUntil[request.harness], at < until {
             var response = BridgeResponse.failure(.denied, "The user declined.")
             response.retryAfter = until.timeIntervalSince(at)
@@ -195,9 +217,10 @@ final class AgentBridgeService {
         let requested = min(max(request.wait ?? 0, 0), Self.maxQueueWait)
         let pollsRemaining = Int(requested / Self.queuePoll)
 
-        var outcome = leases.claim(harness: request.harness, pid: pid, now: at)
+        var outcome = leases.claim(harness: request.harness, pid: pid, name: name, now: at)
         if pollsRemaining > 0 {
             var polls = 0
+            let reclaimsAtEntry = reclaims
             while case .queued = outcome, polls < pollsRemaining {
                 polls += 1
                 try? await Task.sleep(nanoseconds: UInt64(Self.queuePoll * 1_000_000_000))
@@ -206,8 +229,15 @@ final class AgentBridgeService {
                 guard settings.agentVoiceAvailable else {
                     return .failure(.disabled, "Agent Speak is turned off in Aloud.")
                 }
+                // Nor may it outlive the user taking the microphone back. A
+                // wait that survived that would hand the mic to this caller
+                // moments after somebody pressed hang up, which is the one
+                // outcome that control exists to prevent.
+                guard reclaims == reclaimsAtEntry else {
+                    return .failure(.denied, "The user took the microphone back.")
+                }
                 leases.enabled = true
-                outcome = leases.claim(harness: request.harness, pid: pid, now: now())
+                outcome = leases.claim(harness: request.harness, pid: pid, name: name, now: now())
             }
         }
 
@@ -225,6 +255,7 @@ final class AgentBridgeService {
         case .granted(let lease):
             switch consent.request(lease: lease,
                                    harness: request.harness,
+                                   name: name,
                                    installedHarnesses: settings.installedHarnesses.count,
                                    now: at) {
             case .granted:
@@ -412,6 +443,7 @@ final class AgentBridgeService {
         let grant: ConsentGrant
         switch consent.request(lease: lease,
                                harness: request.harness,
+                               name: leases.holder?.name ?? request.harness,
                                installedHarnesses: settings.installedHarnesses.count,
                                now: now()) {
         case .granted(let granted):
@@ -517,6 +549,20 @@ final class AgentBridgeService {
     // The menu bar pulling the plug. Ends the session and answers any prompt
     // still parked on it, so a waiting agent gets a refusal instead of hanging
     // until its own timeout.
+    // Told, not polled: the menu bar's way out of a stuck session has to be
+    // there the moment a lease is taken, not up to five seconds later.
+    var onHolderChanged: (([AgentSession]) -> Void)?
+
+    // Bumped whenever the user takes the microphone back. A parked `--wait`
+    // claim is a polling loop, so clearing the queue alone would not stop it —
+    // it would simply re-enqueue on its next poll and take the microphone the
+    // user just reclaimed. This is how it learns the answer changed.
+    private var reclaims = 0
+
+    private func publishHolder() {
+        onHolderChanged?(leases.sessions)
+    }
+
     // Reaping is lazy everywhere else — `claim`, `validate` and `release` reap
     // on the way in — which is right for lease *state* and wrong for the pill.
     // An agent that dies or forgets to release leaves the indicator on screen
@@ -536,15 +582,31 @@ final class AgentBridgeService {
 
     func sweepAndEndFinishedSessions() async {
         guard sweep(now: now()) else { return }
+        publishHolder()
         await host?.endAgentSession()
     }
 
+    // End one named session — the menu bar's list, where more than one wants
+    // the microphone. Ending the holder is the hang up; ending a waiter simply
+    // takes it out of the queue, and it will be told when it next asks.
+    func endSession(_ id: String) {
+        if leases.holder?.id == id {
+            forceRelease()
+            return
+        }
+        reclaims += 1
+        leases.dropQueued(id: id)
+        publishHolder()
+    }
+
     func forceRelease() {
+        reclaims += 1
         if let lease = leases.holder?.id {
             resolve(lease, .denied(preConsentAudio: .discarded))
             consent.endLease(lease)
         }
         leases.forceRelease(now: now())
+        publishHolder()
         Task { [weak self] in await self?.host?.endAgentSession() }
     }
 }

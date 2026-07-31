@@ -95,6 +95,9 @@ struct ConsentGrant: Equatable {
 struct ConsentPrompt: Equatable {
     let lease: String
     let harness: String
+    // What the session is doing — what the user reads and hears, instead of
+    // "an agent" or the tool's name.
+    let name: String
     let mode: AgentConsentMode
     // Spoken in mode 3, shown on the pill in mode 2 — same wording, same
     // one-vs-many naming rule (§7.1c).
@@ -163,6 +166,7 @@ final class ConsentPolicy {
     // so a retrying agent cannot keep the user's deadline alive forever.
     func request(lease: String,
                  harness: String,
+                 name: String,
                  installedHarnesses: Int,
                  now: Date) -> ConsentRequest {
         expire(now: now)
@@ -189,8 +193,9 @@ final class ConsentPolicy {
         let prompt = ConsentPrompt(
             lease: lease,
             harness: harness,
+            name: name,
             mode: mode,
-            text: ConsentPolicy.promptText(harness: harness, installedHarnesses: installedHarnesses),
+            text: ConsentPolicy.promptText(sessionName: name),
             capture: mode.capturesBeforeConsent ? .forConsentOnly : .none,
             askedAt: now,
             deadline: now.addingTimeInterval(config.timeout))
@@ -266,9 +271,12 @@ final class ConsentPolicy {
 
     // MARK: prompt wording (§7.1c)
 
-    // The prompt names the harness only when more than one is installed. With
-    // a single harness "Claude Code wants to listen" is noise — the user knows
-    // who it is — so the name appears only when there is real ambiguity.
+    // The prompt says what the session is doing, because that is the thing the
+    // user is being asked to allow. Naming the tool answered a question nobody
+    // had — with one harness installed "an agent" was noise, and with two
+    // windows of the same one "Claude Code" could not tell them apart. "Let
+    // fixing tests listen?" is short enough to say and specific enough to
+    // answer.
     //
     // It asks for "yes or no" rather than "accept or decline" because those are
     // the words the recognizer can actually hear. Measured on the shipping
@@ -278,11 +286,8 @@ final class ConsentPolicy {
     // saying "yes" transcribed as "Yes." every time. Accept and decline stay in
     // the keyword set for anyone who says them; the fix is to stop *asking* for
     // a word we cannot hear, rather than to loosen what counts as consent.
-    static func promptText(harness: String, installedHarnesses: Int) -> String {
-        guard installedHarnesses > 1 else {
-            return loc("Let an agent listen? Yes or no")
-        }
-        return loc("Let %@ listen? Yes or no", displayName(forHarness: harness))
+    static func promptText(sessionName: String) -> String {
+        loc("Let %@ listen? Yes or no", sessionName)
     }
 
     // "claude-code" → "Claude Code". A label for the user's benefit, never

@@ -47,6 +47,22 @@ final class DictationController: ObservableObject {
     private var pendingConsentAccept: (() -> Void)?
     private var pendingConsentDecline: (() -> Void)?
     private var consentAudio: ConsentAudioBuffer?
+    // Who holds the microphone, for the menu bar. A lease can be held with
+    // nothing being captured — between a question and the next answer — so
+    // this is not the same as `isAgentSession`, and the user's way back to
+    // their own microphone has to exist during both.
+    @Published private(set) var agentSessions: [AgentSession] = []
+
+    // The one holding the microphone, if any — what the pill and the status
+    // line name.
+    var agentSessionHolder: AgentSession? { agentSessions.first(where: \.isHolder) }
+
+    func agentSessionsChanged(to sessions: [AgentSession]) {
+        FileHandle.standardError.write(
+            Data("[sessions] \(sessions.map(\.name))\n".utf8))
+        agentSessions = sessions
+    }
+
     private var consentPump: Task<Void, Never>?
     // Feeds the pill's rolling tail during a blocking agent listen. Preview
     // only: the agent's answer is the batch transcription of the whole turn.
@@ -1988,7 +2004,7 @@ extension DictationController: AgentVoiceHost {
         // screen at all, and the consent prompt showed a level meter — the
         // listening picture — while the microphone was still shut.
         let wasAsking = pendingConsentHeard != nil
-        indicator.showAgentSession(harness: agentHarnessName ?? "",
+        indicator.showAgentSession(harness: agentSessionHolder?.name ?? agentHarnessName ?? "",
                                    phase: .speaking,
                                    levelProvider: { Self.agentSpeaker.currentLevel })
         indicator.setMicIsLive(false)

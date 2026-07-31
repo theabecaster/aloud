@@ -30,6 +30,8 @@
 "Voice download didn’t finish" = "Voice download didn’t finish";
 "Dictation key isn’t working — try reopening Aloud" = "Dictation key isn’t working — try reopening Aloud";
 "Hold %@ to dictate" = "Hold %@ to dictate";
+"%@ is using the microphone" = "%@ is using the microphone";
+"End %@’s session" = "End %@’s Session";
 
 /* Windows */
 "Welcome to Aloud" = "Welcome to Aloud";
@@ -445,3 +447,14 @@
 "Listening — this goes to the agent" = "Listening — this goes to the agent";
 "The agent is speaking" = "The agent is speaking";
 "Agent Speak" = "Agent Speak";
+
+/* Agent Speak — live sessions in the menu bar footer. */
+"%@ — using the microphone" = "%@ — using the microphone";
+"%@ — waiting" = "%@ — waiting";
+"%ld sessions" = "%ld sessions";
+"Agent sessions using the microphone" = "Agent sessions using the microphone";
+"Agent sessions" = "Agent sessions";
+"End %@’s session?" = "End %@’s session?";
+"End Session" = "End Session";
+"End" = "End";
+"It gives the microphone back and tells the agent the session is over." = "It gives the microphone back and tells the agent the session is over.";

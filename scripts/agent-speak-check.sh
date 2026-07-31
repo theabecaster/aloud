@@ -224,7 +224,7 @@ run_cli status
 expect_eq "status with the gate off says 'disabled', not 'unavailable'" "disabled" "$(field reason)"
 expect_eq "  ...and exits 0 (a refusal is an answer, not a failed command)" "0" "$LAST_RC"
 
-run_cli claim --harness claude-code
+run_cli claim --harness claude-code --name "check run"
 expect_eq "claim with the gate off is refused with 'disabled'" "disabled" "$(field reason)"
 
 # The gate is read once, at launch. A `defaults write` from out here lands in
@@ -265,7 +265,7 @@ echo
 
 # --- 3. a full session -------------------------------------------------------
 echo "== session: claim -> speak -> speak -> release"
-run_cli claim --harness claude-code
+run_cli claim --harness claude-code --name "check run"
 LEASE="$(field lease)"
 expect_eq "claim is granted" "true" "$(field ok)"
 if [ -n "$LEASE" ]; then pass "claim returns a lease id ($LEASE)"; else fail "claim returns a lease id" "$LAST_OUT"; fi
@@ -295,11 +295,11 @@ echo
 # --- 4. contention -----------------------------------------------------------
 echo "== contention"
 # --wait rides out the post-release cooldown instead of racing it.
-run_cli claim --harness claude-code --wait 10
+run_cli claim --harness claude-code --name "check run" --wait 10
 LEASE="$(field lease)"
 expect_eq "claim --wait rides out the cooldown and is granted" "true" "$(field ok)"
 
-run_cli claim --harness codex
+run_cli claim --harness codex --name "check run"
 expect_eq "a second harness is refused with 'queued'" "queued" "$(field reason)"
 expect_eq "  ...and 'queuedBehind' names the holder" "claude-code" "$(field queuedBehind)"
 expect_eq "  ...and reports a queue position" "1" "$(field position)"
@@ -308,7 +308,7 @@ expect_eq "  ...and reports a queue position" "1" "$(field position)"
 # real but whose deadline is a logical clock never gets here — it spins until
 # something else kills it, which is how this last broke.
 START=$SECONDS
-run_cli claim --harness cursor --wait 3
+run_cli claim --harness cursor --name "check run" --wait 3
 ELAPSED=$((SECONDS - START))
 expect_eq "a --wait that runs out its ceiling comes back 'queued'" "queued" "$(field reason)"
 if [ "$ELAPSED" -ge 2 ] && [ "$ELAPSED" -le 15 ]; then
@@ -327,7 +327,7 @@ echo "== parked wait"
 WAITOUT="$STATE/parked.json"
 : > "$WAITOUT"
 ALOUD_STATE_DIR="$STATE" ALOUD_DEFAULTS_SUITE="$SUITE" \
-  "$BIN" claim --harness codex --wait 60 >"$WAITOUT" 2>/dev/null &
+  "$BIN" claim --harness codex --wait 60 --name "check run" >"$WAITOUT" 2>/dev/null &
 WAIT_PID=$!
 
 sleep 3
@@ -392,7 +392,7 @@ stop_app
 for verb in status claim release speak listen; do
   case "$verb" in
     status)  run_cli status ;;
-    claim)   run_cli claim --harness claude-code ;;
+    claim)   run_cli claim --harness claude-code --name "check run" ;;
     release) run_cli release --lease L1 ;;
     speak)   run_cli speak --lease L1 "nobody is home" ;;
     listen)  run_cli listen --lease L1 ;;

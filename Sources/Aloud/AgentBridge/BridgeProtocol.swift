@@ -46,6 +46,13 @@ struct BridgeRequest: Codable {
     var text: String?           // speak
     var mode: ListenMode?       // listen
     var wait: Double?           // long-poll / queue-wait ceiling, seconds
+    // What this session is doing, in the caller's own words — "fixing tests".
+    // Required on claim and accepted on any later call, because a session's
+    // job moves on. It is what the user reads on the pill, hears in the spoken
+    // prompt, and picks from when more than one session wants the microphone;
+    // "an agent" cannot tell two windows of the same tool apart, and that is
+    // exactly when it matters. A label, like `harness` — never authentication.
+    var name: String?
     var session: String?        // listen --poll / --stop: what --start returned
 
     enum ListenMode: String, Codable {

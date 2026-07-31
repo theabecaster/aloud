@@ -16,6 +16,13 @@ struct LeaseHolder: Equatable {
     let id: String              // opaque lease token handed to the caller
     let harness: String         // "claude-code" — a label, never authentication
     let pid: pid_t              // the harness process, for liveness checks
+    // What this session is doing, in the caller's own words: "fixing tests",
+    // "release notes". The harness id says which tool is talking; two windows
+    // of the same tool are both "claude-code" and the user cannot tell them
+    // apart by it, which is precisely when they need to. Changeable mid-session
+    // — a session's job moves on — and no more authentication than the harness
+    // id is.
+    var name: String
     var grantedAt: Date
     var lastUsed: Date
 }
@@ -23,7 +30,17 @@ struct LeaseHolder: Equatable {
 struct QueueEntry: Equatable {
     let harness: String
     let pid: pid_t
+    var name: String
     let joinedAt: Date
+}
+
+// One line of the menu bar's session list: everyone currently holding or
+// waiting for the microphone.
+struct AgentSession: Equatable, Identifiable {
+    let id: String              // lease id for the holder, a queue key otherwise
+    let name: String
+    let harness: String
+    let isHolder: Bool
 }
 
 enum ClaimResult: Equatable {
@@ -91,7 +108,7 @@ final class LeaseManager {
     // Idempotent on purpose. Agents re-claim to discover whether their turn has
     // arrived, so a second call from the same harness+pid must return the same
     // lease or the same queue position — never stack up duplicate entries.
-    func claim(harness: String, pid: pid_t, now: Date) -> ClaimResult {
+    func claim(harness: String, pid: pid_t, name: String, now: Date) -> ClaimResult {
         guard enabled else { return .disabled }
         reap(now: now)
 
@@ -111,18 +128,19 @@ final class LeaseManager {
         if let holder, holder.harness == harness, holder.pid == pid,
            pid != LeaseManager.noOwnerPid {
             touch(now: now)
+            rename(lease: holder.id, to: name)
             return .granted(holder.id)
         }
 
         // Someone else is mid-session.
         if let current = holder {
-            return .queued(position: enqueue(harness: harness, pid: pid, now: now),
+            return .queued(position: enqueue(harness: harness, pid: pid, name: name, now: now),
                            reason: .busy(holder: current.harness))
         }
 
         // Free, but the audio is still settling from the last session.
         if let freeAt, now < freeAt {
-            return .queued(position: enqueue(harness: harness, pid: pid, now: now),
+            return .queued(position: enqueue(harness: harness, pid: pid, name: name, now: now),
                            reason: .cooldown)
         }
 
@@ -132,12 +150,12 @@ final class LeaseManager {
         // stays idle until the leader comes back for it, or until its queue TTL
         // expires and the next in line becomes the leader.
         if let leader = queue.first, !(leader.harness == harness && leader.pid == pid) {
-            return .queued(position: enqueue(harness: harness, pid: pid, now: now),
+            return .queued(position: enqueue(harness: harness, pid: pid, name: name, now: now),
                            reason: .busy(holder: leader.harness))
         }
 
         queue.removeAll { $0.harness == harness && $0.pid == pid }
-        return .granted(grant(harness: harness, pid: pid, now: now))
+        return .granted(grant(harness: harness, pid: pid, name: name, now: now))
     }
 
     // Only the holder may act. Every accepted call refreshes the TTL — using
@@ -166,9 +184,16 @@ final class LeaseManager {
     // The user pulling the plug from the menu bar. Unlike `release`, this does
     // not care who is holding it — when automation gets stuck, the person
     // watching should not have to wait out a timeout they cannot see.
+    // The user taking the microphone back. The queue goes with the holder,
+    // because "give me my microphone" and "next, please" are opposite
+    // intentions and this control means the first: leaving the queue standing
+    // hands the mic to whoever was next about two seconds later, so pressing
+    // hang up would start a different agent talking. Anyone dropped is told,
+    // and is free to ask again.
     func forceRelease(now: Date) {
-        guard holder != nil else { return }
+        guard holder != nil || !queue.isEmpty else { return }
         holder = nil
+        queue.removeAll()
         freeAt = now.addingTimeInterval(config.cooldown)
     }
 
@@ -215,10 +240,11 @@ final class LeaseManager {
 
     // MARK: internals
 
-    private func grant(harness: String, pid: pid_t, now: Date) -> String {
+    private func grant(harness: String, pid: pid_t, name: String, now: Date) -> String {
         counter += 1
         let id = "L\(counter)-\(UInt32.random(in: 0..<UInt32.max))"
-        holder = LeaseHolder(id: id, harness: harness, pid: pid, grantedAt: now, lastUsed: now)
+        holder = LeaseHolder(id: id, harness: harness, pid: pid, name: name,
+                             grantedAt: now, lastUsed: now)
         freeAt = nil
         return id
     }
@@ -231,11 +257,42 @@ final class LeaseManager {
     // re-claim to discover whether their turn has come, and each of those calls
     // must return the same position rather than append a duplicate.
     @discardableResult
-    private func enqueue(harness: String, pid: pid_t, now: Date) -> Int {
+    private func enqueue(harness: String, pid: pid_t, name: String, now: Date) -> Int {
         if let existing = queue.firstIndex(where: { $0.harness == harness && $0.pid == pid }) {
+            // A waiting session may have moved on to something else by the time
+            // its turn comes; the user should see what it is doing now.
+            queue[existing].name = name
             return existing + 1
         }
-        queue.append(QueueEntry(harness: harness, pid: pid, joinedAt: now))
+        queue.append(QueueEntry(harness: harness, pid: pid, name: name, joinedAt: now))
         return queue.count
+    }
+
+    // Remove one waiting session by the id `sessions` gave it.
+    func dropQueued(id: String) {
+        queue.removeAll { "\($0.harness)#\($0.pid)" == id }
+    }
+
+    // A session's job changes while it holds the microphone. The name is a
+    // label the user reads, so it follows.
+    func rename(lease id: String, to name: String) {
+        guard var current = holder, current.id == id, !name.isEmpty else { return }
+        current.name = name
+        holder = current
+    }
+
+    // Everyone holding or waiting, for the menu bar. Ordered as the queue is —
+    // holder first, then the order they will be granted in.
+    var sessions: [AgentSession] {
+        var all: [AgentSession] = []
+        if let holder {
+            all.append(AgentSession(id: holder.id, name: holder.name,
+                                    harness: holder.harness, isHolder: true))
+        }
+        for entry in queue {
+            all.append(AgentSession(id: "\(entry.harness)#\(entry.pid)", name: entry.name,
+                                    harness: entry.harness, isHolder: false))
+        }
+        return all
     }
 }

@@ -484,13 +484,20 @@ enum AgentVoiceInstructions {
         nothing.
 
         ```sh
-        \#(command) claim   --harness \#(id) --owner-pid $PPID   # {"lease":"L1","status":"granted"}
+        \#(command) claim   --harness \#(id) --owner-pid $PPID --name "fixing tests"
+        # {"lease":"L1","status":"granted"}
         \#(command) speak   --harness \#(id) --lease L1 "The migration test is failing. Roll it back, or fix it forward?"
         \#(command) listen  --harness \#(id) --lease L1        # blocks, returns {"text":"..."}
         \#(command) release --harness \#(id) --lease L1        # always, even after an error
         ```
 
         - Pass `--harness \#(id)` on every call.
+        - Pass `--name "<two words>"` saying what you are *doing* — "fixing
+          tests", "release notes", "code review". The user reads it on the
+          indicator, hears it in the spoken prompt ("Let fixing tests listen?"),
+          and picks from it when more than one session wants the microphone.
+          Two windows of the same tool cannot be told apart any other way. Two words at most, and re-send `--name` on any
+          later call if what you are doing has changed.
         - Pass `--owner-pid $PPID` on `claim`, exactly as written. It is how Aloud
           tells your session apart from another session of the same tool, so the
           two queue for the microphone instead of sharing one lease — and it lets

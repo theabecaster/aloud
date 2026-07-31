@@ -348,7 +348,7 @@ final class RecordingIndicatorPanel {
         announceTask?.cancel()
         enterAgentMode()
         model.agentPhase = phase
-        model.agentCaller = callerLabel(forHarness: harness)
+        model.agentCaller = callerLabel(harness)
         present()
         // Agent pills are clickable throughout — the accept/deny controls can
         // appear at any point in the session, and a pill that only started
@@ -409,7 +409,7 @@ final class RecordingIndicatorPanel {
         announceTask?.cancel()
         enterAgentMode()
         model.agentPhase = .pending
-        model.agentCaller = callerLabel(forHarness: prompt.harness)
+        model.agentCaller = callerLabel(prompt.name)
         model.consent = prompt
         model.onAcceptConsent = onAccept
         model.onDeclineConsent = onDecline
@@ -449,13 +449,15 @@ final class RecordingIndicatorPanel {
         applyPanelSize()
     }
 
-    // "claude-code" → "Claude Code", or nil for "an agent". Naming the caller
-    // only helps when there is more than one it could be (§7.1c) — the same
-    // rule the spoken prompt follows.
-    private func callerLabel(forHarness harness: String?) -> String? {
-        guard let harness, !harness.isEmpty else { return nil }
-        let names = namesCaller ?? model.settings?.namesHarnessWhenSpeaking ?? false
-        return names ? ConsentPolicy.displayName(forHarness: harness) : nil
+    // What the session calls itself — "fixing tests" — which is what the user
+    // reads on the pill and hears in the prompt. It used to be the tool's name,
+    // shown only when more than one was installed, and that answered a question
+    // nobody had: with one harness "an agent" was noise, and with two windows
+    // of the same one "Claude Code" could not tell them apart. Falls back to
+    // nothing, which the pill reads as "an agent".
+    private func callerLabel(_ name: String?) -> String? {
+        guard let name, !name.isEmpty else { return nil }
+        return name
     }
 
     // The window the pill floats in differs per variant. position() sets it for

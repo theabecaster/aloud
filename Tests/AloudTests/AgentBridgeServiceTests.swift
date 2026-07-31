@@ -159,8 +159,11 @@ final class AgentBridgeServiceTests: XCTestCase {
     }
 
     private func request(_ op: BridgeOperation, lease: String? = nil,
-                         text: String? = nil) -> BridgeRequest {
-        BridgeRequest(op: op, harness: "claude-code", pid: 4242, lease: lease, text: text)
+                         text: String? = nil, name: String = "fixing tests") -> BridgeRequest {
+        var request = BridgeRequest(op: op, harness: "claude-code", pid: 4242,
+                                    lease: lease, text: text)
+        request.name = name
+        return request
     }
 
     private var peer: BridgeServer.PeerIdentity {
@@ -466,6 +469,37 @@ final class AgentBridgeServiceTests: XCTestCase {
         _ = await service.handle(request(.claim), peer: peer)
         XCTAssertFalse(host.listenedForConsent,
                        "consent capture must not start once the prompt is answered")
+    }
+
+    // Hang up means "give me my microphone back", not "next, please".
+    //
+    // Force-release used to clear only the holder, so a queued agent took the
+    // microphone about a cooldown later: the user presses the control that
+    // exists to stop an agent, and a different agent starts talking. The queue
+    // goes with the holder, and anyone parked on a wait is told rather than
+    // granted — which is also what the plan asks for, that a waiting agent is
+    // answered rather than left hanging.
+    func testHangingUpAnswersAParkedAgentInsteadOfGrantingIt() async {
+        let service = makeService(mode: .open)
+        _ = await service.handle(request(.claim), peer: peer)
+
+        var parkedRequest = BridgeRequest(op: .claim, harness: "codex", pid: 99,
+                                          lease: nil, text: nil)
+        parkedRequest.name = "release notes"
+        parkedRequest.wait = 10
+        let waiter = peer
+        async let parked = service.handle(parkedRequest, peer: waiter)
+
+        // Long enough for the wait loop to be running rather than still on its
+        // first claim, so the hang up lands mid-park — which is the case that
+        // used to end with the microphone handed over.
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        service.forceRelease()
+
+        let response = await parked
+        XCTAssertFalse(response.ok, "a parked agent must not be granted by a hang up")
+        XCTAssertEqual(response.reason, .denied)
+        XCTAssertNil(response.lease)
     }
 
     // The lease ending has to reach the indicator. An accepted prompt leaves

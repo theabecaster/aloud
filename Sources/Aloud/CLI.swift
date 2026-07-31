@@ -44,6 +44,11 @@ enum CLI {
                                     harness: value(of: "--harness", in: args) ?? "unknown",
                                     pid: ownerProcessID(args))
         request.lease = value(of: "--lease", in: args)
+        // What this session is doing, in two words. Required on claim and
+        // accepted later, because a session's job moves on and the user reads
+        // this name on the pill, hears it in the prompt, and picks from it when
+        // more than one session wants the microphone.
+        request.name = value(of: "--name", in: args)
         // `claim --wait N` blocks until the microphone is yours, so an agent
         // can park it in a background shell and get on with something else
         // rather than spending a model turn per look. Also accepted on listen,
@@ -727,9 +732,9 @@ extension CLI {
             let asked = Date()
             return ConsentPrompt(lease: "demo",
                                  harness: "claude-code",
+                                 name: "fixing tests",
                                  mode: capture == .forConsentOnly ? .confirmByVoice : .confirmOnScreen,
-                                 text: ConsentPolicy.promptText(harness: "claude-code",
-                                                                installedHarnesses: 2),
+                                 text: ConsentPolicy.promptText(sessionName: "fixing tests"),
                                  capture: capture,
                                  askedAt: asked,
                                  deadline: asked.addingTimeInterval(20))

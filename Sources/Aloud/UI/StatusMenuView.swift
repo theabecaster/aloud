@@ -55,6 +55,7 @@ struct StatusMenuView: View {
     let onRetryLast: () -> Void
     let onUseExactWords: () -> Void
     let onQuit: () -> Void
+    let onEndAgentSession: (String) -> Void
 
     init(controller: DictationController,
          learner: CorrectionLearner,
@@ -67,7 +68,8 @@ struct StatusMenuView: View {
          onCopyLast: @escaping () -> Void,
          onRetryLast: @escaping () -> Void,
          onUseExactWords: @escaping () -> Void,
-         onQuit: @escaping () -> Void) {
+         onQuit: @escaping () -> Void,
+         onEndAgentSession: @escaping (String) -> Void = { _ in }) {
         self.controller = controller
         _history = ObservedObject(wrappedValue: controller.history)
         _settings = ObservedObject(wrappedValue: controller.settings)
@@ -82,6 +84,7 @@ struct StatusMenuView: View {
         self.onRetryLast = onRetryLast
         self.onUseExactWords = onUseExactWords
         self.onQuit = onQuit
+        self.onEndAgentSession = onEndAgentSession
     }
 
     /// Rows shown in the popover; the full list lives in Settings → History.
@@ -94,6 +97,12 @@ struct StatusMenuView: View {
 
     // Whether the grouped suggestions are open for review in their own popover.
     @State private var reviewingSuggestions = false
+
+    // Ending a session is not a stray-click action, so one session asks first
+    // and several open a list. Both are popovers over the footer button, in the
+    // same idiom the vocabulary suggestions use.
+    @State private var confirmingEnd: AgentSession?
+    @State private var reviewingSessions = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -119,6 +128,14 @@ struct StatusMenuView: View {
         .onChange(of: pendingSuggestions.isEmpty) { _, empty in
             if empty { reviewingSuggestions = false }
         }
+        // Ending the last one closes the list rather than leaving an empty
+        // popover pointing at a button that is no longer there.
+        .onChange(of: controller.agentSessions) { _, sessions in
+            if sessions.count < 2 { reviewingSessions = false }
+            if sessions.isEmpty { confirmingEnd = nil }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8),
+                   value: controller.agentSessions)
         // Answering the last question closes the review; the menu behind it
         // must go back to closing on its own the moment it does.
         .onChange(of: reviewingSuggestions) { _, shown in
@@ -461,17 +478,95 @@ struct StatusMenuView: View {
         }
     }
 
+    // The live sessions, in the middle of the footer and nowhere when there
+    // are none. It shimmers because it is the one thing in this menu that is
+    // happening while you look at it — a microphone somebody else opened — and
+    // a still label in a row of still labels does not say that.
+    //
+    // One session names itself and ending it asks first: a session is somebody
+    // mid-conversation, and cutting it off is not a thing to do on a stray
+    // click. Several open a list instead, because "end the session" stops being
+    // a single answer the moment there is more than one of them.
+    @ViewBuilder
+    private var sessionsButton: some View {
+        let sessions = controller.agentSessions
+        if !sessions.isEmpty {
+            Button {
+                if sessions.count == 1 {
+                    confirmingEnd = sessions.first
+                } else {
+                    reviewingSessions = true
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 11, weight: .semibold))
+                        .symbolEffect(.variableColor.iterative, options: .repeating)
+                    Text(sessions.count == 1
+                         ? sessions[0].name
+                         : loc("%ld sessions", sessions.count))
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                        // The words carry the shimmer; the glyph beside them
+                        // stays still, so it reads as a label coming to life
+                        // rather than the whole control flashing.
+                        .shimmer()
+                }
+                // Plain text in the same colour as the icons either side of
+                // it: this row is Scratchpad, this, and Quit, and a tinted
+                // capsule in the middle of them reads as a different kind of
+                // control rather than the third thing in a row. The shimmer
+                // carries "live" on its own — colour as well would be saying
+                // it twice.
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .popover(item: $confirmingEnd, arrowEdge: .top) { session in
+                EndSessionConfirmation(session: session) {
+                    onEndAgentSession(session.id)
+                    confirmingEnd = nil
+                } onCancel: {
+                    confirmingEnd = nil
+                }
+            }
+            .popover(isPresented: $reviewingSessions, arrowEdge: .top) {
+                AgentSessionList(sessions: controller.agentSessions) { session in
+                    onEndAgentSession(session.id)
+                } onDone: {
+                    reviewingSessions = false
+                }
+            }
+            .help(sessions.count == 1
+                  ? loc("End %@’s session", sessions[0].name)
+                  : loc("Agent sessions using the microphone"))
+            .transition(.scale.combined(with: .opacity))
+        }
+    }
+
+    // Scratchpad and Quit lose their words so the middle can have some. They
+    // are the two things always here and never urgent; a live session is
+    // neither, and it is the only thing in this row that is happening *now*.
     private var footer: some View {
         HStack(spacing: 8) {
             Button(action: onToggleScratchpad) {
-                Label(loc("Scratchpad"), systemImage: "note.text")
+                Image(systemName: "note.text")
+                    .frame(width: 20, height: 20)
             }
             .buttonStyle(.borderless)
+            .help(loc("Scratchpad"))
+            .accessibilityLabel(loc("Scratchpad"))
 
-            Spacer()
+            Spacer(minLength: 4)
+
+            sessionsButton
+
+            Spacer(minLength: 4)
 
             Button(action: onQuit) {
-                Label(loc("Quit Aloud"), systemImage: "power")
+                Image(systemName: "power")
+                    .frame(width: 20, height: 20)
             }
             .buttonStyle(.borderless)
             .help(loc("Quit Aloud"))
@@ -517,6 +612,13 @@ struct StatusMenuView: View {
                 ? loc("Microphone access needed")
                 : loc("Accessibility access needed")
         }
+        // Above the phase, because during an agent session the phase says
+        // "Listening…" and the one thing the user needs to know is *who* is
+        // listening. Below the permission lines, which are still the more
+        // urgent thing when they apply.
+        if let holder = controller.agentSessionHolder {
+            return loc("%@ is using the microphone", holder.name)
+        }
         switch controller.phase {
         case .recording:
             return loc("Listening…")
@@ -540,6 +642,129 @@ struct StatusMenuView: View {
             return loc("Hold %@ to dictate", settings.hotkey.displayName)
         }
     }
+}
+
+// Ending one session asks first. A session is somebody mid-conversation —
+// possibly mid-sentence — and the button that ends it sits in a row people
+// click through on their way to the scratchpad.
+private struct EndSessionConfirmation: View {
+    let session: AgentSession
+    let onEnd: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(loc("End %@’s session?", session.name))
+                .font(.system(size: 13, weight: .semibold))
+            Text(loc("It gives the microphone back and tells the agent the session is over."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Spacer()
+                Button(loc("Cancel"), action: onCancel)
+                Button(loc("End Session"), action: onEnd)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
+        .frame(width: 260)
+    }
+}
+
+// More than one session wants the microphone, so "end the session" is no
+// longer a single answer. The list names each one and ends the one you pick,
+// in the idiom the vocabulary suggestions already use for "several things,
+// each answerable on its own".
+private struct AgentSessionList: View {
+    let sessions: [AgentSession]
+    let onEnd: (AgentSession) -> Void
+    let onDone: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(loc("Agent sessions"))
+                .font(.system(size: 13, weight: .semibold))
+            ForEach(sessions) { session in
+                HStack(spacing: 8) {
+                    Image(systemName: session.isHolder ? "mic.fill" : "hourglass")
+                        .font(.system(size: 11))
+                        .foregroundStyle(session.isHolder ? Color.agent : .secondary)
+                        .frame(width: 14)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(session.name)
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                        // Which tool, underneath what it is doing: two sessions
+                        // can be named alike, and this is the tiebreak.
+                        Text(session.isHolder
+                             ? loc("%@ — using the microphone", session.harness)
+                             : loc("%@ — waiting", session.harness))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Button { onEnd(session) } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(loc("End %@’s session", session.name))
+                    .accessibilityLabel(loc("End %@’s session", session.name))
+                }
+            }
+            HStack {
+                Spacer()
+                Button(loc("Done"), action: onDone)
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
+        .frame(width: 300)
+    }
+}
+
+// A band of light travelling across whatever it is applied to. Used for one
+// thing only: the live-sessions button, where it says "this is happening now"
+// without a word or a colour change. Masked by the content, so it lights the
+// capsule rather than painting a rectangle over the footer.
+private struct Shimmer: ViewModifier {
+    @State private var phase: CGFloat = -1
+
+    // The shine is the text's own colour at full strength, travelling across a
+    // dimmed copy of it. A contrasting colour made it a second thing to read;
+    // this is the same word, lit.
+    func body(content: Content) -> some View {
+        content
+            .opacity(0.45)
+            .overlay {
+            GeometryReader { geometry in
+                let width = geometry.size.width
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .primary, location: 0.5),
+                        .init(color: .clear, location: 1),
+                    ],
+                    startPoint: .leading, endPoint: .trailing
+                )
+                .frame(width: width * 0.6)
+                .offset(x: phase * width * 1.6)
+            }
+            .allowsHitTesting(false)
+        }
+        .mask(content)
+        .onAppear {
+            withAnimation(.linear(duration: 2.2).repeatForever(autoreverses: false)) {
+                phase = 1
+            }
+        }
+    }
+}
+
+private extension View {
+    func shimmer() -> some View { modifier(Shimmer()) }
 }
 
 private struct HistoryHeightKey: PreferenceKey {

@@ -30,6 +30,8 @@
 "Voice download didn’t finish" = "Der Sprachdownload wurde nicht abgeschlossen";
 "Dictation key isn’t working — try reopening Aloud" = "Die Diktiertaste funktioniert nicht – öffnen Sie Aloud erneut";
 "Hold %@ to dictate" = "Zum Diktieren %@ gedrückt halten";
+"%@ is using the microphone" = "%@ verwendet das Mikrofon";
+"End %@’s session" = "Sitzung von %@ beenden";
 
 /* Windows */
 "Welcome to Aloud" = "Willkommen bei Aloud";
@@ -445,3 +447,14 @@
 "Listening — this goes to the agent" = "Hört zu – das geht an den Agenten";
 "The agent is speaking" = "Der Agent spricht";
 "Agent Speak" = "Agentenstimme";
+
+/* Agent Speak — live sessions in the menu bar footer. */
+"%@ — using the microphone" = "%@ — verwendet das Mikrofon";
+"%@ — waiting" = "%@ — wartet";
+"%ld sessions" = "%ld Sitzungen";
+"Agent sessions using the microphone" = "Agent-Sitzungen, die das Mikrofon verwenden";
+"Agent sessions" = "Agent-Sitzungen";
+"End %@’s session?" = "Sitzung von %@ beenden?";
+"End Session" = "Sitzung beenden";
+"End" = "Beenden";
+"It gives the microphone back and tells the agent the session is over." = "Das Mikrofon wird freigegeben und dem Agenten mitgeteilt, dass die Sitzung vorbei ist.";
