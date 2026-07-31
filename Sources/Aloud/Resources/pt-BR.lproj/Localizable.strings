@@ -378,3 +378,45 @@
    fall back to English. */
 "An agent wants to listen — say accept or decline" = "Um agente quer ouvir — diga aceitar ou recusar";
 "%@ wants to listen — say accept or decline" = "%@ quer ouvir — diga aceitar ou recusar";
+
+/* Agent voice — Settings → Agents. The master switch, how a listen is
+   approved, and the agent tools Aloud can set itself up in. */
+"Agent voice" = "Voz para agentes";
+"Agents can ask to speak through your speakers and hear your answer. Turning this off refuses every request — anything set up below stays, so switching it back on doesn’t mean starting over." = "Os agentes podem pedir para falar pelos seus alto-falantes e ouvir a sua resposta. Com isto desativado, todo pedido é recusado — o que estiver configurado abaixo permanece, então reativar não significa começar do zero.";
+"Consent" = "Consentimento";
+"The recording indicator always shows while an agent is listening, and nothing leaves this Mac." = "O indicador de gravação sempre aparece enquanto um agente está ouvindo, e nada sai deste Mac.";
+"Agent Tools" = "Ferramentas de agente";
+"No agent tools found on this Mac." = "Nenhuma ferramenta de agente encontrada neste Mac.";
+"Aloud looks for the agent tools you already use. Open one, then come back." = "O Aloud procura as ferramentas de agente que você já usa. Abra uma e volte aqui.";
+"Aloud writes a short instructions file so an agent knows it can talk to you. Remove deletes that file again." = "O Aloud escreve um pequeno arquivo de instruções para que um agente saiba que pode falar com você. “Remover” apaga esse arquivo.";
+"Install" = "Instalar";
+"Already set up on this Mac" = "Já configurado neste Mac";
+"Lives in each project — paste it into %@ in the repos you want it in." = "Fica em cada projeto: cole em %@ nos repositórios em que você quiser.";
+"%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand." = "%@ não é um JSON válido, então o Aloud não mexeu nele. Adicione estas linhas à mão.";
+"Couldn’t write %1$@ — %2$@" = "Não foi possível escrever %1$@ — %2$@";
+
+/* Agent voice — the consent modes: how an agent's request to listen
+   is approved, and what each mode costs. */
+"Open" = "Aberto";
+"Agents can start listening right away. The recording indicator always shows when they do." = "Os agentes podem começar a ouvir na hora. O indicador de gravação sempre aparece quando isso acontece.";
+"Confirm on screen" = "Confirmar na tela";
+"Nothing reaches the agent until you accept on screen." = "Nada chega ao agente até você aceitar na tela.";
+"Confirm by voice" = "Confirmar por voz";
+"Aloud asks out loud and waits for you to say accept — no need to look at the screen." = "O Aloud pergunta em voz alta e espera você dizer aceitar — sem precisar olhar para a tela.";
+
+/* Agent voice — the onboarding opt-in. A consent screen: what is being
+   granted, and the two answers. */
+"Let Agents Ask You Out Loud" = "Deixe os agentes perguntarem em voz alta";
+"A coding agent can ask you a question out loud and hear your answer, so you can keep working instead of switching to its window." = "Um agente de programação pode fazer uma pergunta em voz alta e ouvir a sua resposta, para você continuar trabalhando em vez de trocar para a janela dele.";
+"This is experimental. You can turn it on or off any time in Settings." = "Isto é experimental. Você pode ativar ou desativar quando quiser nos Ajustes.";
+"Agents can turn on the microphone" = "Os agentes podem ligar o microfone";
+"To hear your answer to a question they asked." = "Para ouvir a sua resposta a uma pergunta que fizeram.";
+"Agents can speak through your speakers" = "Os agentes podem falar pelos seus alto-falantes";
+"That is how the question reaches you." = "É assim que a pergunta chega até você.";
+"You always see it happening" = "Você sempre vê quando acontece";
+"The recording indicator appears every time, and names the agent." = "O indicador de gravação aparece todas as vezes e mostra o nome do agente.";
+"Nothing leaves this Mac" = "Nada sai deste Mac";
+"Questions and answers stay on this Mac, like the rest of Aloud." = "As perguntas e as respostas ficam neste Mac, como o resto do Aloud.";
+"Turn Off" = "Desativar";
+"Not Now" = "Agora não";
+"Turn On" = "Ativar";

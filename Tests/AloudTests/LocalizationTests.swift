@@ -17,6 +17,45 @@ final class LocalizationTests: XCTestCase {
         // answer at all.
         "An agent wants to listen — say accept or decline",
         "%@ wants to listen — say accept or decline",
+        // Settings → Agents and the onboarding opt-in. Agent voice hands local
+        // processes the mic and the speakers, so the screens that say so — and
+        // the switch that takes it back — cannot fall back to English.
+        "Agent voice",
+        "Agents can ask to speak through your speakers and hear your answer. Turning this off refuses every request — anything set up below stays, so switching it back on doesn’t mean starting over.",
+        "Consent",
+        "The recording indicator always shows while an agent is listening, and nothing leaves this Mac.",
+        // The consent modes. The names are what a segmented control shows, the
+        // sentences are what the mode costs — a mode nobody can read is a
+        // permission decision made blind.
+        "Open",
+        "Agents can start listening right away. The recording indicator always shows when they do.",
+        "Confirm on screen",
+        "Nothing reaches the agent until you accept on screen.",
+        "Confirm by voice",
+        "Aloud asks out loud and waits for you to say accept — no need to look at the screen.",
+        "Agent Tools",
+        "No agent tools found on this Mac.",
+        "Aloud looks for the agent tools you already use. Open one, then come back.",
+        "Aloud writes a short instructions file so an agent knows it can talk to you. Remove deletes that file again.",
+        "Install",
+        "Already set up on this Mac",
+        "Lives in each project — paste it into %@ in the repos you want it in.",
+        "%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand.",
+        "Couldn’t write %1$@ — %2$@",
+        "Let Agents Ask You Out Loud",
+        "A coding agent can ask you a question out loud and hear your answer, so you can keep working instead of switching to its window.",
+        "This is experimental. You can turn it on or off any time in Settings.",
+        "Agents can turn on the microphone",
+        "To hear your answer to a question they asked.",
+        "Agents can speak through your speakers",
+        "That is how the question reaches you.",
+        "You always see it happening",
+        "The recording indicator appears every time, and names the agent.",
+        "Nothing leaves this Mac",
+        "Questions and answers stay on this Mac, like the rest of Aloud.",
+        "Turn Off",
+        "Not Now",
+        "Turn On",
         "Suggested Fixes",
         "Suggested",
         "Corrections Aloud saw you make. Accept one and it joins the list below; decline and it won’t be suggested again.",
@@ -79,11 +118,17 @@ final class LocalizationTests: XCTestCase {
     }
 
     func testTranslationsAreNotEnglishCopies() throws {
+        // One long-standing key and one from the agent-voice screens: a table
+        // that resolves a key by echoing the English is the failure mode a
+        // presence check alone cannot see.
+        let englishOnly = ["Quit Aloud", "Let Agents Ask You Out Loud"]
         for language in ["es", "de", "fr", "pt-BR"] {
             let bundle = try table(for: language)
-            let value = bundle.localizedString(forKey: "Quit Aloud", value: missingMarker, table: nil)
-            XCTAssertNotEqual(value, "Quit Aloud", "\(language): translation missing, English leaked through")
-            XCTAssertNotEqual(value, missingMarker, language)
+            for key in englishOnly {
+                let value = bundle.localizedString(forKey: key, value: missingMarker, table: nil)
+                XCTAssertNotEqual(value, key, "\(language): '\(key)' translation missing, English leaked through")
+                XCTAssertNotEqual(value, missingMarker, "\(language): '\(key)' has no entry")
+            }
         }
     }
 
