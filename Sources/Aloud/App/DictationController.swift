@@ -38,6 +38,11 @@ final class DictationController: ObservableObject {
     // An agent-initiated capture. Kept distinct from a command session so
     // every existing guard that asks "is this a dictation?" still answers no.
     private var isAgentSession = false
+    // The hotkey during an agent listen is the manual "done" (§7.2): nobody
+    // is holding a key in an agent session, so the press is the one gesture
+    // the user has to end the turn deliberately instead of waiting out the
+    // silence detector.
+    private var agentManualDone = false
     // The pre-consent microphone for confirm-by-voice.
     private var pendingConsentHeard: ((String) -> Void)?
     // The same two answers the pill's buttons carry, reachable from the
@@ -458,7 +463,10 @@ final class DictationController: ObservableObject {
         switch action {
         case .consentAccept: pendingConsentAccept?()
         case .consentDecline: pendingConsentDecline?()
-        case .begin: beginRecording()
+        case .begin:
+            // During an agent listen the press means "I'm done answering",
+            // not "start dictating" — there is no idle microphone to start.
+            if isAgentSession { agentManualDone = true } else { beginRecording() }
         case .commit: commitRecording()
         case .cancel: cancelRecording()
         case .lock:
@@ -1066,7 +1074,11 @@ final class DictationController: ObservableObject {
     }
 
     private func commitRecording() {
-        guard phase == .recording, !isCommandSession else { return }
+        // An agent listen also runs at `.recording`, and the hotkey release
+        // used to pass this guard and stop the agent's recorder — the user's
+        // spoken answer to the agent committed as dictation into whatever app
+        // was focused, and the agent heard nothing.
+        guard phase == .recording, !isCommandSession, !isAgentSession else { return }
         let samples = recorder.stop()
         stopSpeechActivity()
         if let session = liveSession {
@@ -1649,7 +1661,7 @@ final class DictationController: ObservableObject {
     }
 
     private func cancelRecording() {
-        guard phase == .recording, !isCommandSession else { return }
+        guard phase == .recording, !isCommandSession, !isAgentSession else { return }
         recorder.cancel()
         stopSpeechActivity()
         if let session = liveSession {
@@ -1699,6 +1711,7 @@ final class DictationController: ObservableObject {
 
         sessionGeneration += 1
         isAgentSession = true
+        agentManualDone = false
         phase = .recording
         indicatorShowAgentSession(harness: agentHarnessName ?? "")
 
@@ -1839,6 +1852,10 @@ final class DictationController: ObservableObject {
                 note("hit the hard maximum")
                 break
             }
+            if agentManualDone {
+                note("the hotkey ended the turn")
+                break
+            }
             if !isAgentSession {
                 note("force-released")
                 break                      // force-released from the menu bar
@@ -1905,6 +1922,7 @@ final class DictationController: ObservableObject {
 
         sessionGeneration += 1
         isAgentSession = true
+        agentManualDone = false
         phase = .recording
         indicatorShowAgentSession(harness: agentHarnessName ?? "")
 
