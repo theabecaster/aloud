@@ -28,7 +28,14 @@ enum AppPaths {
     static var scratchpadFile: URL { stateDir.appendingPathComponent("scratchpad.txt") }
     static var lastUpdateCheckFile: URL { stateDir.appendingPathComponent("last-update-check") }
 
+    // User-only, and re-asserted on every launch rather than only at
+    // creation: the bridge socket lives in here (§7.1), and a dir made by an
+    // older build under the default umask would leave it browsable to every
+    // local user for as long as the install lasts.
     static func ensureStateDir() {
-        try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700],
+                                               ofItemAtPath: stateDir.path)
     }
 }

@@ -94,7 +94,7 @@ final class AgentBridgeService {
     // harness command timeout: a wait that outlives the shell holding it is a
     // lease granted to nobody, and the microphone would sit reserved for a
     // caller that has already gone.
-    static let maxQueueWait: TimeInterval = 300
+    nonisolated static let maxQueueWait: TimeInterval = 300
     static let queuePoll: TimeInterval = 0.25
 
     init(leases: LeaseManager = LeaseManager(),
@@ -195,7 +195,13 @@ final class AgentBridgeService {
         case .failure(let why):   return .failure(.badRequest, why.message)
         }
 
-        if let until = refusedUntil[request.harness], at < until {
+        // Keyed by harness AND pid: two windows of the same tool are both
+        // "claude-code", and a decline aimed at one of them must not silence
+        // the other — `denied` is a decision about *this request*, and the
+        // other window's request was never shown to anybody. Callers without
+        // an owner pid share a key, but they are indistinguishable anyway.
+        let claimantKey = "\(request.harness)#\(pid)"
+        if let until = refusedUntil[claimantKey], at < until {
             var response = BridgeResponse.failure(.denied, "The user declined.")
             response.retryAfter = until.timeIntervalSince(at)
             return response
@@ -217,11 +223,11 @@ final class AgentBridgeService {
         let requested = min(max(request.wait ?? 0, 0), Self.maxQueueWait)
         let pollsRemaining = Int(requested / Self.queuePoll)
 
-        // The queue knows callers by this key, and it is how a dismissal finds
-        // its way back to the caller it was aimed at: a waiter the user trashed
-        // re-claims (or wakes from its park) and is answered here, once,
-        // instead of silently rejoining the queue.
-        let queueKey = "\(request.harness)#\(pid)"
+        // The queue knows callers by the same key, and it is how a dismissal
+        // finds its way back to the caller it was aimed at: a waiter the user
+        // trashed re-claims (or wakes from its park) and is answered here,
+        // once, instead of silently rejoining the queue.
+        let queueKey = claimantKey
         if evicted.remove(queueKey) != nil {
             return .failure(.denied, "The user dismissed this session's request.")
         }
@@ -287,7 +293,7 @@ final class AgentBridgeService {
                 case .denied:
                     // No point holding a lease the user just refused, and no
                     // asking again for a while.
-                    refusedUntil[request.harness] = now().addingTimeInterval(Self.refusalBackoff)
+                    refusedUntil[claimantKey] = now().addingTimeInterval(Self.refusalBackoff)
                     leases.release(lease: lease, now: now())
                     return .failure(.denied, "The user declined.")
                 case .timedOut:
@@ -523,7 +529,12 @@ final class AgentBridgeService {
                 response.silentFor = heard.silentFor
                 return response
             } catch {
-                return .failure(.notHolder, error.localizedDescription)
+                // Not `.notHolder`: the lease is fine — the streaming session
+                // underneath went away (raced a stop, or reset). Telling the
+                // agent to re-claim would cost it its queue position and a
+                // fresh consent prompt for a recovery that is actually just
+                // "start the listen again".
+                return .failure(.unavailable, error.localizedDescription)
             }
 
         case .stop:
@@ -595,9 +606,15 @@ final class AgentBridgeService {
     }
 
     func sweepAndEndFinishedSessions() async {
-        guard sweep(now: now()) else { return }
+        // Compared on the whole list, not just the holder: a dead waiter's
+        // queue entry reaped here is also a row in the menu bar, and with no
+        // more bridge calls coming there is nothing else to take it down —
+        // the user would sit looking at a phantom "waiting" session forever.
+        let before = leases.sessions
+        let holderEnded = sweep(now: now())
+        guard leases.sessions != before else { return }
         publishHolder()
-        await host?.endAgentSession()
+        if holderEnded { await host?.endAgentSession() }
     }
 
     // End one named session — the menu bar's list. The trash sits on a row, so
@@ -612,7 +629,11 @@ final class AgentBridgeService {
             consent.endLease(id)
             leases.release(lease: id, now: now())
             publishHolder()
-            Task { [weak self] in await self?.host?.endAgentSession() }
+            // The host is captured directly, not reached through self: the
+            // gate-off path drops the service's last strong reference right
+            // after calling this, and a [weak self] task scheduled but not yet
+            // run would find self gone and never take the indicator down.
+            Task { [host] in await host?.endAgentSession() }
             return
         }
         evicted.insert(id)
@@ -639,6 +660,10 @@ final class AgentBridgeService {
         }
         leases.forceRelease(now: now())
         publishHolder()
-        Task { [weak self] in await self?.host?.endAgentSession() }
+        // [host], not [weak self]: syncBridge nils its reference to this
+        // service immediately after forceRelease, so a task that goes back
+        // through self would find nothing and leave the agent pill on screen
+        // with live buttons wired to a deallocated service.
+        Task { [host] in await host?.endAgentSession() }
     }
 }

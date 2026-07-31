@@ -197,12 +197,14 @@ struct AgentIndicatorContent: View {
             .buttonStyle(.plain)
             .contentShape(Circle())
             .help(loc("Decline — or press Esc"))
+            .accessibilityLabel(loc("Decline — or press Esc"))
             Button { model.onAcceptConsent?() } label: {
                 consentGlyph("checkmark", filled: true)
             }
             .buttonStyle(.plain)
             .contentShape(Circle())
             .help(loc("Accept — or press the Aloud hotkey"))
+            .accessibilityLabel(loc("Accept — or press the Aloud hotkey"))
         }
         .transition(.opacity)
     }

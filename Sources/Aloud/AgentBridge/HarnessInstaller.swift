@@ -614,11 +614,19 @@ struct HarnessInstaller {
     // harness whose config we cannot parse is skipped rather than repaired —
     // a malformed file is not ours to rewrite here, and the pane is where that
     // gets surfaced.
+    // Instructions only, never permissions. A refresh runs on every launch
+    // and every gate toggle, and "entry not present in settings.json" is
+    // indistinguishable here from "the user revoked it" — re-adding would
+    // silently re-grant hands-free shell access somebody deliberately took
+    // away. Permissions are written exactly once, by the install the user
+    // clicked. This also keeps a refresh from touching settings.json at all,
+    // so a corrupt permissions file cannot block instruction updates.
     @discardableResult
     func refreshInstalled() -> [AgentHarness] {
         AgentHarness.allCases.filter { harness in
             guard harness.scope == .global, isInstalled(harness) else { return false }
-            guard case .installed(let changed)? = try? install(harness) else { return false }
+            guard case .installed(let changed)? = try? install(harness, permissions: false)
+            else { return false }
             return !changed.isEmpty
         }
     }
@@ -643,8 +651,10 @@ struct HarnessInstaller {
     // MARK: install
 
     // Driven by the mechanism, not by the harness, so a new row in the table
-    // installs without a new branch here.
-    func install(_ harness: AgentHarness) throws -> InstallResult {
+    // installs without a new branch here. `permissions: false` is the refresh
+    // path: update what the agent is told, leave what the agent is allowed
+    // strictly alone.
+    func install(_ harness: AgentHarness, permissions: Bool = true) throws -> InstallResult {
         let block = AgentVoiceInstructions.markedBlock(
             AgentVoiceInstructions.body(harness: harness, command: command))
 
@@ -664,7 +674,7 @@ struct HarnessInstaller {
             // file is the only thing here that can refuse, so parse it before
             // writing anything — a failure must not leave a half-installed
             // skill behind.
-            let allowlist = allowlistURL(for: harness)
+            let allowlist = permissions ? allowlistURL(for: harness) : nil
             var updated: Data?
             if let allowlist {
                 updated = try allowlistJSON(at: allowlist, for: harness, addingEntries: true)
@@ -867,6 +877,14 @@ struct HarnessInstaller {
         else { return text }
         guard let end = lines[start...].firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == AgentVoiceInstructions.markerEnd })
         else { return text }
+        // The end must belong to this start. If another start marker sits
+        // inside the span, the first block lost its own end (an interrupted
+        // write, a hand edit) and the range would swallow the user's content
+        // between the orphan and the next real block. A mutation that cannot
+        // prove its bounds leaves the file alone.
+        guard !lines[(start + 1)..<end].contains(where: {
+            $0.trimmingCharacters(in: .whitespaces) == AgentVoiceInstructions.markerStart
+        }) else { return text }
 
         lines.removeSubrange(start...end)
         // Collapse the separator blank line we added on the way in.

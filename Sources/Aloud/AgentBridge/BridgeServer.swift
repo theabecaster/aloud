@@ -69,7 +69,12 @@ enum BridgeSocketIO {
     // "block forever", which is the opposite of what every caller here wants,
     // so tiny values are floored rather than rounded away.
     static func setTimeout(fd: Int32, seconds: TimeInterval, option: Int32) {
-        let clamped = max(0.001, seconds)
+        // Bounded above as well as below: the Double→time_t conversion traps
+        // on infinite, NaN, or out-of-range input, and a socket option is the
+        // wrong place for a process to die. A day is far past any legitimate
+        // caller here.
+        let sane = seconds.isFinite ? seconds : 0.001
+        let clamped = min(max(0.001, sane), 86_400)
         var tv = timeval(tv_sec: __darwin_time_t(clamped),
                          tv_usec: __darwin_suseconds_t((clamped - clamped.rounded(.down)) * 1_000_000))
         setsockopt(fd, SOL_SOCKET, option, &tv, socklen_t(MemoryLayout<timeval>.size))
@@ -390,7 +395,12 @@ final class BridgeServer: @unchecked Sendable {
         connectionQueue.async { [weak self] in
             guard let self else { close(fd); return }
 
-            switch BridgeSocketIO.readLine(fd: fd, limit: limit) {
+            // A wall-clock deadline, not just the per-recv() idle timeout: a
+            // peer trickling one byte every few seconds resets SO_RCVTIMEO
+            // forever and pins this worker — the bound the comment on
+            // `readTimeout` promises has to be enforced here to exist.
+            switch BridgeSocketIO.readLine(fd: fd, limit: limit,
+                                           deadline: Date().addingTimeInterval(self.readTimeout)) {
             case .closed:
                 // Somebody opened a connection and said nothing. Nothing to
                 // answer, nothing to log.

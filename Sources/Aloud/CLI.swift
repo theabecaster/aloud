@@ -53,7 +53,12 @@ enum CLI {
         // can park it in a background shell and get on with something else
         // rather than spending a model turn per look. Also accepted on listen,
         // where it is the long-poll ceiling.
+        // Clamped to the server's own ceiling at the door. `Double.init`
+        // happily parses "inf"/"nan" and 20-digit typos, and an unbounded
+        // value would trap in the socket-timeout conversion below — a crash
+        // where the harness expected the documented refusal JSON.
         request.wait = value(of: "--wait", in: args).flatMap(Double.init)
+            .map { $0.isFinite ? min(max($0, 0), AgentBridgeService.maxQueueWait) : 0 }
         request.session = value(of: "--session", in: args)
         if op == .listen {
             for (flag, mode) in [("--start", BridgeRequest.ListenMode.start),

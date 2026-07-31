@@ -43,6 +43,10 @@ final class DictationController: ObservableObject {
     // the user has to end the turn deliberately instead of waiting out the
     // silence detector.
     private var agentManualDone = false
+    // Half-duplex (§7.4) enforced where the microphone actually opens, not
+    // just promised by the callers taking turns: a `listen` that lands while
+    // `speak` is still audible would transcribe Aloud's own voice.
+    private var agentSpeaking = false
     // The pre-consent microphone for confirm-by-voice.
     private var pendingConsentHeard: ((String) -> Void)?
     // The same two answers the pill's buttons carry, reachable from the
@@ -470,6 +474,14 @@ final class DictationController: ObservableObject {
         case .commit: commitRecording()
         case .cancel: cancelRecording()
         case .lock:
+            // A double-tap during an agent listen never started a dictation,
+            // so there is nothing to lock — but the engine has already set its
+            // own hands-free state, and left standing it would swallow the
+            // next single press entirely. Abort the phantom session instead.
+            if isAgentSession {
+                hotkeyManager.abortSession()
+                return
+            }
             // A lock confirms the session is real — "Getting ready…" exists to
             // absorb accidental taps, and flipping a locked pill into it would
             // take the stop button away during a slow engine start.
@@ -1704,7 +1716,7 @@ final class DictationController: ObservableObject {
     // written to history, and no audio backup is kept — an agent session's
     // words belong to the agent that asked for them and to nobody else.
     func listenForAgent(from consentGranted: Date) async throws -> AgentTranscript {
-        guard phase == .idle || phase.isError else { throw AgentListenError.busy }
+        guard phase == .idle || phase.isError, !agentSpeaking else { throw AgentListenError.busy }
         guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
             throw AgentListenError.notReady
         }
@@ -1715,8 +1727,19 @@ final class DictationController: ObservableObject {
         phase = .recording
         indicatorShowAgentSession(harness: agentHarnessName ?? "")
 
-        let started = try await startAgentCapture()
-        _ = started
+        // A microphone that will not open must put everything back. Leaving
+        // `phase = .recording` and `isAgentSession = true` behind a throw
+        // wedges the whole app: every dictation guard refuses, and the hotkey
+        // routes to a manual-done for a session that does not exist —
+        // recoverable only by relaunching.
+        do {
+            _ = try await startAgentCapture()
+        } catch {
+            isAgentSession = false
+            phase = .idle
+            indicator.hide()
+            throw error
+        }
 
         // A preview, for the pill only. An agent session types nothing into the
         // focused app, so this is the sole place the user can see they are being
@@ -1908,7 +1931,8 @@ final class DictationController: ObservableObject {
     private var agentPoll: AgentPollSession?
 
     func startAgentPollSession() async throws -> String {
-        guard phase == .idle || phase.isError, agentPoll == nil else { throw AgentListenError.busy }
+        guard phase == .idle || phase.isError, agentPoll == nil, !agentSpeaking
+        else { throw AgentListenError.busy }
         guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
             throw AgentListenError.notReady
         }
@@ -1929,9 +1953,26 @@ final class DictationController: ObservableObject {
         let session = AgentPollSession(id: "S\(sessionGeneration)-\(UInt32.random(in: 0..<UInt32.max))",
                                        stream: stream)
         agentPoll = session
-        _ = try await startAgentCapture()
+        do {
+            _ = try await startAgentCapture()
+        } catch {
+            // Same rollback as the blocking listen — and `agentPoll` too, or
+            // no poll session can ever start again.
+            agentPoll = nil
+            isAgentSession = false
+            phase = .idle
+            indicator.hide()
+            throw error
+        }
         recorder.onChunk = { [weak stream] chunk in stream?.append(samples: chunk) }
         playCue(.listening)
+        // The cue plays into the already-open microphone, and the detector
+        // scores it as somebody talking (see the identical guard in
+        // `listenForAgent`). Without this gap the very first polls report
+        // `speaking: true` / a fresh `silentFor` for a room where nobody has
+        // said anything, and an agent watching `silentFor` can end the turn
+        // before the user could plausibly have begun.
+        try? await Task.sleep(nanoseconds: UInt64(AgentListen.cueGuard * 1_000_000_000))
         startSpeechActivity()
 
         session.pump = Task { [weak self] in
@@ -2032,6 +2073,8 @@ extension DictationController: AgentVoiceHost {
             // and the microphone is about to open.
             if !wasAsking { indicator.hide() }
         }
+        agentSpeaking = true
+        defer { agentSpeaking = false }
         try await speakForAgent(text)
     }
 
@@ -2078,6 +2121,20 @@ extension DictationController: AgentVoiceHost {
     func endAgentSession() async {
         stopConsentListening()
         indicatorDismissConsent()
+        // A poll session owns the recorder until its stop call — and once the
+        // lease is released, force-released or reaped, that call is never
+        // coming. Without this teardown the microphone stays open behind an
+        // idle phase, `agentPoll` blocks every future poll session, and the
+        // recorder's still-running buffer is what the user's next dictation
+        // would transcribe and type: the abandoned agent session's audio.
+        if let session = agentPoll {
+            agentPoll = nil
+            session.pump?.cancel()
+            recorder.onChunk = nil
+            _ = recorder.stop()
+            stopSpeechActivity()
+            Task { await session.stream.cancel() }
+        }
         isAgentSession = false
         indicator.hide()
         if phase == .recording { phase = .idle }
