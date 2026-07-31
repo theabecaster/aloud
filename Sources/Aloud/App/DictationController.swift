@@ -1645,13 +1645,19 @@ final class DictationController: ObservableObject {
     // capped. Nobody is holding a key, so nothing else will stop this.
     private func captureUntilEndpoint() async -> [Float] {
         let began = Date()
-        var heardAnything = false
         while true {
             try? await Task.sleep(nanoseconds: UInt64(AgentListen.poll * 1_000_000_000))
             let elapsed = Date().timeIntervalSince(began)
-            if let quiet = speechActivity.secondsSinceSpeech {
-                heardAnything = true
-                if quiet >= AgentListen.silenceEndsTurn { break }
+            // `secondsSinceSpeech` counts from the session start until speech is
+            // first heard, so it is non-nil — and soon larger than the silence
+            // threshold — in a room where nobody has said anything. Reading that
+            // as "they have stopped talking" ended every turn 1.5 s after the
+            // microphone opened, whoever was or wasn't speaking. Ask whether
+            // anyone has spoken; only then does silence mean they finished.
+            let heardAnything = speechActivity.hasHeardSpeech
+            if heardAnything, let quiet = speechActivity.secondsSinceSpeech,
+               quiet >= AgentListen.silenceEndsTurn {
+                break
             }
             if !heardAnything, elapsed >= AgentListen.noSpeechAtAll { break }
             if elapsed >= AgentListen.hardMax { break }
