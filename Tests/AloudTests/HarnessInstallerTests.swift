@@ -345,6 +345,142 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: skill.path))
     }
 
+    // MARK: - harnesses added after launch
+
+    // OpenCode and pi both have a real skills directory, so they reuse the
+    // global-skill branch untouched — which is the claim this test is here to
+    // hold to. If adding a harness ever needs more than a row in the table,
+    // the abstraction is wrong and this is where that shows up.
+    //
+    // The paths are the part worth pinning, because they are the part that
+    // ships broken while looking installed:
+    //  - OpenCode scans ~/.opencode for `{skill,skills}/**/SKILL.md`.
+    //  - pi auto-discovers `<agentDir>/skills/**/SKILL.md`, agentDir = ~/.pi/agent.
+    //    ~/.pi/skills — which does exist on real machines, written there by
+    //    other tools — is pi's *per-project* layout misapplied to home, and pi
+    //    never reads it.
+    private static let addedHarnesses: [(AgentHarness, String, String)] = [
+        (.opencode, ".opencode", ".opencode/skills/aloud-voice/SKILL.md"),
+        (.pi, ".pi/agent", ".pi/agent/skills/aloud-voice/SKILL.md"),
+    ]
+
+    func testAddedHarnessesInstallAsGlobalSkillFiles() throws {
+        for (harness, marker, path) in Self.addedHarnesses {
+            try makeDir(marker)
+            guard case .installed(let changed) = try installer().install(harness) else {
+                return XCTFail("\(harness.id) installs globally, not as a snippet")
+            }
+            let skill = home.appendingPathComponent(path)
+            XCTAssertEqual(changed, [skill], "\(harness.id) wrote somewhere unexpected")
+
+            let text = try XCTUnwrap(read(path))
+            XCTAssertTrue(text.hasPrefix("---\n"), "skills are read from their frontmatter")
+            XCTAssertTrue(text.contains("name: aloud-voice"))
+            XCTAssertTrue(text.contains(AgentVoiceInstructions.markerStart))
+            XCTAssertTrue(text.contains("--harness \(harness.id)"),
+                          "the harness id is baked in, not left to the agent")
+            XCTAssertTrue(installer().isInstalled(harness))
+        }
+    }
+
+    // pi rejects a skill whose frontmatter `name` differs from its parent
+    // directory, and truncates nothing — it just refuses to load it. So the
+    // one-source frontmatter has to agree with the one-source directory name,
+    // and a rename of either alone is a skill that silently never appears.
+    func testTheSkillNameMatchesTheDirectoryItIsWrittenInto() throws {
+        for (harness, marker, path) in Self.addedHarnesses {
+            try makeDir(marker)
+            _ = try installer().install(harness)
+            let directory = home.appendingPathComponent(path)
+                .deletingLastPathComponent().lastPathComponent
+            let text = try XCTUnwrap(read(path))
+            XCTAssertTrue(text.contains("name: \(directory)"),
+                          "\(harness.id): frontmatter name must match the directory \(directory)")
+        }
+    }
+
+    // The reopen-Settings-and-press-it-again case, for the new rows too.
+    func testAddedHarnessesDoubleInstallChangesNothing() throws {
+        for (harness, marker, path) in Self.addedHarnesses {
+            try makeDir(marker)
+            _ = try installer().install(harness)
+            let first = try XCTUnwrap(read(path))
+
+            guard case .installed(let changed) = try installer().install(harness) else {
+                return XCTFail("expected an install result")
+            }
+            XCTAssertEqual(changed, [], "a repeat install must report that it wrote nothing")
+            XCTAssertEqual(read(path), first)
+        }
+    }
+
+    func testAddedHarnessesUninstallCleanlyIncludingTheDirectory() throws {
+        for (harness, marker, path) in Self.addedHarnesses {
+            try makeDir(marker)
+            _ = try installer().install(harness)
+
+            try installer().uninstall(harness)
+            let skill = home.appendingPathComponent(path)
+            XCTAssertFalse(fm.fileExists(atPath: skill.path))
+            XCTAssertFalse(fm.fileExists(atPath: skill.deletingLastPathComponent().path),
+                           "the directory we created goes with the file we wrote into it")
+            XCTAssertFalse(installer().isInstalled(harness))
+        }
+    }
+
+    // A skill of the same name that we did not write is somebody's own work.
+    // Without the marker check, "uninstall Aloud" would delete it.
+    func testAddedHarnessesUninstallLeavesAForeignSkillAlone() throws {
+        for (_, _, path) in Self.addedHarnesses {
+            try write("# hand written, not ours\n", to: path)
+        }
+        for (harness, _, path) in Self.addedHarnesses {
+            try installer().uninstall(harness)
+            XCTAssertEqual(read(path), "# hand written, not ours\n")
+        }
+    }
+
+    // Detection drives the Settings rows, so every marker has to work on its
+    // own — a user who has run OpenCode once may have only one of its three
+    // directories, and no marker may be inferred from another harness's.
+    func testAddedHarnessesAreDetectedFromEachOfTheirOwnMarkers() throws {
+        for (harness, _, _) in Self.addedHarnesses {
+            for marker in harness.detectionPaths {
+                let scratch = home.appendingPathComponent(UUID().uuidString, isDirectory: true)
+                try fm.createDirectory(at: scratch.appendingPathComponent(marker, isDirectory: true),
+                                       withIntermediateDirectories: true)
+                let found = HarnessInstaller(home: scratch, command: Self.command).detect().map(\.harness)
+                XCTAssertEqual(found, [harness], "\(marker) should mean \(harness.id) and nothing else")
+            }
+        }
+    }
+
+    // pi's home marker is ~/.pi/agent, not ~/.pi, because ~/.pi is also the
+    // name of pi's *per-project* config directory. A home directory that is
+    // itself a checkout would otherwise show a harness that isn't installed.
+    func testABarePiDirectoryIsNotEnoughToClaimPiIsInstalled() throws {
+        try makeDir(".pi/skills")
+        XCTAssertEqual(installer().detect(), [])
+    }
+
+    // Only Claude Code has an allowlist that would otherwise stop the first
+    // `listen` for a permission prompt. OpenCode's agents default to allowing
+    // bash and pi has no allowlist concept at all, so writing one for them
+    // would be editing a config file for no reason — and worse, this test
+    // catches the version of that mistake where they reach for *Claude Code's*
+    // settings.json because they share the install branch.
+    func testAHarnessWithoutAnAllowlistNeverTouchesClaudeCodesSettings() throws {
+        try write("{\"model\":\"opus\"}", to: ".claude/settings.json")
+        for (harness, marker, _) in Self.addedHarnesses {
+            try makeDir(marker)
+            _ = try installer().install(harness)
+            try installer().uninstall(harness)
+        }
+        XCTAssertEqual(read(".claude/settings.json"), "{\"model\":\"opus\"}")
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".claude/settings.json.aloud-backup").path),
+                       "not even a backup: we never opened it")
+    }
+
     // MARK: - the instructions themselves
 
     // The behaviour we install is the feature. An agent that opens the
@@ -358,20 +494,41 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertTrue(body.contains("stop telling me every time"))
         XCTAssertTrue(body.contains("`disabled`"))
         XCTAssertTrue(body.contains("`denied`"))
-        XCTAssertTrue(body.lowercased().contains("never retry in\na loop") || body.lowercased().contains("do not spin"))
+        // Unwrapped before matching: the copy is hard-wrapped, so a reflow that
+        // moves a line break must not silently drop the assertion.
+        let flowed = body.lowercased().replacingOccurrences(of: "\n", with: " ")
+        XCTAssertTrue(flowed.contains("never retry in a loop") || flowed.contains("do not spin"))
         for verb in ["claim", "listen", "speak", "release"] {
             XCTAssertTrue(body.contains("\(verb) "), "the mechanics must mention `\(verb)`")
         }
     }
 
-    // One body, four wrappers. If a harness ever grew its own copy of the text
-    // the two would drift within a release.
+    // One body, N wrappers. If a harness ever grew its own copy of the text the
+    // two would drift within a release.
+    //
+    // Normalised on `--harness <id>` rather than on the bare id, which is the
+    // only place an id may appear. A bare-substring replacement was fine while
+    // every id was a long word, and stopped being fine the moment a harness was
+    // called `pi`: it also rewrites the middle of "stopping" and "spin".
     func testEveryHarnessGetsTheSameBody() {
-        let bodies = AgentHarness.allCases.map {
-            AgentVoiceInstructions.body(harness: $0, command: "aloud")
-                .replacingOccurrences(of: $0.id, with: "<id>")
+        let bodies = AgentHarness.allCases.map { harness -> String in
+            let body = AgentVoiceInstructions.body(harness: harness, command: "aloud")
+            XCTAssertTrue(body.contains("--harness \(harness.id)"))
+            return body.replacingOccurrences(of: "--harness \(harness.id)", with: "--harness <id>")
         }
         XCTAssertEqual(Set(bodies).count, 1, "the instruction text must have exactly one source")
+    }
+
+    // The flip side of the normalisation above: every id has to survive being
+    // pasted into a shell as `--harness <id>`, because that is the only place
+    // it is ever used and the allowlist covers no other form.
+    func testEveryHarnessIdIsSafeToPassOnACommandLine() {
+        let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-")
+        for harness in AgentHarness.allCases {
+            XCTAssertFalse(harness.id.isEmpty)
+            XCTAssertTrue(harness.id.unicodeScalars.allSatisfy(safe.contains),
+                          "\(harness.id) would need quoting, which nothing here does")
+        }
     }
 
     // A dev build must not tell agents to run the installed bundle.

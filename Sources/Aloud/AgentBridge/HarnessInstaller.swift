@@ -3,11 +3,18 @@ import Foundation
 // Teaching agent harnesses that Aloud's voice CLI exists.
 //
 // The bridge is useless if the agent never calls it, so install writes an
-// instruction file into each harness's own config — a skill for Claude Code, a
-// section in an instructions file for the rest. Two of the four are global and
-// we write them; the other two are per-project by design (see
-// docs/agent-voice-bridge.md §6) and we hand back a snippet rather than reach
-// into somebody's repo.
+// instruction file into each harness's own config — a skill file for the ones
+// that have a skills directory, an appended section for the ones that have a
+// single instructions file. Most are global and we write them; the per-project
+// ones (see docs/agent-voice-bridge.md §6) get a snippet rather than us
+// reaching into somebody's repo.
+//
+// Every path in the table below was verified by listing a real installation on
+// a real Mac, never from documentation. That is not politeness: the launch set
+// already shipped one wrong assumption (Cursor filed as per-project because of
+// `.cursor/rules/*.mdc`, when `~/.cursor/skills/<name>/SKILL.md` exists and
+// behaves exactly like Claude Code's), and a harness added from memory looks
+// installed while doing nothing at all.
 //
 // Everything here is filesystem work on files we do not own, so the rules are
 // strict: never write a file we could not parse, back up anything we modify,
@@ -22,6 +29,11 @@ enum AgentHarness: String, CaseIterable, Codable {
     case codex
     case cursor
     case copilot
+    // Added after launch. New cases go on the end: `allCases` order is the
+    // order the Settings pane draws its rows in, and the detection tests read
+    // it positionally.
+    case opencode
+    case pi
 
     // The id baked into `--harness` in the instructions we write, and the label
     // the indicator shows. Never authentication — see §7.1c.
@@ -33,6 +45,45 @@ enum AgentHarness: String, CaseIterable, Codable {
         case .codex: return "Codex"
         case .cursor: return "Cursor"
         case .copilot: return "GitHub Copilot"
+        case .opencode: return "OpenCode"
+        // Lowercase on purpose: the binary, the config directory and the
+        // project's own docs all call it `pi`.
+        case .pi: return "pi"
+        }
+    }
+
+    // How the instructions get in front of the agent. Three shapes have covered
+    // every harness examined so far, which is the point — adding one should be
+    // a row in this table and a test, and if it ever needs a fourth shape the
+    // abstraction is wrong and that is worth knowing early.
+    enum Mechanism {
+        case skillFile      // a skills directory we own outright: <root>/skills/<name>/SKILL.md
+        case appendedBlock  // somebody else's instructions file; we append a marked section
+        case snippet        // the file belongs in the user's repo, so we hand back text
+    }
+
+    var mechanism: Mechanism {
+        switch self {
+        // Cursor keeps global skills in exactly the layout Claude Code uses —
+        // ~/.cursor/skills/<name>/SKILL.md — verified against a real installed
+        // skill on this machine. An earlier draft had it as per-project on the
+        // strength of .cursor/rules/*.mdc, which is a different mechanism.
+        //
+        // OpenCode and pi were verified the same way, and both times by reading
+        // the code that does the scanning rather than trusting the directory
+        // that happened to be on disk:
+        //  - OpenCode's config directories are ~/.config/opencode and ~/.opencode,
+        //    and each is scanned for `{skill,skills}/**/SKILL.md`. We write the
+        //    second, because it is plain home-relative while the first moves
+        //    with XDG_CONFIG_HOME and this installer only knows about `home`.
+        //  - pi auto-discovers `<agentDir>/skills/**/SKILL.md`, and its agentDir
+        //    is ~/.pi/agent. Note ~/.pi/skills — which does exist on this Mac,
+        //    put there by another tool — is *not* read: that is pi's per-project
+        //    layout applied to the home directory by mistake. Exactly the kind
+        //    of plausible wrong path that looks installed and does nothing.
+        case .claudeCode, .cursor, .opencode, .pi: return .skillFile
+        case .codex: return .appendedBlock
+        case .copilot: return .snippet
         }
     }
 
@@ -41,16 +92,24 @@ enum AgentHarness: String, CaseIterable, Codable {
         case perProject  // the config lives in the repo, so we can only offer a snippet
     }
 
+    // Falls out of the mechanism rather than being stated twice: a snippet is
+    // per-project precisely because we cannot write the file ourselves.
     var scope: Scope {
-        switch self {
-        // Cursor keeps global skills in exactly the layout Claude Code uses —
-        // ~/.cursor/skills/<name>/SKILL.md — verified against a real installed
-        // skill on this machine. An earlier draft had it as per-project on the
-        // strength of .cursor/rules/*.mdc, which is a different mechanism.
-        case .claudeCode, .codex, .cursor: return .global
-        case .copilot: return .perProject
+        switch mechanism {
+        case .skillFile, .appendedBlock: return .global
+        case .snippet: return .perProject
         }
     }
+
+    // Whether this harness will stop and ask the user before the agent's first
+    // `aloud listen` unless we write an allowlist entry — the prompt that
+    // breaks hands-free on turn one (§6).
+    //
+    // Only Claude Code, and that is a verified "only", not an assumption:
+    // OpenCode's built-in agents default to `"*": "allow"`, so bash needs no
+    // entry, and pi's bash tool has no allowlist concept at all. Writing a
+    // permission block into either would be editing a config for no reason.
+    var hasPermissionAllowlist: Bool { self == .claudeCode }
 
     // Home-relative paths that mean "this harness has been run on this Mac".
     // Any one of them is enough — the harnesses disagree about where they keep
@@ -67,6 +126,17 @@ enum AgentHarness: String, CaseIterable, Codable {
             // The CLI/editor plugins keep version state here; the VS Code app
             // dir catches the extension without a separate copilot marker.
             return [".config/github-copilot", ".copilot", "Library/Application Support/Code"]
+        case .opencode:
+            // All three exist on a machine that has run OpenCode: the XDG
+            // config dir it creates on startup, the ~/.opencode it also scans
+            // for config and skills, and the data dir it installs into.
+            return [".opencode", ".config/opencode", ".local/share/opencode"]
+        case .pi:
+            // ~/.pi/agent is where settings.json and auth.json live. A bare
+            // ~/.pi is deliberately not the marker: that is also pi's
+            // *per-project* config directory name, so a home directory that is
+            // itself a project would false-positive.
+            return [".pi/agent"]
         }
     }
 
@@ -78,6 +148,14 @@ enum AgentHarness: String, CaseIterable, Codable {
         case .codex: return ".codex/AGENTS.md"
         case .cursor: return ".cursor/skills/aloud-voice/SKILL.md"
         case .copilot: return ".github/copilot-instructions.md"
+        // OpenCode also scans ~/.claude/skills and ~/.agents/skills, so a Mac
+        // with both Claude Code and OpenCode installed will have two skills
+        // named aloud-voice and OpenCode will log a duplicate-name warning.
+        // Harmless — the bodies are identical apart from `--harness`, and that
+        // flag is a label rather than authentication (§7.1c) — but it is the
+        // reason not to be surprised by the warning.
+        case .opencode: return ".opencode/skills/aloud-voice/SKILL.md"
+        case .pi: return ".pi/agent/skills/aloud-voice/SKILL.md"
         }
     }
 }
@@ -132,7 +210,10 @@ enum AgentVoiceInstructions {
     static let markerStart = "<!-- aloud-voice:start -->"
     static let markerEnd = "<!-- aloud-voice:end -->"
 
-    static let summary = "Speak to the user and hear their answer through Aloud, so you can ask a question mid-task instead of ending your turn."
+    // "Agent Speak" is the product name for this capability, and it belongs in
+    // every word the user or the agent reads. The CLI verbs below are the wire
+    // contract, not branding, and do not move with it.
+    static let summary = "Agent Speak: talk to the user through Aloud and hear their spoken answer, so you can ask a question mid-task instead of ending your turn."
 
     // The verbs a distributed build exposes (CLI.swift). Also the verbs Claude
     // Code's allowlist has to cover, which is why they live next to the text
@@ -193,10 +274,10 @@ enum AgentVoiceInstructions {
         let id = harness.id
         let command = invocation(command: command)
         return #"""
-        # Talking to the user out loud
+        # Agent Speak — talking to the user out loud
 
-        Aloud gives you a voice channel to the person you are working for. You can
-        say something through their speakers and hear their spoken answer, which
+        Agent Speak is Aloud's voice channel to the person you are working for. You
+        can say something through their speakers and hear their spoken answer, which
         means you can ask a question in the middle of a task instead of stopping
         and waiting for them to come back to the keyboard.
 
@@ -219,14 +300,14 @@ enum AgentVoiceInstructions {
         preamble, stop speaking context before each listen for the rest of the
         session and just listen. Do not go back to it later in the same session.
 
-        **Voice can be unavailable, and that is not an error.** The user can switch
-        this off at any moment, or decline a single request. A refusal is a normal
-        answer, not a bug: fall back to asking in text and carry on. Never retry in
-        a loop.
+        **Agent Speak can be unavailable, and that is not an error.** The user can
+        switch it off at any moment, or decline a single request. A refusal is a
+        normal answer, not a bug: fall back to asking in text and carry on. Never
+        retry in a loop.
 
         | refusal | what it means | what to do |
         |---|---|---|
-        | `disabled` | voice is switched off in Aloud | stop asking for the rest of the session; use text |
+        | `disabled` | Agent Speak is switched off in Aloud | stop asking for the rest of the session; use text |
         | `denied` | the user declined this request | use text now; asking again later is fine |
         | `timeout` | nobody answered | use text; do not immediately ask again |
         | `queued` | another agent holds the microphone | ask in text instead of waiting |
@@ -356,37 +437,36 @@ struct HarnessInstaller {
 
     // MARK: install
 
+    // Driven by the mechanism, not by the harness, so a new row in the table
+    // installs without a new branch here.
     func install(_ harness: AgentHarness) throws -> InstallResult {
-        switch harness {
-        case .cursor:
-            let skill = home.appendingPathComponent(harness.instructionPath)
-            let file = AgentVoiceInstructions.skillFile(harness: .cursor, command: command)
-            let wrote = try writeIfDifferent(file, to: skill)
-            return .installed(changed: wrote ? [skill] : [])
+        let block = AgentVoiceInstructions.markedBlock(
+            AgentVoiceInstructions.body(harness: harness, command: command))
 
-        case .copilot:
-            let block = AgentVoiceInstructions.markedBlock(
-                AgentVoiceInstructions.body(harness: .copilot, command: command))
-            return .snippet(ProjectSnippet(harness: .copilot,
+        switch harness.mechanism {
+        case .snippet:
+            return .snippet(ProjectSnippet(harness: harness,
                                            relativePath: harness.instructionPath,
                                            contents: block))
-        case .codex:
+
+        case .appendedBlock:
             let url = home.appendingPathComponent(harness.instructionPath)
-            let block = AgentVoiceInstructions.markedBlock(
-                AgentVoiceInstructions.body(harness: .codex, command: command))
             let changed = try upsertBlock(block, in: url)
             return .installed(changed: changed ? [url] : [])
 
-        case .claudeCode:
-            // Order matters. The permission file is the one that can refuse, so
-            // parse it before writing anything — a failure here must leave a
+        case .skillFile:
+            // Order matters for the one harness with an allowlist. The
+            // permission file is the only thing here that can refuse, so parse
+            // it before writing anything — a failure must not leave a
             // half-installed skill behind.
             let settings = claudeSettingsURL
-            let updated = try claudeSettings(at: settings, addingEntries: true)
+            let updated = harness.hasPermissionAllowlist
+                ? try claudeSettings(at: settings, addingEntries: true)
+                : nil
 
             var changed: [URL] = []
             let skill = home.appendingPathComponent(harness.instructionPath)
-            let file = AgentVoiceInstructions.skillFile(harness: .claudeCode, command: command)
+            let file = AgentVoiceInstructions.skillFile(harness: harness, command: command)
             if try writeIfDifferent(file, to: skill) { changed.append(skill) }
             if let data = updated {
                 try write(data, to: settings)
@@ -420,19 +500,19 @@ struct HarnessInstaller {
     // is the user's only record of what the file looked like before we touched
     // it, and we never reach the deletion.
     func uninstall(_ harness: AgentHarness) throws {
-        switch harness {
-        case .copilot:
+        switch harness.mechanism {
+        case .snippet:
             return  // nothing of ours is on disk to remove
 
-        case .cursor:
-            try removeSkillDirectory(at: home.appendingPathComponent(harness.instructionPath))
-
-        case .codex:
+        case .appendedBlock:
             try removeBlock(from: home.appendingPathComponent(harness.instructionPath))
 
-        case .claudeCode:
-            let skill = home.appendingPathComponent(harness.instructionPath)
-            try removeSkillDirectory(at: skill)
+        case .skillFile:
+            try removeSkillDirectory(at: home.appendingPathComponent(harness.instructionPath))
+            // The skill file goes first and unconditionally, so a harness with
+            // no allowlist is finished here and the one that has an allowlist
+            // still loses its skill even if the settings step throws.
+            guard harness.hasPermissionAllowlist else { return }
             // A malformed settings.json on the way out is still not ours to
             // rewrite — surface it so the pane can say the allowlist is stale.
             if let data = try claudeSettings(at: claudeSettingsURL, addingEntries: false) {
