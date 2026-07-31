@@ -295,9 +295,10 @@ struct StatusMenuView: View {
     /// Clean-up is the one setting people change by the task rather than once:
     /// exact words for a command, tightened prose for an email. Settings owns
     /// the full segmented picker — at 360pt that control eats the popover — so
-    /// this is a bare pop-up: the level's name, in the level's colour, with the
-    /// chevron that says it opens. No bezel, so it reads as part of the app's
-    /// state beside the title rather than as a button competing with the gear.
+    /// this is a bare pop-up: the level's name in the popover's own secondary
+    /// text colour, with the chevron that says it opens. No bezel and no colour
+    /// per level, so it reads as part of the app's state beside the title
+    /// rather than as a button competing with the gear.
     private var cleanUpMenu: some View {
         Menu {
             // Inline picker inside the menu, not four Buttons: the checkmark
@@ -320,7 +321,7 @@ struct StatusMenuView: View {
                 }
                 Text(settings.polishLevel.displayName)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(cleanUpTint)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .bold))
@@ -334,20 +335,6 @@ struct StatusMenuView: View {
         .help(cleanUpHelp)
         .accessibilityLabel(loc("Clean-up: %@", settings.polishLevel.displayName))
         .accessibilityHint(settings.polishLevel.shortSummary)
-    }
-
-    /// A colour per level, so the current one is recognised before it's read.
-    /// The ramp tracks how much Aloud touches the words — grey for untouched,
-    /// Aloud's own blue for the default, purple where a model gets involved —
-    /// and deliberately skips orange and red, which this popover already spends
-    /// on things being wrong.
-    private var cleanUpTint: Color {
-        switch settings.polishLevel {
-        case .off: return .gray
-        case .light: return .teal
-        case .standard: return .aloud
-        case .concise: return .purple
-        }
     }
 
     /// The hover text is the whole explanation: with no label and no ⓘ, this is
