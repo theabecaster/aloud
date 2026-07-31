@@ -276,21 +276,38 @@ final class AgentBridgeService {
                                    onHeard: { [weak self] said in
                                        self?.heardConsent(said, lease: lease)
                                    })
-        if prompt.mode == .confirmByVoice {
-            // Spoken through whichever voice is available. A failure here is
-            // not fatal on its own — the pill is still showing the same words —
-            // but it does mean a user looking away never learns they were asked.
-            try? await host?.speak(prompt.text)
-            // Only now. Opening the microphone first means Aloud transcribes
-            // its own prompt and the user's reply arrives glued to the end of
-            // it — "…say accept or decline. Accept." — which is correctly
-            // refused as not-an-answer, so speaking never worked at all.
-            await host?.beginConsentCapture()
-        }
-
+        // The prompt is answerable from the instant it is on screen, which
+        // means the continuation has to exist before anything is spoken.
+        // Speaking first looks harmless and is not: `speak` does not return
+        // until playback finishes, so for those several seconds the pill was
+        // showing accept and deny controls with nothing behind them. A click
+        // in that window resolved the policy — clearing the pending prompt and
+        // recording the grant — and then found no continuation to resume, so
+        // the answer was dropped and the user's claim waited out a deadline
+        // they had already answered. Reported as "the checkmark only works
+        // once the prompt finishes", which is exactly what it looked like.
         let deadline = prompt.deadline
         let resolution = await withCheckedContinuation { (continuation: CheckedContinuation<ConsentResolution, Never>) in
             pendingConsent[lease] = continuation
+            if prompt.mode == .confirmByVoice {
+                Task { [weak self] in
+                    // Spoken through whichever voice is available. A failure
+                    // here is not fatal on its own — the pill is still showing
+                    // the same words — but it does mean a user looking away
+                    // never learns they were asked.
+                    try? await self?.host?.speak(prompt.text)
+                    // Answered while we were still talking: there is nothing
+                    // left to listen for, and opening the microphone now would
+                    // be capturing after the decision was made.
+                    guard let self, self.pendingConsent[lease] != nil else { return }
+                    // Only now. Opening the microphone before playback ends
+                    // means Aloud transcribes its own prompt and the user's
+                    // reply arrives glued to the end of it — "…say yes or no.
+                    // Yes." — which is correctly refused as not-an-answer, so
+                    // speaking never worked at all.
+                    await self.host?.beginConsentCapture()
+                }
+            }
             Task { [weak self] in
                 let wait = deadline.timeIntervalSince(self?.now() ?? Date())
                 if wait > 0 {
@@ -309,8 +326,21 @@ final class AgentBridgeService {
 
     // MARK: consent answers, from the GUI
 
-    func acceptConsent(lease: String) { resolve(lease, consent.accept(lease: lease, now: now())) }
-    func declineConsent(lease: String) { resolve(lease, consent.decline(lease: lease, now: now())) }
+    func acceptConsent(lease: String) {
+        let resolution = consent.accept(lease: lease, now: now())
+        note("pill accept → \(resolution)")
+        resolve(lease, resolution)
+    }
+
+    func declineConsent(lease: String) {
+        let resolution = consent.decline(lease: lease, now: now())
+        note("pill decline → \(resolution)")
+        resolve(lease, resolution)
+    }
+
+    private func note(_ what: String) {
+        FileHandle.standardError.write(Data("[consent] \(what)\n".utf8))
+    }
 
     // A spoken answer. `unrecognized` deliberately does not resolve: babble
     // keeps the prompt pending on the same deadline rather than buying time or

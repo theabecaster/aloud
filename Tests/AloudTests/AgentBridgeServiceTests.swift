@@ -24,10 +24,17 @@ final class AgentBridgeServiceTests: XCTestCase {
         // Ordered log of everything the host was asked to do, so a test can
         // assert the microphone opens AFTER the prompt has been spoken.
         var events: [String] = []
+        // Fires while `speak` is still "playing", so a test can answer the
+        // prompt the way a user who doesn't wait for the sentence to end does.
+        // Main-actor typed on purpose: the pill's callbacks belong to the
+        // service, which is @MainActor, and `speak` is not — calling them
+        // straight from here trips the executor assumption and traps.
+        var duringSpeak: (@MainActor @Sendable () -> Void)?
         func speak(_ text: String) async throws {
             if let speakError { throw speakError }
             spoken.append(text)
             events.append("speak")
+            await duringSpeak?()
         }
         func beginConsentCapture() async {
             listenedForConsent = true
@@ -433,6 +440,32 @@ final class AgentBridgeServiceTests: XCTestCase {
 
         let after = await service.handle(request(.listen, lease: lease), peer: peer)
         XCTAssertEqual(after.reason, .notHolder)
+    }
+
+    // The pill is answerable from the moment it is on screen, and `speak` does
+    // not return until playback finishes — several seconds during which the
+    // accept and deny controls were showing with no continuation behind them.
+    // A click in that window resolved the policy and then had nothing to
+    // resume, so the answer was dropped and the claim waited out a deadline
+    // the user had already answered. From the outside: "the checkmark only
+    // works once the prompt finishes."
+    func testAnAnswerGivenWhileAloudIsStillTalkingIsNotLost() async {
+        let service = makeService(mode: .confirmByVoice)
+        host.duringSpeak = { [weak host] in host?.acceptFromPill?() }
+        let response = await service.handle(request(.claim), peer: peer)
+        XCTAssertTrue(response.ok, "an answer during playback must count")
+        XCTAssertNotNil(response.lease)
+    }
+
+    // The other half: if the question was answered while it was still being
+    // asked, there is nothing left to listen for, and opening the microphone
+    // afterwards would be capturing past the decision.
+    func testTheMicrophoneDoesNotOpenAfterAnAnswerArrivesDuringPlayback() async {
+        let service = makeService(mode: .confirmByVoice)
+        host.duringSpeak = { [weak host] in host?.acceptFromPill?() }
+        _ = await service.handle(request(.claim), peer: peer)
+        XCTAssertFalse(host.listenedForConsent,
+                       "consent capture must not start once the prompt is answered")
     }
 
     // The lease ending has to reach the indicator. An accepted prompt leaves
