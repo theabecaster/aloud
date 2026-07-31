@@ -42,7 +42,7 @@ enum CLI {
 
         var request = BridgeRequest(op: op,
                                     harness: value(of: "--harness", in: args) ?? "unknown",
-                                    pid: parentProcessID())
+                                    pid: ownerProcessID())
         request.lease = value(of: "--lease", in: args)
         if op == .speak {
             guard let text = firstPositional(after: 1, in: args) else {
@@ -93,11 +93,14 @@ enum CLI {
         return nil
     }
 
-    // The harness process, not this short-lived CLI: the lease is reaped when
-    // its owner dies, and the owner is the agent's shell, not one invocation of
-    // it. The app corroborates this against the socket peer anyway (§7.1c), so
-    // a wrong answer here degrades rather than grants anything.
-    private static func parentProcessID() -> pid_t { getppid() }
+    // No owner pid. It is tempting to send getppid() as "the harness", but a
+    // CLI invoked per call has a parent that is whatever short-lived shell the
+    // agent spawned — it dies immediately, and a lease keyed on it is reaped
+    // before the agent's next call. Saying "I have no stable process" is the
+    // honest answer, and the app falls back to the lease TTL, an explicit
+    // release, and the user's force-release. A harness that genuinely knows its
+    // own long-lived pid can start sending it without any change here.
+    private static func ownerProcessID() -> pid_t { LeaseManager.noOwnerPid }
 
     #if ALOUD_PROD_CLI
     // Distribution build: the development verbs are not compiled in at all.
@@ -685,6 +688,29 @@ extension CLI {
             Int((ProcessInfo.processInfo.systemUptime - started) * framesPerSecond) % timeline.count
         }
 
+        // The agent variant (§7.1d) has no microphone and no agent behind it
+        // here either: a canned consent request, and a transcript fed in a word
+        // at a time off the clock so the rolling tail can be seen rolling.
+        func demoPrompt(_ capture: PreConsentCapture) -> ConsentPrompt {
+            let asked = Date()
+            return ConsentPrompt(lease: "demo",
+                                 harness: "claude-code",
+                                 mode: capture == .forConsentOnly ? .confirmByVoice : .confirmOnScreen,
+                                 text: ConsentPolicy.promptText(harness: "claude-code",
+                                                                installedHarnesses: 2),
+                                 capture: capture,
+                                 askedAt: asked,
+                                 deadline: asked.addingTimeInterval(20))
+        }
+        let spoken = """
+            yes go ahead and rename the migration but keep the old column \
+            around until the backfill has finished on every shard
+            """.split(separator: " ").map(String.init)
+        // Words per second, and the word count derived from the clock rather
+        // than a counter — a mutable capture in a timer closure is exactly the
+        // thing Swift 6 concurrency refuses.
+        let wordsPerSecond = 3.2
+
         // The states, in order, with how long each is held. Scheduled on the
         // run loop rather than driven by a blocking loop: the pill's own meter
         // timer hops through the main actor, which never gets a turn if this
@@ -711,6 +737,48 @@ extension CLI {
             ("notice", 3, { indicator.showNotice(loc("Microphone changed — still listening")) }),
             ("transcribing", 3, { indicator.showTranscribing() }),
             ("hint", 3, { indicator.showHint(loc("Finish setup to start dictating")) }),
+            // Off screen for a moment, so the agent pill is seen arriving at
+            // its own size rather than the dictation one stretching.
+            ("agent-idle", 2, { indicator.hide() }),
+            // Consent mode 2: the pending state, named caller.
+            ("agent-consent", 4, {
+                indicator.namesCaller = true
+                indicator.showConsent(prompt: demoPrompt(.none),
+                                      onAccept: { print("demo=accept") },
+                                      onDecline: { print("demo=decline") })
+            }),
+            // Mode 3 asks out loud with the microphone already open, so the
+            // same pending pill also carries a live meter.
+            ("agent-consent-voice", 4, {
+                indicator.showConsent(prompt: demoPrompt(.forConsentOnly),
+                                      onAccept: { print("demo=accept") },
+                                      onDecline: { print("demo=decline") })
+                indicator.showAgentSession(harness: "claude-code",
+                                           phase: .pending,
+                                           levelProvider: { levels[index()] },
+                                           bandsProvider: { timeline[index()] })
+            }),
+            // Accepted: the controls go, the meter stays, the words start.
+            ("agent-listening", 9, {
+                indicator.dismissConsent(phase: .listening)
+                let feedStart = ProcessInfo.processInfo.systemUptime
+                Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+                    MainActor.assumeIsolated {
+                        let elapsed = ProcessInfo.processInfo.systemUptime - feedStart
+                        let count = min(spoken.count, Int(elapsed * wordsPerSecond))
+                        indicator.updateTranscript(spoken.prefix(count).joined(separator: " "))
+                        if count >= spoken.count { timer.invalidate() }
+                    }
+                }
+            }),
+            // The unnamed wording, on the same session: with one harness
+            // installed the pill says "an agent" instead of naming it.
+            ("agent-unnamed", 3, {
+                indicator.namesCaller = false
+                indicator.showAgentSession(harness: "claude-code", phase: .listening)
+            }),
+            ("agent-speaking", 3, { indicator.updateAgentPhase(.speaking) }),
+            ("agent-done", 3, { indicator.updateAgentPhase(.done) }),
         ]
         var at: TimeInterval = 0
         for step in script {

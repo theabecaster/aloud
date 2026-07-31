@@ -172,12 +172,31 @@ enum BridgeSocketIO {
 
 // MARK: - errors
 
-enum BridgeServerError: Error, Equatable {
+enum BridgeServerError: LocalizedError, Equatable {
     case alreadyRunning         // another Aloud already owns this socket
     case pathTooLong(String)    // sockaddr_un.sun_path is only 104 bytes
     case socketFailed(Int32)
     case bindFailed(Int32)
     case listenFailed(Int32)
+
+    // Spelled out because the default rendering is "BridgeServerError error 0",
+    // which says nothing. This surfaces in the Agents pane and in the log when
+    // the bridge cannot start, and the difference between "another instance has
+    // it" and "your path is too long" is the whole diagnosis.
+    var errorDescription: String? {
+        switch self {
+        case .alreadyRunning:
+            return "another Aloud already owns the agent socket"
+        case .pathTooLong(let path):
+            return "socket path is \(path.utf8.count) bytes, over the 104-byte limit: \(path)"
+        case .socketFailed(let code):
+            return "couldn't create the agent socket (errno \(code))"
+        case .bindFailed(let code):
+            return "couldn't bind the agent socket (errno \(code))"
+        case .listenFailed(let code):
+            return "couldn't listen on the agent socket (errno \(code))"
+        }
+    }
 }
 
 // MARK: - server

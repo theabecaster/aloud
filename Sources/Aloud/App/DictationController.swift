@@ -35,6 +35,10 @@ final class DictationController: ObservableObject {
     // room defeats.
     private let speechActivity = SpeechActivity()
 
+    // An agent-initiated capture. Kept distinct from a command session so
+    // every existing guard that asks "is this a dictation?" still answers no.
+    private var isAgentSession = false
+
     // Keeps the system default input off a Bluetooth headset that is also
     // the current output — continuously, so a session never has to switch
     // inputs (switching around a live capture is what made headsets blip
@@ -1541,11 +1545,173 @@ final class DictationController: ObservableObject {
         indicator.hide()
         phase = .idle
     }
+
+    // MARK: - Agent Speak
+
+    // Endpointing for a session nobody is holding a key for. A dictation hold
+    // defines its own start and end; an agent-initiated capture has neither, so
+    // these three numbers are the whole contract. All well under the consent
+    // and command timeouts upstream.
+    enum AgentListen {
+        static let silenceEndsTurn: TimeInterval = 1.5   // quiet after speech = done
+        static let noSpeechAtAll: TimeInterval = 8       // nobody said anything
+        static let hardMax: TimeInterval = 60            // a runaway session
+        static let poll: TimeInterval = 0.1
+    }
+
+    private static let agentSpeaker: Speaker = SpeakerFactory.make()
+
+    // Say something out loud for an agent. Half-duplex by construction: this
+    // does not return until playback has finished, and `listen` refuses while a
+    // session is live, so the microphone is never open into our own speakers.
+    func speakForAgent(_ text: String) async throws {
+        try await Self.agentSpeaker.speak(text)
+    }
+
+    // Capture for an agent and hand back the transcript. Deliberately NOT the
+    // dictation path: nothing is injected into the focused app, nothing is
+    // written to history, and no audio backup is kept — an agent session's
+    // words belong to the agent that asked for them and to nobody else.
+    func listenForAgent(from consentGranted: Date) async throws -> AgentTranscript {
+        guard phase == .idle || phase.isError else { throw AgentListenError.busy }
+        guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
+            throw AgentListenError.notReady
+        }
+
+        sessionGeneration += 1
+        isAgentSession = true
+        phase = .recording
+        indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
+                       bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
+
+        let started = try await startAgentCapture()
+        _ = started
+        playCue(.listening)
+        startSpeechActivity()
+
+        let samples = await captureUntilEndpoint()
+        stopSpeechActivity()
+        isAgentSession = false
+
+        guard Double(samples.count) / AudioRecorder.targetSampleRate >= 0.35 else {
+            indicator.hide()
+            phase = .idle
+            throw AgentListenError.nothingHeard
+        }
+
+        indicator.showTranscribing()
+        phase = .transcribing
+        defer { phase = .idle }
+        do {
+            await ensureTranscriberReady()
+            let result = try await transcriber.transcribe(samples: samples)
+            let raw = verbatim(result)
+            // Agents always get the best cleanup this Mac can do, at the
+            // general tone — there is no focused app to infer a mode from, and
+            // the caller is told which one actually ran because the Concise
+            // rewrite needs Apple Intelligence and we target macOS 14+.
+            let polished = polishedVariants(from: raw)
+            let rewritten = await rewriteIfAllowed(polished.rewriteInput)
+            indicator.hide()
+            return AgentTranscript(text: rewritten ?? polished.fallback,
+                                   raw: raw,
+                                   cleanup: rewritten == nil ? .basic : .concise)
+        } catch {
+            indicator.hide()
+            throw error
+        }
+    }
+
+    private func startAgentCapture() async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            recorder.startAsync(deviceUID: settings.microphoneUID,
+                                noiseReduction: settings.noiseReduction
+                                    && AudioDevices.voiceProcessingAllowed()) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: true)
+                }
+            }
+        }
+    }
+
+    // Silence ends the turn; total silence times out; a runaway session is
+    // capped. Nobody is holding a key, so nothing else will stop this.
+    private func captureUntilEndpoint() async -> [Float] {
+        let began = Date()
+        var heardAnything = false
+        while true {
+            try? await Task.sleep(nanoseconds: UInt64(AgentListen.poll * 1_000_000_000))
+            let elapsed = Date().timeIntervalSince(began)
+            if let quiet = speechActivity.secondsSinceSpeech {
+                heardAnything = true
+                if quiet >= AgentListen.silenceEndsTurn { break }
+            }
+            if !heardAnything, elapsed >= AgentListen.noSpeechAtAll { break }
+            if elapsed >= AgentListen.hardMax { break }
+            if !isAgentSession { break }   // force-released from the menu bar
+        }
+        return recorder.stop()
+    }
+
+    // Consent presentation on the pill. The agent-session indicator variant
+    // is being built separately; until it lands these are the seam, and they
+    // must not silently do nothing — a consent prompt the user never sees is a
+    // request that can only time out.
+    func indicatorShowConsent(_ prompt: ConsentPrompt) {
+        indicator.showHint(prompt.text)
+    }
+
+    func indicatorDismissConsent() {
+        indicator.hide()
+    }
+
+    // Cut a running agent capture short — the user pulling the plug.
+    func cancelAgentSession() {
+        guard isAgentSession else { return }
+        isAgentSession = false
+    }
 }
 
 private extension DictationController.Phase {
     var isError: Bool {
         if case .error = self { return true }
         return false
+    }
+}
+
+enum AgentListenError: LocalizedError {
+    case busy, notReady, nothingHeard
+
+    var errorDescription: String? {
+        switch self {
+        case .busy: return loc("Aloud is already listening.")
+        case .notReady: return loc("Finish setting up Aloud first.")
+        case .nothingHeard: return loc("Didn’t hear anything.")
+        }
+    }
+
+}
+
+// The app side of the bridge. Thin on purpose: policy — the gate, the lease,
+// consent — lives in AgentBridgeService, which knows nothing about audio.
+extension DictationController: AgentVoiceHost {
+    func speak(_ text: String) async throws {
+        try await speakForAgent(text)
+    }
+
+    func listen(from: Date) async throws -> AgentTranscript {
+        try await listenForAgent(from: from)
+    }
+
+    func presentConsent(_ prompt: ConsentPrompt) async {
+        // The pill is the only place a user who isn't looking at the agent's
+        // window learns they were asked anything.
+        indicatorShowConsent(prompt)
+    }
+
+    func dismissConsent() async {
+        indicatorDismissConsent()
     }
 }

@@ -21,6 +21,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusPopover: NSPopover?
     private var menuPreviewWindow: NSWindow?
     private let controller = DictationController()
+
+    // Agent Speak. Both are nil until the experiment is switched on: the gate's
+    // promise is that nothing is reachable until asked for, and the surest way
+    // to keep that promise is to not open the socket at all.
+    private var bridge: BridgeServer?
+    private var bridgeService: AgentBridgeService?
+    private var bridgeGateObserver: AnyCancellable?
     private let settingsNavigation = SettingsNavigationModel()
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
@@ -75,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             // preparation, reachability monitor, or update network request.
         } else if !controller.settings.onboardingComplete {
             showOnboarding()
+            observeAgentSpeakGate()
         } else {
             // Onboarding is done, so a missing permission does not reopen it —
             // revoking microphone access makes macOS restart the app, and
@@ -84,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             // it's a no-op without Accessibility and recovers on its own once
             // the grant comes back.
             _ = controller.startListening()
+            observeAgentSpeakGate()
             Task {
                 // Relaunched before the model download ever finished: cover
                 // with basic dictation (quiet activation never prompts) while
@@ -186,6 +195,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         monitor.start(queue: .global(qos: .utility))
         pathMonitor = monitor
+    }
+
+    // MARK: - Agent Speak bridge
+
+    // Follows the experimental gate for the life of the app: switching it off
+    // closes the socket, not merely refuses on it. A listening socket that
+    // exists while the feature is "off" is the kind of detail that reads badly
+    // when someone finds it rather than being told about it.
+    private func observeAgentSpeakGate() {
+        syncBridge()
+        bridgeGateObserver = controller.settings.$experimentalAgentVoice
+            .receive(on: RunLoop.main)
+            .sink { [weak self] enabled in self?.syncBridge(enabled: enabled) }
+    }
+
+    private func syncBridge(enabled: Bool? = nil) {
+        let on = enabled ?? controller.settings.experimentalAgentVoice
+        guard on else {
+            bridgeService?.forceRelease()
+            bridge?.stop()
+            bridge = nil
+            bridgeService = nil
+            return
+        }
+        guard bridge == nil else { return }
+
+        let service = AgentBridgeService(settings: controller.settings, host: controller)
+        let server = BridgeServer()
+        server.handler = { [weak service] request, peer in
+            guard let service else {
+                return .failure(.unavailable, "Aloud isn't ready for agent requests.")
+            }
+            return await service.handle(request, peer: peer)
+        }
+        do {
+            try server.start()
+            bridgeService = service
+            bridge = server
+        } catch {
+            // Never fatal: dictation is the app, Agent Speak is an experiment
+            // on top of it. The Agents pane is where this gets surfaced.
+            FileHandle.standardError.write(
+                Data("agent bridge failed to start: \(error.localizedDescription)\n".utf8))
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

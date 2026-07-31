@@ -187,7 +187,13 @@ final class LeaseManager {
         if let at = freeAt, now >= at { freeAt = nil }
     }
 
+    // A lease with no owner pid is watched by its TTL alone. Callers that
+    // cannot name a stable process must not be reaped instantly — see
+    // AgentBridgeService for why the CLI is one of them.
+    static let noOwnerPid: pid_t = 0
+
     static func processIsAlive(_ pid: pid_t) -> Bool {
+        guard pid != noOwnerPid else { return true }
         guard pid > 0 else { return false }
         // Signal 0 checks for existence without delivering anything. EPERM
         // means it exists and belongs to someone else, which still counts.

@@ -113,10 +113,18 @@ final class AgentBridgeService {
     // by the consent timeout, which sits under the harness's command timeout.
     private func claim(_ request: BridgeRequest,
                        peer: BridgeServer.PeerIdentity) async -> BridgeResponse {
-        // Prefer the kernel's view of who is calling over the self-reported
-        // pid: an agent that lies about its pid would otherwise get a lease
-        // that outlives it, since reaping is liveness-based.
-        let pid = peer.isKnown ? peer.pid : request.pid
+        // The socket peer is the CLI process, which exits microseconds after
+        // this call — so it is exactly the wrong thing to key liveness on.
+        // Using it made every lease dead on arrival: claim succeeded, and the
+        // next call in the same conversation was refused as notHolder because
+        // the "owner" had already gone.
+        //
+        // Liveness therefore watches the pid the caller names as its own
+        // long-lived process, and `noOwnerPid` (the honest answer from a CLI
+        // that cannot know one) means TTL-only. The peer stays what it always
+        // was — corroboration for the name we show the user, never authority
+        // over the session's lifetime.
+        let pid = request.pid > 0 ? request.pid : LeaseManager.noOwnerPid
         let at = now()
 
         if let until = refusedUntil[request.harness], at < until {
