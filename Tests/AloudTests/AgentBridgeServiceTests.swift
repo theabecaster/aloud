@@ -502,6 +502,69 @@ final class AgentBridgeServiceTests: XCTestCase {
         XCTAssertNil(response.lease)
     }
 
+    // The trash on a session row scopes to that row. Ending the holder is
+    // "this conversation is over", not "give me my microphone back" — so the
+    // next waiter is promoted once the cooldown passes, rather than being told
+    // the user reclaimed the mic.
+    func testEndingTheHolderPromotesTheNextWaiter() async {
+        let service = makeService(mode: .open)
+        let granted = await service.handle(request(.claim), peer: peer)
+        guard let lease = granted.lease else { return XCTFail("no lease granted") }
+
+        var parkedRequest = BridgeRequest(op: .claim, harness: "codex", pid: 99,
+                                          lease: nil, text: nil)
+        parkedRequest.name = "release notes"
+        parkedRequest.wait = 10
+        let waiter = peer
+        async let parked = service.handle(parkedRequest, peer: waiter)
+        try? await Task.sleep(nanoseconds: 400_000_000)
+
+        service.endSession(lease)
+        clock.advance(5)                       // past the audio cooldown
+
+        let response = await parked
+        XCTAssertTrue(response.ok, "ending one session must hand the microphone on, not reclaim it")
+        XCTAssertNotNil(response.lease)
+    }
+
+    // Trashing a waiter's row must answer that waiter's parked claim — and
+    // nobody else's. The first version bumped the reclaim counter, which told
+    // every parked agent the user took the microphone back because one of them
+    // was dismissed.
+    func testEndingAWaiterAnswersItAndOnlyIt() async {
+        let service = makeService(mode: .open)
+        let granted = await service.handle(request(.claim), peer: peer)
+        guard let lease = granted.lease else { return XCTFail("no lease granted") }
+
+        var dismissedRequest = BridgeRequest(op: .claim, harness: "codex", pid: 99,
+                                             lease: nil, text: nil)
+        dismissedRequest.name = "release notes"
+        dismissedRequest.wait = 10
+        let waiter = peer
+        async let dismissed = service.handle(dismissedRequest, peer: waiter)
+
+        var bystanderRequest = BridgeRequest(op: .claim, harness: "cursor", pid: 77,
+                                             lease: nil, text: nil)
+        bystanderRequest.name = "writing docs"
+        bystanderRequest.wait = 10
+        async let bystander = service.handle(bystanderRequest, peer: waiter)
+        try? await Task.sleep(nanoseconds: 400_000_000)
+
+        service.endSession("codex#99")
+
+        let dismissedResponse = await dismissed
+        XCTAssertFalse(dismissedResponse.ok, "a dismissed waiter must be answered, not left parked")
+        XCTAssertEqual(dismissedResponse.reason, .denied)
+
+        // The other waiter keeps its place: once the holder releases and the
+        // cooldown passes, the microphone is its.
+        _ = await service.handle(request(.release, lease: lease), peer: peer)
+        clock.advance(5)
+        let bystanderResponse = await bystander
+        XCTAssertTrue(bystanderResponse.ok, "dismissing one waiter must not evict the others")
+        XCTAssertNotNil(bystanderResponse.lease)
+    }
+
     // The lease ending has to reach the indicator. An accepted prompt leaves
     // the pill up on purpose — the session carries on into it — so if release
     // only changes lease state, the pill stays on screen saying an agent holds

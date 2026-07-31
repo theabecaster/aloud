@@ -56,6 +56,7 @@ struct StatusMenuView: View {
     let onUseExactWords: () -> Void
     let onQuit: () -> Void
     let onEndAgentSession: (String) -> Void
+    let onEndAllAgentSessions: () -> Void
 
     init(controller: DictationController,
          learner: CorrectionLearner,
@@ -69,7 +70,8 @@ struct StatusMenuView: View {
          onRetryLast: @escaping () -> Void,
          onUseExactWords: @escaping () -> Void,
          onQuit: @escaping () -> Void,
-         onEndAgentSession: @escaping (String) -> Void = { _ in }) {
+         onEndAgentSession: @escaping (String) -> Void,
+         onEndAllAgentSessions: @escaping () -> Void) {
         self.controller = controller
         _history = ObservedObject(wrappedValue: controller.history)
         _settings = ObservedObject(wrappedValue: controller.settings)
@@ -85,6 +87,7 @@ struct StatusMenuView: View {
         self.onUseExactWords = onUseExactWords
         self.onQuit = onQuit
         self.onEndAgentSession = onEndAgentSession
+        self.onEndAllAgentSessions = onEndAllAgentSessions
     }
 
     /// Rows shown in the popover; the full list lives in Settings → History.
@@ -534,6 +537,9 @@ struct StatusMenuView: View {
             .popover(isPresented: $reviewingSessions, arrowEdge: .top) {
                 AgentSessionList(sessions: controller.agentSessions) { session in
                     onEndAgentSession(session.id)
+                } onEndAll: {
+                    onEndAllAgentSessions()
+                    reviewingSessions = false
                 } onDone: {
                     reviewingSessions = false
                 }
@@ -663,8 +669,15 @@ private struct EndSessionConfirmation: View {
             HStack(spacing: 8) {
                 Spacer()
                 Button(loc("Cancel"), action: onCancel)
-                Button(loc("End Session"), action: onEnd)
-                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                Button(action: onEnd) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.defaultAction)
+                .help(loc("End %@’s session", session.name))
+                .accessibilityLabel(loc("End %@’s session", session.name))
             }
         }
         .padding(14)
@@ -679,6 +692,7 @@ private struct EndSessionConfirmation: View {
 private struct AgentSessionList: View {
     let sessions: [AgentSession]
     let onEnd: (AgentSession) -> Void
+    let onEndAll: () -> Void
     let onDone: () -> Void
 
     var body: some View {
@@ -713,7 +727,13 @@ private struct AgentSessionList: View {
                     .accessibilityLabel(loc("End %@’s session", session.name))
                 }
             }
+            // End all on the far side from Done: same quiet style, and the
+            // width of the row between them is what says they are two
+            // different answers.
             HStack {
+                Button(loc("End all"), action: onEndAll)
+                    .buttonStyle(.plain)
+                    .help(loc("End every session, including waiting ones"))
                 Spacer()
                 Button(loc("Done"), action: onDone)
                     .buttonStyle(.plain)
@@ -1172,5 +1192,7 @@ private func copyToPasteboard(_ text: String) {
                    onCopyLast: {},
                    onRetryLast: {},
                    onUseExactWords: {},
-                   onQuit: {})
+                   onQuit: {},
+                   onEndAgentSession: { _ in },
+                   onEndAllAgentSessions: {})
 }

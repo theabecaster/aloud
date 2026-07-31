@@ -655,7 +655,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             onUseExactWords: { [weak self] in
                 self?.runRestoringFocus { self?.undoEnhancement() }
             },
-            onQuit: { NSApp.terminate(nil) }
+            onQuit: { NSApp.terminate(nil) },
+            onEndAgentSession: { [weak self] id in self?.bridgeService?.endSession(id) },
+            onEndAllAgentSessions: { [weak self] in self?.bridgeService?.forceRelease() }
         )
     }
 

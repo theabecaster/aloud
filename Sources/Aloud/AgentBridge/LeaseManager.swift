@@ -181,15 +181,16 @@ final class LeaseManager {
         reap(now: now)
     }
 
-    // The user pulling the plug from the menu bar. Unlike `release`, this does
-    // not care who is holding it — when automation gets stuck, the person
-    // watching should not have to wait out a timeout they cannot see.
-    // The user taking the microphone back. The queue goes with the holder,
-    // because "give me my microphone" and "next, please" are opposite
-    // intentions and this control means the first: leaving the queue standing
-    // hands the mic to whoever was next about two seconds later, so pressing
-    // hang up would start a different agent talking. Anyone dropped is told,
-    // and is free to ask again.
+    // The user taking the microphone back — the menu bar's "End all". Unlike
+    // `release`, this does not care who is holding it: when automation gets
+    // stuck, the person watching should not have to wait out a timeout they
+    // cannot see. The queue goes with the holder, because "give me my
+    // microphone" and "next, please" are opposite intentions and this control
+    // means the first: leaving the queue standing hands the mic to whoever was
+    // next about two seconds later, so pressing it would start a different
+    // agent talking. Anyone dropped is told, and is free to ask again.
+    // Ending one session and letting the rest stand is `release` (the holder)
+    // or `dropQueued` (a waiter), driven by the per-row control.
     func forceRelease(now: Date) {
         guard holder != nil || !queue.isEmpty else { return }
         holder = nil

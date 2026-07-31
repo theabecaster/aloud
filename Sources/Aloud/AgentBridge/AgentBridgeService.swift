@@ -217,6 +217,15 @@ final class AgentBridgeService {
         let requested = min(max(request.wait ?? 0, 0), Self.maxQueueWait)
         let pollsRemaining = Int(requested / Self.queuePoll)
 
+        // The queue knows callers by this key, and it is how a dismissal finds
+        // its way back to the caller it was aimed at: a waiter the user trashed
+        // re-claims (or wakes from its park) and is answered here, once,
+        // instead of silently rejoining the queue.
+        let queueKey = "\(request.harness)#\(pid)"
+        if evicted.remove(queueKey) != nil {
+            return .failure(.denied, "The user dismissed this session's request.")
+        }
+
         var outcome = leases.claim(harness: request.harness, pid: pid, name: name, now: at)
         if pollsRemaining > 0 {
             var polls = 0
@@ -235,6 +244,11 @@ final class AgentBridgeService {
                 // outcome that control exists to prevent.
                 guard reclaims == reclaimsAtEntry else {
                     return .failure(.denied, "The user took the microphone back.")
+                }
+                // The user trashing this waiter's row must end this park, and
+                // only this one — the other waiters keep their places.
+                if evicted.remove(queueKey) != nil {
+                    return .failure(.denied, "The user dismissed this session's request.")
                 }
                 leases.enabled = true
                 outcome = leases.claim(harness: request.harness, pid: pid, name: name, now: now())
@@ -586,20 +600,38 @@ final class AgentBridgeService {
         await host?.endAgentSession()
     }
 
-    // End one named session — the menu bar's list, where more than one wants
-    // the microphone. Ending the holder is the hang up; ending a waiter simply
-    // takes it out of the queue, and it will be told when it next asks.
+    // End one named session — the menu bar's list. The trash sits on a row, so
+    // its scope is that row and nothing else: ending the holder hangs up that
+    // conversation and the next waiter is granted after the cooldown; ending a
+    // waiter takes only it out of the queue and answers its parked claim.
+    // Taking the microphone away from everyone at once is `forceRelease`,
+    // which the list exposes separately as "End all".
     func endSession(_ id: String) {
         if leases.holder?.id == id {
-            forceRelease()
+            resolve(id, .denied(preConsentAudio: .discarded))
+            consent.endLease(id)
+            leases.release(lease: id, now: now())
+            publishHolder()
+            Task { [weak self] in await self?.host?.endAgentSession() }
             return
         }
-        reclaims += 1
+        evicted.insert(id)
         leases.dropQueued(id: id)
         publishHolder()
     }
 
+    // Queue keys of waiters the user has dismissed, consumed by the waiter's
+    // next poll or re-claim so its parked shell is answered rather than left
+    // to rejoin the queue it was just removed from. Keyed per caller so
+    // dismissing one waiter never touches the others. A key that is never
+    // consumed (the waiter died first) is cleared with the queue on
+    // `forceRelease`; until then it would deny one future claim from a caller
+    // with the same harness and pid, which for a caller that named a real
+    // owner pid is itself.
+    private var evicted: Set<String> = []
+
     func forceRelease() {
+        evicted.removeAll()
         reclaims += 1
         if let lease = leases.holder?.id {
             resolve(lease, .denied(preConsentAudio: .discarded))

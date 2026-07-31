@@ -455,6 +455,8 @@
 "Agent sessions using the microphone" = "Agent sessions using the microphone";
 "Agent sessions" = "Agent sessions";
 "End %@’s session?" = "End %@’s session?";
+"End all" = "End All";
+"End every session, including waiting ones" = "End every session, including waiting ones";
 "End Session" = "End Session";
 "End" = "End";
 "It gives the microphone back and tells the agent the session is over." = "It gives the microphone back and tells the agent the session is over.";
