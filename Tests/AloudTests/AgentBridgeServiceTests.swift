@@ -43,6 +43,29 @@ final class AgentBridgeServiceTests: XCTestCase {
             if let listenError { throw listenError }
             return transcript
         }
+
+        // Streaming variant. `polled` records what the agent asked for so a
+        // test can assert the ceiling was passed through rather than ignored.
+        var sessions: [String] = []
+        var polled: [TimeInterval] = []
+        var stopped: [String] = []
+        var partial = "roll it"
+        func startListenSession() async throws -> String {
+            let id = "S\(sessions.count + 1)"
+            sessions.append(id)
+            return id
+        }
+        func pollListenSession(id: String, waitingUpTo seconds: TimeInterval) async throws
+            -> (text: String, speaking: Bool, silentFor: TimeInterval?) {
+            guard sessions.contains(id) else { throw AgentListenError.busy }
+            polled.append(seconds)
+            return (partial, true, 0.2)
+        }
+        func stopListenSession(id: String) async throws -> AgentTranscript {
+            guard sessions.contains(id) else { throw AgentListenError.busy }
+            stopped.append(id)
+            return transcript
+        }
     }
 
     private var suiteName = ""
@@ -339,17 +362,66 @@ final class AgentBridgeServiceTests: XCTestCase {
         XCTAssertEqual(response.raw, "uh roll it back")
     }
 
-    // Poll mode is defined in the protocol but not implemented. Behaving like
-    // blocking would strand an agent waiting for updates a one-shot call will
-    // never send, so it is refused out loud.
-    func testUnimplementedPollModeIsRefusedRatherThanFakingBlocking() async {
+    // start → poll → stop. The point of the stream is that an agent can cut in
+    // as soon as it has heard enough, so poll must hand back the partial and
+    // say whether the user is still talking.
+    func testStreamingListenRunsStartPollStop() async {
         let service = makeService(mode: .open)
-        let lease = (await service.handle(request(.claim), peer: peer)).lease
+        let claimed = await service.handle(request(.claim), peer: peer)
+        let lease = claimed.lease
+
+        var start = request(.listen, lease: lease)
+        start.mode = .start
+        let opened = await service.handle(start, peer: peer)
+        XCTAssertTrue(opened.ok)
+        let session = try? XCTUnwrap(opened.session)
+        XCTAssertEqual(host.listenCount, 0, "starting a session must not run a blocking capture")
+
         var poll = request(.listen, lease: lease)
         poll.mode = .poll
-        let response = await service.handle(poll, peer: peer)
-        XCTAssertEqual(response.reason, .badRequest)
-        XCTAssertEqual(host.listenCount, 0)
+        poll.session = session
+        poll.wait = 4
+        let heard = await service.handle(poll, peer: peer)
+        XCTAssertTrue(heard.ok)
+        XCTAssertEqual(heard.text, "roll it")
+        XCTAssertEqual(heard.speaking, true)
+        XCTAssertEqual(host.polled.first, 4, "the agent's ceiling has to reach the host")
+
+        var stop = request(.listen, lease: lease)
+        stop.mode = .stop
+        stop.session = session
+        let final = await service.handle(stop, peer: peer)
+        XCTAssertEqual(final.text, "roll it back")
+        XCTAssertEqual(final.cleanup, .concise)
+        XCTAssertEqual(host.stopped, [session])
+    }
+
+    // A poll ceiling is capped so it cannot outlive the shell that asked.
+    func testPollCeilingIsCapped() async {
+        let service = makeService(mode: .open)
+        let claimed = await service.handle(request(.claim), peer: peer)
+        var start = request(.listen, lease: claimed.lease)
+        start.mode = .start
+        let session = (await service.handle(start, peer: peer)).session
+
+        var poll = request(.listen, lease: claimed.lease)
+        poll.mode = .poll
+        poll.session = session
+        poll.wait = 9999
+        _ = await service.handle(poll, peer: peer)
+        XCTAssertEqual(host.polled.first, 30)
+    }
+
+    func testPollAndStopNeedTheSessionThatStartReturned() async {
+        let service = makeService(mode: .open)
+        let claimed = await service.handle(request(.claim), peer: peer)
+        for mode in [BridgeRequest.ListenMode.poll, .stop] {
+            var r = request(.listen, lease: claimed.lease)
+            r.mode = mode
+            let response = await service.handle(r, peer: peer)
+            XCTAssertEqual(response.reason, .badRequest,
+                           "\(mode) without a session is a request error, not a silent no-op")
+        }
     }
 
     // MARK: user override

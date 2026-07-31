@@ -33,6 +33,14 @@ protocol AgentVoiceHost: AnyObject, Sendable {
     // consent was granted: nothing captured before it is in scope, which is
     // what keeps a pre-consent buffer out of the agent's hands.
     func listen(from: Date) async throws -> AgentTranscript
+
+    // The streaming variant: open a session, ask it what it has heard so far,
+    // end it. `poll` returns the moment the transcript changes so an agent
+    // watching a long answer is not charged a model turn per look.
+    func startListenSession() async throws -> String
+    func pollListenSession(id: String, waitingUpTo seconds: TimeInterval) async throws
+        -> (text: String, speaking: Bool, silentFor: TimeInterval?)
+    func stopListenSession(id: String) async throws -> AgentTranscript
 }
 
 struct AgentTranscript: Sendable {
@@ -376,9 +384,48 @@ final class AgentBridgeService {
             } catch {
                 return .failure(.unavailable, error.localizedDescription)
             }
-        case .start, .poll, .stop:
-            return .failure(.badRequest,
-                            "This version of Aloud only supports a single blocking listen.")
+        case .start:
+            do {
+                var response = BridgeResponse.success()
+                response.session = try await host.startListenSession()
+                return response
+            } catch {
+                return .failure(.unavailable, error.localizedDescription)
+            }
+
+        case .poll:
+            guard let session = request.session else {
+                return .failure(.badRequest, "poll needs the session that start returned.")
+            }
+            do {
+                // Capped well under the harness's command timeout: a poll that
+                // outlives the shell asking it returns into nothing.
+                let heard = try await host.pollListenSession(id: session,
+                                                             waitingUpTo: min(request.wait ?? 5, 30))
+                var response = BridgeResponse.success()
+                response.session = session
+                response.text = heard.text
+                response.speaking = heard.speaking
+                response.silentFor = heard.silentFor
+                return response
+            } catch {
+                return .failure(.notHolder, error.localizedDescription)
+            }
+
+        case .stop:
+            guard let session = request.session else {
+                return .failure(.badRequest, "stop needs the session that start returned.")
+            }
+            do {
+                let transcript = try await host.stopListenSession(id: session)
+                var response = BridgeResponse.success()
+                response.text = transcript.text
+                response.raw = transcript.raw
+                response.cleanup = transcript.cleanup
+                return response
+            } catch {
+                return .failure(.unavailable, error.localizedDescription)
+            }
         }
     }
 

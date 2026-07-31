@@ -1680,6 +1680,101 @@ final class DictationController: ObservableObject {
                                    bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
     }
 
+    // MARK: agent poll sessions
+
+    // The streaming variant. `listen` blocking covers "ask a question, get the
+    // answer" without costing the agent a model turn per look; this is for the
+    // case that actually needs the stream — the agent wants to cut in as soon
+    // as it has heard enough, or the user is dictating something long.
+    private final class AgentPollSession {
+        let id: String
+        let stream: StreamingTranscription
+        var latest = LiveTranscript(confirmed: "", volatile: "")
+        var pump: Task<Void, Never>?
+        init(id: String, stream: StreamingTranscription) {
+            self.id = id
+            self.stream = stream
+        }
+    }
+
+    private var agentPoll: AgentPollSession?
+
+    func startAgentPollSession() async throws -> String {
+        guard phase == .idle || phase.isError, agentPoll == nil else { throw AgentListenError.busy }
+        guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
+            throw AgentListenError.notReady
+        }
+        await ensureTranscriberReady()
+        guard let stream = transcriber.makeStreamingTranscription() else {
+            // No streaming engine on this Mac — the fallback path is batch
+            // only. Refusing is better than pretending: an agent polling a
+            // session that will never update would wait out its own ceiling.
+            throw AgentListenError.notReady
+        }
+
+        sessionGeneration += 1
+        isAgentSession = true
+        phase = .recording
+        indicatorShowAgentSession(harness: agentHarnessName ?? "")
+
+        let session = AgentPollSession(id: "S\(sessionGeneration)-\(UInt32.random(in: 0..<UInt32.max))",
+                                       stream: stream)
+        agentPoll = session
+        _ = try await startAgentCapture()
+        recorder.onChunk = { [weak stream] chunk in stream?.append(samples: chunk) }
+        playCue(.listening)
+        startSpeechActivity()
+
+        session.pump = Task { [weak self] in
+            for await update in stream.updates {
+                guard let self else { return }
+                self.agentPoll?.latest = update
+                self.indicator.updateTranscript(update.full)
+            }
+        }
+        return session.id
+    }
+
+    // Long poll: returns the moment the transcript changes, or at the ceiling.
+    // Returning on change is what keeps this from costing a model turn per
+    // look — the agent asks once and is answered when there is something to
+    // say, rather than being told "nothing yet" ten times.
+    func pollAgentSession(id: String, waitingUpTo seconds: TimeInterval) async throws
+        -> (text: String, speaking: Bool, silentFor: TimeInterval?) {
+        guard let session = agentPoll, session.id == id else { throw AgentListenError.busy }
+        let before = session.latest.full
+        let polls = max(1, Int(min(seconds, 30) / AgentListen.poll))
+        for _ in 0..<polls {
+            if session.latest.full != before { break }
+            try? await Task.sleep(nanoseconds: UInt64(AgentListen.poll * 1_000_000_000))
+            guard agentPoll?.id == id else { throw AgentListenError.busy }
+        }
+        let quiet = speechActivity.secondsSinceSpeech
+        return (session.latest.full, quiet == nil || quiet! < AgentListen.silenceEndsTurn, quiet)
+    }
+
+    func stopAgentPollSession(id: String) async throws -> AgentTranscript {
+        guard let session = agentPoll, session.id == id else { throw AgentListenError.busy }
+        agentPoll = nil
+        session.pump?.cancel()
+        recorder.onChunk = nil
+        _ = recorder.stop()
+        stopSpeechActivity()
+        isAgentSession = false
+        indicator.showTranscribing()
+        phase = .transcribing
+        defer { phase = .idle }
+
+        let result = try await session.stream.finish()
+        let raw = verbatim(result)
+        let polished = polishedVariants(from: raw)
+        let rewritten = await rewriteIfAllowed(polished.rewriteInput)
+        indicator.hide()
+        return AgentTranscript(text: rewritten ?? polished.fallback,
+                               raw: raw,
+                               cleanup: rewritten == nil ? .basic : .concise)
+    }
+
     // Cut a running agent capture short — the user pulling the plug.
     func cancelAgentSession() {
         guard isAgentSession else { return }
@@ -1719,6 +1814,17 @@ extension DictationController: AgentVoiceHost {
 
     func listen(from: Date) async throws -> AgentTranscript {
         try await listenForAgent(from: from)
+    }
+
+    func startListenSession() async throws -> String { try await startAgentPollSession() }
+
+    func pollListenSession(id: String, waitingUpTo seconds: TimeInterval) async throws
+        -> (text: String, speaking: Bool, silentFor: TimeInterval?) {
+        try await pollAgentSession(id: id, waitingUpTo: seconds)
+    }
+
+    func stopListenSession(id: String) async throws -> AgentTranscript {
+        try await stopAgentPollSession(id: id)
     }
 
     func presentConsent(_ prompt: ConsentPrompt,

@@ -45,7 +45,8 @@ struct BridgeRequest: Codable {
     var lease: String?
     var text: String?           // speak
     var mode: ListenMode?       // listen
-    var wait: Double?           // listen --poll: long-poll ceiling, seconds
+    var wait: Double?           // long-poll / queue-wait ceiling, seconds
+    var session: String?        // listen --poll / --stop: what --start returned
 
     enum ListenMode: String, Codable {
         case blocking   // default: capture until the speaker stops, return the final

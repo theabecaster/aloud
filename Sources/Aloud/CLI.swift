@@ -49,6 +49,13 @@ enum CLI {
         // rather than spending a model turn per look. Also accepted on listen,
         // where it is the long-poll ceiling.
         request.wait = value(of: "--wait", in: args).flatMap(Double.init)
+        request.session = value(of: "--session", in: args)
+        if op == .listen {
+            for (flag, mode) in [("--start", BridgeRequest.ListenMode.start),
+                                 ("--poll", .poll), ("--stop", .stop)] where args.contains(flag) {
+                request.mode = mode
+            }
+        }
         if op == .speak {
             guard let text = firstPositional(after: 1, in: args) else {
                 usage("speak --lease <id> <text>")
