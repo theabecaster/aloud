@@ -24,7 +24,7 @@ enum AgentConsentMode: String, Codable, CaseIterable, Identifiable {
     var explanation: String {
         switch self {
         case .open:
-            return loc("Agents can start listening right away. The pill always shows when they do.")
+            return loc("Agents can start listening right away. The recording indicator always shows when they do.")
         case .confirmOnScreen:
             return loc("Nothing reaches the agent until you accept on screen.")
         case .confirmByVoice:

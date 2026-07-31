@@ -17,7 +17,7 @@ struct OnboardingView: View {
     }
 
     enum Step: Int, CaseIterable {
-        case welcome, access, voice, tryIt, cleanUp, features
+        case welcome, access, voice, tryIt, cleanUp, agentVoice, features
 
         // Harness hook: ALOUD_ONBOARDING_STEP=tryIt opens the flow on a later
         // screen so a screen can be inspected without clicking through.
@@ -27,6 +27,7 @@ struct OnboardingView: View {
             case "voice": return .voice
             case "tryIt": return .tryIt
             case "cleanUp": return .cleanUp
+            case "agentVoice": return .agentVoice
             case "features": return .features
             default: return .welcome
             }
@@ -118,6 +119,7 @@ struct OnboardingView: View {
         case .voice: voice
         case .tryIt: tryIt
         case .cleanUp: cleanUpScreen
+        case .agentVoice: agentVoice
         case .features: features
         }
     }
@@ -713,6 +715,17 @@ struct OnboardingView: View {
 
     // Skip steps that are already satisfied, so reopening setup (or a re-grant
     // in System Settings) never replays screens the user has completed.
+    // The experimental opt-in (docs §7.1b). Skipping leaves the gate off, the
+    // same as never having seen it: the default is what the user decided, not
+    // what they failed to do. Both paths write the setting explicitly before
+    // moving on, so going Back and changing your mind cannot leave a stale
+    // `true` behind.
+    private var agentVoice: some View {
+        AgentVoiceOnboardingPage(settings: settings,
+                                 onEnable: { advance() },
+                                 onSkip: { advance() })
+    }
+
     private func advance() {
         var raw = step.rawValue + 1
         while let candidate = Step(rawValue: raw), isSatisfied(candidate) { raw += 1 }
@@ -739,7 +752,7 @@ struct OnboardingView: View {
         switch s {
         case .access: return Permissions.allGranted
         case .voice: return controller.transcriberState == .ready
-        case .welcome, .tryIt, .cleanUp, .features: return false
+        case .welcome, .tryIt, .cleanUp, .agentVoice, .features: return false
         }
     }
 }
