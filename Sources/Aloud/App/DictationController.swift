@@ -2004,9 +2004,20 @@ extension DictationController: AgentVoiceHost {
         }
         note("listening for accept/decline")
         recorder.onChunk = { [weak audio] chunk in audio?.append(chunk) }
-        // The meter is the only sign the microphone is live. The pill has been
-        // on screen since before playback started, so it has to be attached
-        // here rather than at show time.
+        // Your turn. The question was asked out loud and the microphone stayed
+        // shut throughout, so an answer given over the top of it was heard by
+        // nobody and nothing said so — someone answered, was ignored, and had
+        // no way to know they needed to answer again.
+        //
+        // Two cues, because the whole point is that nobody is watching the
+        // screen: the same start sound dictation uses, and the pill swapping
+        // the speaking wave for the live meter.
+        playCue(.listening)
+        // `.listening`, not `.pending`: the decision is still outstanding, but
+        // what the user needs to know at this instant is that the microphone
+        // is open and it is their turn. The raised hand becoming a microphone
+        // is half the swap — one changing element was easy to miss.
+        indicator.updateAgentPhase(.listening)
         indicator.attachMeter(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
                               bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
         consentPump = Task { [weak self] in

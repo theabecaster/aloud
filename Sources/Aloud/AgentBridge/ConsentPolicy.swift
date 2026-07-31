@@ -8,9 +8,9 @@ import Foundation
 //
 //   open            — allowed immediately, no prompt.
 //   confirmOnScreen — the pill opens pending, with accept / deny controls.
-//   confirmByVoice  — capture starts at once, Aloud speaks "… wants to listen —
-//                     say yes or no", and nothing reaches the agent
-//                     until the user agrees.
+//   confirmByVoice  — the question is asked out loud ("Let an agent listen?
+//                     Yes or no"), the microphone opens when it finishes,
+//                     and nothing reaches the agent until the user agrees.
 //
 // Two invariants are load-bearing and are modelled in the types rather than
 // left to the caller's discipline:
@@ -280,9 +280,9 @@ final class ConsentPolicy {
     // a word we cannot hear, rather than to loosen what counts as consent.
     static func promptText(harness: String, installedHarnesses: Int) -> String {
         guard installedHarnesses > 1 else {
-            return loc("An agent wants to listen — say yes or no")
+            return loc("Let an agent listen? Yes or no")
         }
-        return loc("%@ wants to listen — say yes or no", displayName(forHarness: harness))
+        return loc("Let %@ listen? Yes or no", displayName(forHarness: harness))
     }
 
     // "claude-code" → "Claude Code". A label for the user's benefit, never
