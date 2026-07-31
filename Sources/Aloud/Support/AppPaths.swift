@@ -24,6 +24,7 @@ enum AppPaths {
     }
 
     static var historyFile: URL { stateDir.appendingPathComponent("history.json") }
+    static var correctionsFile: URL { stateDir.appendingPathComponent("corrections.json") }
     static var scratchpadFile: URL { stateDir.appendingPathComponent("scratchpad.txt") }
     static var lastUpdateCheckFile: URL { stateDir.appendingPathComponent("last-update-check") }
 

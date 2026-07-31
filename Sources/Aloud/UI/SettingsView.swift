@@ -1137,6 +1137,10 @@ struct MappingRow: View {
     let from: String
     let to: String
     var toLineLimit: Int = 1
+    // A rule Aloud proposed from the user's own edits, as opposed to one they
+    // typed in — a quiet mark, because "where did this come from?" is a fair
+    // question about a list the user didn't fill in entirely by hand.
+    var learned: Bool = false
     let onRemove: () -> Void
 
     var body: some View {
@@ -1151,6 +1155,13 @@ struct MappingRow: View {
                 .lineLimit(toLineLimit)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
+            if learned {
+                Image(systemName: "wand.and.sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help(loc("Learned from your edits"))
+                    .accessibilityLabel(loc("Learned from your edits"))
+            }
             Button(action: onRemove) {
                 Image(systemName: "minus.circle.fill")
                     .foregroundStyle(.secondary)
@@ -1161,12 +1172,84 @@ struct MappingRow: View {
     }
 }
 
+// A correction Aloud is proposing, drawn as the row it would become. Same
+// from → to line as MappingRow so the offer and the thing being offered read
+// as one kind of object — but held at arm's length: the wand marks whose idea
+// it was, the words sit in secondary ink because nothing here is in effect
+// yet, and the trailing pair asks rather than the minus button that removes.
+// Accepting animates it into the list above; both answers are one click, and
+// neither is buried in a menu.
+struct SuggestedMappingRow: View {
+    let from: String
+    let to: String
+    let onAccept: () -> Void
+    let onDeny: () -> Void
+
+    @State private var accepted = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: accepted ? "checkmark.circle.fill" : "wand.and.sparkles")
+                .font(.caption)
+                .contentTransition(.symbolEffect(.replace))
+                .foregroundStyle(Color.aloud)
+            Text(from)
+                .lineLimit(1)
+            Image(systemName: "arrow.right")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Text(to)
+                .fontWeight(.medium)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            if !accepted {
+                Button(action: accept) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.aloud)
+                }
+                .buttonStyle(.plain)
+                .help(loc("Fix it automatically next time"))
+                .accessibilityLabel(loc("Fix it automatically next time"))
+                Button(action: onDeny) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(loc("Never suggest this fix"))
+                .accessibilityLabel(loc("Never suggest this fix"))
+            }
+        }
+        // Not yet in effect, and saying so in ink costs nothing: the row goes
+        // full-strength at the moment it's accepted, on its way to the list.
+        .foregroundStyle(accepted ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: accepted)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(loc("Suggested: type “%1$@” instead of “%2$@”", to, from))
+    }
+
+    private func accept() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { accepted = true }
+        // The same beat the menu bar cells hold before they leave, so the
+        // click reads as "done" rather than the row simply vanishing.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            onAccept()
+        }
+    }
+}
+
 // MARK: - Vocabulary
 
 struct VocabularySettings: View {
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var learner: CorrectionLearner = .shared
     @State private var newPattern = ""
     @State private var newReplacement = ""
+
+    private var suggestions: [CorrectionLearner.Suggestion] {
+        settings.learnCorrections ? learner.openSuggestions(given: settings) : []
+    }
 
     var body: some View {
         ListEditorPane(
@@ -1175,7 +1258,7 @@ struct VocabularySettings: View {
             isEmpty: settings.replacements.isEmpty
         ) {
             ForEach(settings.replacements) { r in
-                MappingRow(from: r.pattern, to: r.replacement) {
+                MappingRow(from: r.pattern, to: r.replacement, learned: r.learned) {
                     settings.replacements.removeAll { $0.id == r.id }
                 }
             }
@@ -1205,6 +1288,43 @@ struct VocabularySettings: View {
                     settings.polishLevel = .standard
                 }
             }
+            // Waiting to be let in: the same from → to shape as the list
+            // below, so it reads as the same kind of thing, but greyed and
+            // answered rather than removed — nothing here is in effect yet.
+            if !suggestions.isEmpty {
+                SwiftUI.Section {
+                    ForEach(suggestions) { suggestion in
+                        SuggestedMappingRow(
+                            from: suggestion.from,
+                            to: suggestion.to,
+                            onAccept: {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    learner.accept(suggestion, settings: settings)
+                                }
+                            },
+                            onDeny: {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    learner.dismiss(suggestion)
+                                }
+                            }
+                        )
+                    }
+                } header: {
+                    Text(loc("Suggested"))
+                } footer: {
+                    Text(loc("Corrections Aloud saw you make. Accept one and it joins the list below; decline and it won’t be suggested again."))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            SwiftUI.Section {
+                Toggle(loc("Suggest fixes from your edits"), isOn: $settings.learnCorrections)
+            } footer: {
+                Text(loc("Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac."))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1218,6 +1338,9 @@ struct VocabularySettings: View {
         let r = newReplacement.trimmingCharacters(in: .whitespaces)
         guard !p.isEmpty, !r.isEmpty else { return }
         settings.replacements.append(Replacement(pattern: p, replacement: r))
+        // Adding this word by hand is a change of mind: an earlier "never
+        // suggest this" for the same pattern shouldn't outlive it.
+        CorrectionLearner.shared.resetDismissals(matchingPattern: p)
         newPattern = ""; newReplacement = ""
     }
 }

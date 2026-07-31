@@ -37,6 +37,9 @@ struct StatusMenuView: View {
     @ObservedObject var controller: DictationController
     @ObservedObject private var history: HistoryStore
     @ObservedObject private var settings: SettingsStore
+    // Observed, not snapshotted into AttentionAction: accepting or denying a
+    // suggestion must update the stack while the popover is still open.
+    @ObservedObject private var learner: CorrectionLearner
 
     let attentionActions: [AttentionAction]
     /// Whether a permission Aloud needs is missing *and* setup is finished —
@@ -54,6 +57,7 @@ struct StatusMenuView: View {
     let onQuit: () -> Void
 
     init(controller: DictationController,
+         learner: CorrectionLearner,
          attentionActions: [AttentionAction],
          permissionMissing: Bool,
          scratchpadVisible: Bool,
@@ -67,6 +71,7 @@ struct StatusMenuView: View {
         self.controller = controller
         _history = ObservedObject(wrappedValue: controller.history)
         _settings = ObservedObject(wrappedValue: controller.settings)
+        _learner = ObservedObject(wrappedValue: learner)
         self.attentionActions = attentionActions
         self.permissionMissing = permissionMissing
         self.scratchpadVisible = scratchpadVisible
@@ -87,11 +92,14 @@ struct StatusMenuView: View {
 
     @State private var historyContentHeight: CGFloat = 0
 
+    // Whether the grouped suggestions are open for review in their own popover.
+    @State private var reviewingSuggestions = false
+
     var body: some View {
         VStack(spacing: 0) {
             header
 
-            if !attentionActions.isEmpty {
+            if showsAttention {
                 attention
                 Divider()
             }
@@ -104,6 +112,36 @@ struct StatusMenuView: View {
         }
         .frame(width: 360)
         .background(Color(nsColor: .windowBackgroundColor))
+        // Keyed here rather than inside `attention`: a subtree can't animate
+        // its own removal, and answering the last question takes the cells,
+        // the divider and the quick actions' inset away in one frame.
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: showsAttention)
+        .onChange(of: pendingSuggestions.isEmpty) { _, empty in
+            if empty { reviewingSuggestions = false }
+        }
+        // Answering the last question closes the review; the menu behind it
+        // must go back to closing on its own the moment it does.
+        .onChange(of: reviewingSuggestions) { _, shown in
+            NotificationCenter.default.post(name: .aloudStatusMenuModal, object: shown)
+        }
+        .onDisappear {
+            if reviewingSuggestions {
+                NotificationCenter.default.post(name: .aloudStatusMenuModal, object: false)
+            }
+        }
+    }
+
+    // Suggestions awaiting an answer. Hidden while the feature is switched
+    // off — the stored pairs stay put, but the questions go quiet with it.
+    private var pendingSuggestions: [CorrectionLearner.Suggestion] {
+        settings.learnCorrections ? learner.openSuggestions(given: settings) : []
+    }
+
+    // Whether anything sits above the quick actions — which decides whether
+    // they need their own top inset: the header brings its own breathing
+    // room, a divider does not.
+    private var showsAttention: Bool {
+        !attentionActions.isEmpty || !pendingSuggestions.isEmpty
     }
 
     private var header: some View {
@@ -169,9 +207,62 @@ struct StatusMenuView: View {
                 }
                 .buttonStyle(StatusMenuAttentionButtonStyle(tone: item.tone))
             }
+            suggestionCells
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: pendingSuggestions)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: reviewingSuggestions)
+    }
+
+    // Suggestion cells share the attention stack but read as a different kind
+    // of thing: an attention row is a shortcut, a suggestion is a question —
+    // no chevron, two answers, and it stays until one of them is given.
+    @ViewBuilder
+    private var suggestionCells: some View {
+        let pending = pendingSuggestions
+        // Answering rows inside the review drops the count, and collapsing
+        // back to individual cards mid-review would take the panel's own
+        // anchor out of the view tree with it — SwiftUI tears the panel down
+        // without reporting it dismissed, so the menu would be left holding a
+        // lock it never hears about. The summary row stays for as long as the
+        // review does.
+        if !pending.isEmpty, pending.count >= 3 || reviewingSuggestions {
+            // Past a couple of questions the stack would crowd the menu, so
+            // they collapse to one row that opens the lot in a popover of its
+            // own — the menu keeps its size, and the review arrives as its own
+            // small panel rather than by shoving everything below it down.
+            SuggestionSummaryCell(count: pending.count) { reviewingSuggestions = true }
+                .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                .popover(isPresented: $reviewingSuggestions, arrowEdge: .bottom) {
+                    SuggestionReviewPopover(
+                        suggestions: pending,
+                        onAccept: acceptSuggestion,
+                        onDeny: denySuggestion,
+                        onAcceptAll: { for s in pending { learner.accept(s, settings: settings) } },
+                        onDenyAll: { for s in pending { learner.dismiss(s) } }
+                    )
+                }
+        } else {
+            ForEach(pending) { suggestion in
+                SuggestionCell(suggestion: suggestion,
+                               onAccept: { acceptSuggestion(suggestion) },
+                               onDeny: { denySuggestion(suggestion) })
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            }
+        }
+    }
+
+    private func acceptSuggestion(_ suggestion: CorrectionLearner.Suggestion) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            learner.accept(suggestion, settings: settings)
+        }
+    }
+
+    private func denySuggestion(_ suggestion: CorrectionLearner.Suggestion) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            learner.dismiss(suggestion)
+        }
     }
 
     /// Clean-up is the one setting people change by the task rather than once:
@@ -291,6 +382,7 @@ struct StatusMenuView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
+            .padding(.top, showsAttention ? 10 : 0)
             .padding(.bottom, 4)
         }
     }
@@ -504,6 +596,235 @@ private struct StatusMenuQuickActionButtonStyle: ButtonStyle {
     }
 }
 
+// One pending fix, asked as a question: what Aloud typed, what the user keeps
+// changing it to, and two answers. Accepting acknowledges in place — the wand
+// becomes a checkmark and holds for a beat — before the cell leaves the stack,
+// so the click reads as "done", never "gone".
+private struct SuggestionCell: View {
+    let suggestion: CorrectionLearner.Suggestion
+    let onAccept: () -> Void
+    let onDeny: () -> Void
+
+    @State private var accepted = false
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: accepted ? "checkmark.circle.fill" : "wand.and.sparkles")
+                .contentTransition(.symbolEffect(.replace))
+                .foregroundStyle(Color.aloud)
+                .frame(width: 18)
+            SuggestionPhrase(from: suggestion.from, to: suggestion.to)
+            Spacer(minLength: 8)
+            SuggestionAnswerButtons(accepted: $accepted, showsCheckWhenAccepted: false,
+                                    onAccept: onAccept, onDeny: onDeny)
+        }
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            Color.aloud.opacity(0.06),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.aloud.opacity(0.25), lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(loc("Type “%1$@” instead of “%2$@”", suggestion.to, suggestion.from))
+    }
+}
+
+// The fix itself, in the vocabulary of MappingRow: what Aloud typed reads
+// quietly, what it should have been carries the weight.
+private struct SuggestionPhrase: View {
+    let from: String
+    let to: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(from)
+                .foregroundStyle(.secondary)
+            Image(systemName: "arrow.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+            Text(to)
+                .fontWeight(.medium)
+        }
+        .lineLimit(1)
+        .truncationMode(.middle)
+    }
+}
+
+// The two answers, sized like the copy button on a history row. Accept flips
+// the row into its acknowledged state and holds it on screen for a beat
+// before the actual removal runs — an instant vanish makes the user wonder
+// which button they hit.
+private struct SuggestionAnswerButtons: View {
+    @Binding var accepted: Bool
+    // Rows without their own status glyph show the checkmark moment here.
+    let showsCheckWhenAccepted: Bool
+    let onAccept: () -> Void
+    let onDeny: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if accepted {
+                if showsCheckWhenAccepted {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.aloud)
+                        .frame(width: 24, height: 24)
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                }
+            } else {
+                answer("checkmark", tint: Color.aloud,
+                       help: loc("Fix it automatically next time"), action: accept)
+                answer("xmark", tint: Color.secondary,
+                       help: loc("Never suggest this fix"), action: onDeny)
+            }
+        }
+    }
+
+    private func answer(_ symbol: String, tint: Color, help: String,
+                        action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.semibold))
+                .frame(width: 24, height: 24)
+                .foregroundStyle(tint)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.borderless)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+
+    private func accept() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { accepted = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(550))
+            onAccept()
+        }
+    }
+}
+
+// Three or more pending fixes as one row — the stack must never grow into a
+// wall of questions. The row only announces them and opens the review; the
+// menu keeps the size it had.
+private struct SuggestionSummaryCell: View {
+    let count: Int
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 9) {
+                Image(systemName: "wand.and.sparkles")
+                    .foregroundStyle(Color.aloud)
+                    .frame(width: 18)
+                Text(loc("%ld suggested fixes", count))
+                    .font(.callout.weight(.medium))
+                Spacer()
+                // No chevron: the row opens a panel of questions to answer,
+                // not a place to go, and the attention rows above it own that
+                // arrow for the things that really do take you somewhere.
+                Text(loc("Review"))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.aloud)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .background(
+            Color.aloud.opacity(0.06),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.aloud.opacity(0.25), lineWidth: 1)
+        )
+        .accessibilityLabel(loc("Review %ld suggested fixes", count))
+    }
+}
+
+// The review itself, in a panel of its own — same quiet popover Settings uses
+// for a dictation's original text. Answers can be given one at a time or to
+// the whole list at once; the panel closes itself when none are left.
+private struct SuggestionReviewPopover: View {
+    let suggestions: [CorrectionLearner.Suggestion]
+    let onAccept: (CorrectionLearner.Suggestion) -> Void
+    let onDeny: (CorrectionLearner.Suggestion) -> Void
+    let onAcceptAll: () -> Void
+    let onDenyAll: () -> Void
+
+    // Tall lists scroll rather than growing a panel taller than the menu.
+    private static let maxListHeight: CGFloat = 260
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(loc("Suggested Fixes"))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(loc("Aloud noticed these corrections. Accepting one fixes that word automatically from now on."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(suggestions) { suggestion in
+                        SuggestionReviewRow(suggestion: suggestion,
+                                            onAccept: { onAccept(suggestion) },
+                                            onDeny: { onDeny(suggestion) })
+                        if suggestion.id != suggestions.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: Self.maxListHeight)
+            .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            HStack {
+                Button(loc("Deny All"), action: onDenyAll)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(loc("Accept All"), action: onAcceptAll)
+                    .foregroundStyle(Color.aloud)
+            }
+            .buttonStyle(.borderless)
+            .font(.caption.weight(.medium))
+        }
+        .frame(width: 300, alignment: .leading)
+        .padding(14)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: suggestions)
+    }
+}
+
+// A single fix inside the review: the same question as a standalone cell,
+// minus the card chrome the panel already provides.
+private struct SuggestionReviewRow: View {
+    let suggestion: CorrectionLearner.Suggestion
+    let onAccept: () -> Void
+    let onDeny: () -> Void
+
+    @State private var accepted = false
+
+    var body: some View {
+        HStack(spacing: 9) {
+            SuggestionPhrase(from: suggestion.from, to: suggestion.to)
+            Spacer(minLength: 8)
+            SuggestionAnswerButtons(accepted: $accepted, showsCheckWhenAccepted: true,
+                                    onAccept: onAccept, onDeny: onDeny)
+        }
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: accepted)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(loc("Type “%1$@” instead of “%2$@”", suggestion.to, suggestion.from))
+    }
+}
+
 private struct RecentDictationRow: View {
     let entry: HistoryEntry
 
@@ -615,6 +936,7 @@ private func copyToPasteboard(_ text: String) {
 
 #Preview {
     StatusMenuView(controller: DictationController(),
+                   learner: CorrectionLearner.shared,
                    attentionActions: [],
                    permissionMissing: false,
                    scratchpadVisible: false,

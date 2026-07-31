@@ -6,6 +6,11 @@ import SwiftUI
 extension Notification.Name {
     /// Posted by Settings › About; the delegate runs the check and any install.
     static let aloudCheckForUpdates = Notification.Name("AloudCheckForUpdates")
+    /// Posted by the status menu around a popover of its own (`object` is a
+    /// Bool: shown). A transient popover closes the moment another window
+    /// takes an event, which would take the whole menu down on the first
+    /// click inside that child — so it stops being transient while one is up.
+    static let aloudStatusMenuModal = Notification.Name("AloudStatusMenuModal")
 }
 
 // Menu bar app: NSStatusItem + menu, onboarding/settings windows, silent
@@ -122,6 +127,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NotificationCenter.default.addObserver(forName: .aloudCheckForUpdates,
                                                object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkForUpdates() }
+        }
+
+        // The status menu is putting up a popover of its own; hold the menu
+        // open for as long as it lasts (see the notification's note).
+        NotificationCenter.default.addObserver(forName: .aloudStatusMenuModal,
+                                               object: nil, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                let shown = note.object as? Bool ?? false
+                // Restoring transience is enough: the menu closes on the next
+                // click outside it, the same as any other time. Trying to
+                // decide here whether the user had already clicked away meant
+                // reading which window was key mid-teardown, and losing that
+                // race closed the whole menu out from under an answer.
+                self?.statusPopover?.behavior = shown ? .applicationDefined : .transient
+            }
         }
 
         // Harness hook: ALOUD_OPEN_SETTINGS=1 opens the Settings window at
@@ -396,6 +416,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             statusPopover = popover
             return popover
         }()
+        // Transient again for every opening, whatever the last session left
+        // behind: a menu that has stopped closing on its own is unrecoverable
+        // without this, and the flag is only ever meant to last as long as one
+        // child popover (see aloudStatusMenuModal).
+        popover.behavior = .transient
         // No fixed contentSize: the hosting controller publishes the SwiftUI
         // fitting size so the popover hugs its content and grows/shrinks live.
         let host = NSHostingController(rootView: makeStatusMenuView())
@@ -410,6 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         statusItem.button?.highlight(false)
+        statusPopover?.behavior = .transient
     }
 
     private func closeStatusPopover() {
@@ -530,6 +556,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         return StatusMenuView(
             controller: controller,
+            learner: CorrectionLearner.shared,
             attentionActions: attention,
             permissionMissing: needsPermissionAttention,
             scratchpadVisible: scratchpad.isVisible,
