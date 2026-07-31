@@ -16,8 +16,29 @@ enum CLI {
         case "--version":
             print(Updater.currentVersion())
             return 0
+        case "speak":
+            // Agent verb: say something out loud. Bare subcommand rather than
+            // a --flag because this is the supported surface, not tooling.
+            guard args.count >= 2 else {
+                FileHandle.standardError.write(Data("usage: Aloud speak <text>\n".utf8))
+                return 64
+            }
+            return await speak(text: args[1])
         default:
             return await runDevelopmentVerb(args)
+        }
+    }
+
+    // MARK: speak
+
+    static func speak(text: String) async -> Int32 {
+        let speaker = SpeakerFactory.make()
+        do {
+            try await speaker.speak(text)
+            return 0
+        } catch {
+            FileHandle.standardError.write(Data("speak failed: \(error.localizedDescription)\n".utf8))
+            return 1
         }
     }
 
@@ -90,7 +111,27 @@ extension CLI {
             }
             return await command(instruction: args[1], selection: selection)
         case "--selftest":
-            return selfTest()
+            return await selfTest()
+        case "--speak-bench":
+            // Renders one line through every available voice and prints what
+            // each cost. Choosing the enhanced engine is a listening decision
+            // plus a latency budget, and neither is answerable from the SDK
+            // docs. Optional --out <dir> writes a WAV per engine to compare by
+            // ear; --engine <name> limits the run to one.
+            guard args.count >= 2 else {
+                FileHandle.standardError.write(Data(
+                    "usage: Aloud --speak-bench <text> [--engine system|kokoro|pocket] [--out <dir>]\n".utf8))
+                return 64
+            }
+            var out: URL?
+            if let idx = args.firstIndex(of: "--out"), args.count > idx + 1 {
+                out = URL(fileURLWithPath: args[idx + 1])
+            }
+            var only: String?
+            if let idx = args.firstIndex(of: "--engine"), args.count > idx + 1 {
+                only = args[idx + 1]
+            }
+            return await speakBench(text: args[1], only: only, outputDirectory: out)
         case "--transcribe":
             guard args.count >= 2 else {
                 FileHandle.standardError.write(Data("usage: Aloud --transcribe <audio-file>\n".utf8))
@@ -183,6 +224,98 @@ extension CLI {
             FileHandle.standardError.write(Data("unknown flag \(args.first ?? "")\n".utf8))
             return 2
         }
+    }
+
+    // MARK: --speak-bench
+
+    static func speakBench(text: String, only: String?, outputDirectory: URL?) async -> Int32 {
+        var candidates: [(name: String, speaker: Speaker)] = [
+            ("system", SystemSpeaker()),
+        ]
+        for engine in NeuralEngine.allCases {
+            candidates.append((engine.rawValue, NeuralSpeaker(engine: engine)))
+        }
+        if let only {
+            candidates = candidates.filter { $0.name == only }
+            guard !candidates.isEmpty else {
+                FileHandle.standardError.write(Data("unknown engine \(only)\n".utf8))
+                return 64
+            }
+        }
+        if let outputDirectory {
+            try? FileManager.default.createDirectory(at: outputDirectory,
+                                                     withIntermediateDirectories: true)
+        }
+
+        print(row("engine", "audio(s)", "synth(s)", "RTF", "rate", "status"))
+        var failures = 0
+        for candidate in candidates {
+            // Download+load is not what we're measuring — warm first, then time
+            // synthesis on its own. A cold number would just be bandwidth.
+            let loadStarted = Date()
+            do { try await candidate.speaker.prepare() } catch {
+                print(row(candidate.name, "—", "—", "—", "—",
+                          "unavailable: \(error.localizedDescription)"))
+                failures += 1
+                continue
+            }
+            let loadSeconds = Date().timeIntervalSince(loadStarted)
+
+            do {
+                let speech = try await candidate.speaker.synthesize(text)
+                print(row(candidate.name,
+                          String(format: "%.2f", speech.duration),
+                          String(format: "%.2f", speech.synthesisTime),
+                          String(format: "%.3f", speech.realtimeFactor),
+                          String(speech.sampleRate),
+                          String(format: "load %.1fs", loadSeconds)))
+                if let outputDirectory {
+                    let url = outputDirectory.appendingPathComponent("\(candidate.name).wav")
+                    writeWAV(speech, to: url)
+                    print("         → \(url.path)")
+                }
+            } catch {
+                print(row(candidate.name, "—", "—", "—", "—",
+                          "failed: \(error.localizedDescription)"))
+                failures += 1
+            }
+        }
+        print("\nRTF below 1.0 means synthesis outruns playback.")
+        return failures == candidates.count ? 1 : 0
+    }
+
+    // Hand-padded rather than String(format:) — %s there takes a C string, not
+    // a Swift String, and silently prints garbage.
+    private static func row(_ engine: String, _ audio: String, _ synth: String,
+                            _ rtf: String, _ rate: String, _ status: String) -> String {
+        func pad(_ text: String, _ width: Int, right: Bool = true) -> String {
+            let padding = String(repeating: " ", count: max(0, width - text.count))
+            return right ? padding + text : text + padding
+        }
+        return pad(engine, 8, right: false) + pad(audio, 10) + pad(synth, 10)
+            + pad(rtf, 8) + pad(rate, 8) + "  " + status
+    }
+
+    // AudioBackup's writer is pinned to the recorder's 16 kHz; synthesis comes
+    // out at 24 kHz, so the bench needs its own.
+    private static func writeWAV(_ speech: Speech, to url: URL) {
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                         sampleRate: Double(speech.sampleRate),
+                                         channels: 1, interleaved: false),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format,
+                                            frameCapacity: AVAudioFrameCount(speech.samples.count)),
+              let channel = buffer.floatChannelData
+        else { return }
+        buffer.frameLength = AVAudioFrameCount(speech.samples.count)
+        speech.samples.withUnsafeBufferPointer { src in
+            guard let base = src.baseAddress else { return }
+            channel[0].update(from: base, count: src.count)
+        }
+        try? FileManager.default.removeItem(at: url)
+        guard let file = try? AVAudioFile(forWriting: url, settings: format.settings,
+                                          commonFormat: .pcmFormatFloat32, interleaved: false)
+        else { return }
+        try? file.write(from: buffer)
     }
 
     // MARK: --command
@@ -733,7 +866,7 @@ extension CLI {
     // MARK: --selftest
 
     // In-process checks needing no TCC grants and no model. Exit 0 = pass.
-    static func selfTest() -> Int32 {
+    static func selfTest() async -> Int32 {
         var failures: [String] = []
         func expect(_ cond: Bool, _ name: String) {
             if cond { print("ok  \(name)") } else { print("FAIL \(name)"); failures.append(name) }
@@ -901,7 +1034,7 @@ extension CLI {
         store.append(HistoryEntry(text: "second", duration: 0.8), limit: 50)
         expect(store.entries.count == 2 && store.entries[0].text == "second",
                "history: append order")
-        Thread.sleep(forTimeInterval: 0.3)   // async persist
+        try? await Task.sleep(nanoseconds: 300_000_000)   // async persist
         let reloaded = HistoryStore(fileURL: historyURL)
         expect(reloaded.entries.count == 2, "history: persisted + reloaded")
         store.clear()
@@ -1063,6 +1196,49 @@ extension CLI {
                    "learning: a declined fix is never suggested again")
             d.removePersistentDomain(forName: learnSuite)
         } else { expect(false, "learning: settings suite") }
+
+        // Synthesis: the system voice is the tier that must never be broken —
+        // it is what `speak` degrades to when the enhanced assets are absent,
+        // and what carries the consent prompt in every language Aloud ships.
+        let speech = Speech(samples: Array(repeating: 0, count: 4800), sampleRate: 24000,
+                            synthesisTime: 0.6)
+        expect(abs(speech.duration - 0.2) < 0.0001, "synthesis: duration from sample count")
+        expect(abs(speech.realtimeFactor - 3.0) < 0.0001, "synthesis: realtime factor")
+        expect(Speech(samples: [], sampleRate: 0, synthesisTime: 0).duration == 0,
+               "synthesis: empty speech has no duration and doesn't divide by zero")
+
+        // A speaker the factory hands out can always run right now: the
+        // enhanced voice only when its assets are on disk, the system voice
+        // otherwise. Never something that needs a download first.
+        expect(SpeakerFactory.make().modelIsDownloaded,
+               "synthesis: factory only returns a voice that's ready")
+
+        let system = SystemSpeaker()
+        expect(system.state == .ready && system.modelIsDownloaded,
+               "synthesis: system voice needs no download")
+        do {
+            _ = try await system.synthesize("   ")
+            expect(false, "synthesis: blank text is refused")
+        } catch {
+            expect(error is SpeakerError, "synthesis: blank text is refused")
+        }
+        // Tolerated rather than asserted: a bare CI runner can have no voices
+        // installed, and failing the gate on that would be noise, not signal.
+        if AVSpeechSynthesisVoice.speechVoices().isEmpty {
+            print("skip  synthesis: system voice renders audio (no voices on this machine)")
+        } else {
+            do {
+                let rendered = try await system.synthesize("Testing, one two three.")
+                expect(!rendered.samples.isEmpty && rendered.sampleRate > 0,
+                       "synthesis: system voice renders audio")
+                expect(rendered.samples.contains { $0 != 0 },
+                       "synthesis: rendered audio isn't silence")
+                expect(rendered.realtimeFactor < 1.0,
+                       "synthesis: system voice outruns playback")
+            } catch {
+                expect(false, "synthesis: system voice renders audio (\(error))")
+            }
+        }
 
         print(failures.isEmpty ? "\nselftest passed" : "\nselftest FAILED: \(failures.joined(separator: ", "))")
         return failures.isEmpty ? 0 : 1

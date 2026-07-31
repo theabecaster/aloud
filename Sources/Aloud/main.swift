@@ -19,7 +19,14 @@ if cliArgs.first == "--indicator-demo" {
 }
 #endif
 
-if let first = cliArgs.first, first.hasPrefix("--") {
+// Agent verbs are bare subcommands, not --flags: `aloud speak "…"` reads
+// naturally in the skill files we install, and it keeps the supported surface
+// visibly separate from the development tooling. They have to be matched
+// explicitly — anything unrecognised must still fall through to launching the
+// menu bar app, which is what a bare `open -a Aloud` relies on.
+let agentVerbs: Set<String> = ["speak"]
+
+if let first = cliArgs.first, first.hasPrefix("--") || agentVerbs.contains(first) {
     let code = await CLI.run(cliArgs)
     exit(code)
 }
