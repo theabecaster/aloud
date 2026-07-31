@@ -1697,11 +1697,14 @@ private extension DictationController.Phase {
 enum AgentListenError: LocalizedError {
     case busy, notReady, nothingHeard
 
+    // Not localized on purpose: these surface as the `message` on a bridge
+    // response, which is read by an agent and by whoever is reading a log —
+    // never shown to the user. See AgentBridgeService.
     var errorDescription: String? {
         switch self {
-        case .busy: return loc("Aloud is already listening.")
-        case .notReady: return loc("Finish setting up Aloud first.")
-        case .nothingHeard: return loc("Didn’t hear anything.")
+        case .busy: return "Aloud is already listening."
+        case .notReady: return "Finish setting up Aloud first."
+        case .nothingHeard: return "Didn't hear anything."
         }
     }
 

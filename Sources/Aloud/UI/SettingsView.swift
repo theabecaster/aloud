@@ -36,7 +36,7 @@ struct SettingsView: View {
         case vocabulary = "Vocabulary"
         case snippets = "Snippets"
         case appRules = "App Rules"
-        case agents = "Agents"
+        case agents = "Agent Speak"
         case history = "History"
         case about = "About"
         var id: String { rawValue }
@@ -499,11 +499,11 @@ struct GeneralSettings: View {
             // while the experiment is off — so without this the only route in
             // would be a screen the user has already passed.
             SwiftUI.Section {
-                Toggle(loc("Agent voice"), isOn: $settings.experimentalAgentVoice)
+                Toggle(loc("Agent Speak"), isOn: $settings.experimentalAgentVoice)
             } header: {
                 Text(loc("Experimental"))
             } footer: {
-                Text(loc("Lets coding agents ask you a question out loud and hear your answer. Adds an Agents section to Settings."))
+                Text(loc("Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

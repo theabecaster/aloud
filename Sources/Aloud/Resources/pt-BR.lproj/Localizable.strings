@@ -123,6 +123,7 @@
 "Reduce background noise" = "Reduzir o ruído de fundo";
 "The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again." = "O filtro funciona pelos alto-falantes do Mac, então fica pausado enquanto o som vai para %@. Ele volta — com o seu ajuste — quando os alto-falantes forem a saída de novo.";
 "Not available with %@." = "Indisponível com %@.";
+"this output" = "esta saída";
 "Getting ready…" = "Preparando…";
 "%@ (Bluetooth)" = "%@ (Bluetooth)";
 "A Bluetooth mic puts the whole headset into mono call audio while Aloud listens." = "Um microfone Bluetooth coloca todo o fone em áudio de chamada mono enquanto o Aloud escuta.";
@@ -131,6 +132,7 @@
 "Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin." = "Filtra o ruído do ambiente, o teclado e o som dos alto-falantes do Mac. Deixe desligado se sua voz soar fina.";
 "More info" = "Mais informações";
 "Sound when recording starts" = "Som ao iniciar a gravação";
+"Play sound effects" = "Reproduzir efeitos sonoros";
 "Open Aloud at login" = "Abrir o Aloud ao iniciar a sessão";
 
 /* Settings — keys */
@@ -373,15 +375,14 @@
 "Learned from your edits" = "Aprendida com as suas edições";
 "Aloud noticed a fix — review it in the menu bar" = "O Aloud notou uma correção — revise na barra de menus";
 
-/* Agent voice — the spoken consent prompt. This is the string that
+/* Agent Speak — the spoken consent prompt. This is the string that
    tells someone a decision is being asked of them, so it must never
    fall back to English. */
 "An agent wants to listen — say accept or decline" = "Um agente quer ouvir — diga aceitar ou recusar";
 "%@ wants to listen — say accept or decline" = "%@ quer ouvir — diga aceitar ou recusar";
 
-/* Agent voice — Settings → Agents. The master switch, how a listen is
+/* Agent Speak — Settings → Agents. The master switch, how a listen is
    approved, and the agent tools Aloud can set itself up in. */
-"Agent voice" = "Voz para agentes";
 "Agents can ask to speak through your speakers and hear your answer. Turning this off refuses every request — anything set up below stays, so switching it back on doesn’t mean starting over." = "Os agentes podem pedir para falar pelos seus alto-falantes e ouvir a sua resposta. Com isto desativado, todo pedido é recusado — o que estiver configurado abaixo permanece, então reativar não significa começar do zero.";
 "Consent" = "Consentimento";
 "The recording indicator always shows while an agent is listening, and nothing leaves this Mac." = "O indicador de gravação sempre aparece enquanto um agente está ouvindo, e nada sai deste Mac.";
@@ -394,8 +395,10 @@
 "Lives in each project — paste it into %@ in the repos you want it in." = "Fica em cada projeto: cole em %@ nos repositórios em que você quiser.";
 "%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand." = "%@ não é um JSON válido, então o Aloud não mexeu nele. Adicione estas linhas à mão.";
 "Couldn’t write %1$@ — %2$@" = "Não foi possível escrever %1$@ — %2$@";
+"Let coding agents ask you questions out loud." = "Deixe os agentes fazerem perguntas em voz alta.";
+"Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings." = "Permite que os agentes de programação façam uma pergunta em voz alta e ouçam a sua resposta. Adiciona a seção “Voz para agentes” aos Ajustes.";
 
-/* Agent voice — the consent modes: how an agent's request to listen
+/* Agent Speak — the consent modes: how an agent's request to listen
    is approved, and what each mode costs. */
 "Open" = "Aberto";
 "Agents can start listening right away. The recording indicator always shows when they do." = "Os agentes podem começar a ouvir na hora. O indicador de gravação sempre aparece quando isso acontece.";
@@ -404,7 +407,7 @@
 "Confirm by voice" = "Confirmar por voz";
 "Aloud asks out loud and waits for you to say accept — no need to look at the screen." = "O Aloud pergunta em voz alta e espera você dizer aceitar — sem precisar olhar para a tela.";
 
-/* Agent voice — the onboarding opt-in. A consent screen: what is being
+/* Agent Speak — the onboarding opt-in. A consent screen: what is being
    granted, and the two answers. */
 "Let Agents Ask You Out Loud" = "Deixe os agentes perguntarem em voz alta";
 "A coding agent can ask you a question out loud and hear your answer, so you can keep working instead of switching to its window." = "Um agente de programação pode fazer uma pergunta em voz alta e ouvir a sua resposta, para você continuar trabalhando em vez de trocar para a janela dele.";
@@ -420,3 +423,17 @@
 "Turn Off" = "Desativar";
 "Not Now" = "Agora não";
 "Turn On" = "Ativar";
+
+/* Agent Speak — the pill while an agent has the mic. Room is tight:
+   the headline is one line beside a glyph and the buttons, so these
+   stay as short as the English. The heads match the spoken consent
+   prompt word for word — one event should not read as two. */
+"An agent" = "Um agente";
+"An agent wants to listen" = "Um agente quer ouvir";
+"%@ wants to listen" = "%@ quer ouvir";
+"Accept — or press the Aloud hotkey" = "Aceitar — ou pressione a tecla do Aloud";
+"Decline — or press Esc" = "Recusar — ou pressione Esc";
+"Waiting for your answer" = "Aguardando sua resposta";
+"Listening — this goes to the agent" = "Ouvindo — isto vai para o agente";
+"The agent is speaking" = "O agente está falando";
+"Agent Speak" = "Voz para agentes";

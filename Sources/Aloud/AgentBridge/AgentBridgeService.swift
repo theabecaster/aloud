@@ -2,6 +2,13 @@ import Foundation
 
 // The policy layer: everything the bridge decides before any audio happens.
 //
+// Note the messages here are deliberately NOT localized. They travel in JSON
+// to an agent, not to a person: the `reason` code is what an agent keys on and
+// `message` is the human-readable annotation a developer sees in a log. A
+// translated one would hand Spanish prose to something reasoning in English.
+// User-facing text for this feature lives in the UI and the spoken prompt,
+// both of which are localized.
+//
 // BridgeServer knows sockets and nothing else; this knows the gate, the lease,
 // consent and refusals, and nothing about sockets. Audio and the indicator live
 // behind `AgentVoiceHost`, so every rule here is testable without a microphone,
@@ -88,7 +95,7 @@ final class AgentBridgeService {
         // exception: an agent has to be able to discover that voice is off
         // without that discovery itself being refused.
         guard settings.agentVoiceAvailable || request.op == .status else {
-            return .failure(.disabled, loc("Voice is turned off in Aloud."))
+            return .failure(.disabled, "Agent Speak is turned off in Aloud.")
         }
         leases.enabled = settings.agentVoiceAvailable
         consent.mode = settings.agentConsentMode
@@ -113,7 +120,7 @@ final class AgentBridgeService {
         if !settings.agentVoiceAvailable {
             response.ok = false
             response.reason = .disabled
-            response.message = loc("Voice is turned off in Aloud.")
+            response.message = "Agent Speak is turned off in Aloud."
         }
         return response
     }
@@ -140,7 +147,7 @@ final class AgentBridgeService {
         let at = now()
 
         if let until = refusedUntil[request.harness], at < until {
-            var response = BridgeResponse.failure(.denied, loc("The user declined."))
+            var response = BridgeResponse.failure(.denied, "The user declined.")
             response.retryAfter = until.timeIntervalSince(at)
             return response
         }
@@ -170,7 +177,7 @@ final class AgentBridgeService {
                 // The gate going off mid-wait must end it, not strand the
                 // caller until its ceiling.
                 guard settings.agentVoiceAvailable else {
-                    return .failure(.disabled, loc("Voice is turned off in Aloud."))
+                    return .failure(.disabled, "Agent Speak is turned off in Aloud.")
                 }
                 leases.enabled = true
                 outcome = leases.claim(harness: request.harness, pid: pid, now: now())
@@ -179,7 +186,7 @@ final class AgentBridgeService {
 
         switch outcome {
         case .disabled:
-            return .failure(.disabled, loc("Voice is turned off in Aloud."))
+            return .failure(.disabled, "Agent Speak is turned off in Aloud.")
 
         case .queued(let position, let reason):
             var response = BridgeResponse.failure(.queued, queueMessage(reason))
@@ -210,13 +217,13 @@ final class AgentBridgeService {
                     // asking again for a while.
                     refusedUntil[request.harness] = now().addingTimeInterval(Self.refusalBackoff)
                     leases.release(lease: lease, now: now())
-                    return .failure(.denied, loc("The user declined."))
+                    return .failure(.denied, "The user declined.")
                 case .timedOut:
                     leases.release(lease: lease, now: now())
-                    return .failure(.timeout, loc("Nobody answered."))
+                    return .failure(.timeout, "Nobody answered.")
                 case .unrecognized, .ignored:
                     leases.release(lease: lease, now: now())
-                    return .failure(.timeout, loc("Nobody answered."))
+                    return .failure(.timeout, "Nobody answered.")
                 }
             }
         }
@@ -224,8 +231,8 @@ final class AgentBridgeService {
 
     private func queueMessage(_ reason: QueueReason) -> String {
         switch reason {
-        case .busy(let holder): return loc("%@ is using the microphone.", holder)
-        case .cooldown: return loc("The microphone is settling — try again in a moment.")
+        case .busy(let holder): return "\(holder) is using the microphone."
+        case .cooldown: return "The microphone is settling — try again in a moment."
         }
     }
 
@@ -291,7 +298,7 @@ final class AgentBridgeService {
 
     private func release(_ request: BridgeRequest) -> BridgeResponse {
         guard let lease = request.lease else {
-            return .failure(.badRequest, loc("release needs the lease it is releasing."))
+            return .failure(.badRequest, "release needs the lease it is releasing.")
         }
         consent.endLease(lease)
         leases.release(lease: lease, now: now())
@@ -302,13 +309,13 @@ final class AgentBridgeService {
 
     private func speak(_ request: BridgeRequest) async -> BridgeResponse {
         guard let text = request.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .failure(.badRequest, loc("speak needs something to say."))
+            return .failure(.badRequest, "speak needs something to say.")
         }
         guard let lease = request.lease else {
-            return .failure(.badRequest, loc("speak needs a lease — claim one first."))
+            return .failure(.badRequest, "speak needs a lease — claim one first.")
         }
         if let refusal = validate(lease) { return refusal }
-        guard let host else { return .failure(.unavailable, loc("Aloud isn't ready.")) }
+        guard let host else { return .failure(.unavailable, "Aloud isn't ready.") }
 
         do {
             try await host.speak(text)
@@ -322,10 +329,10 @@ final class AgentBridgeService {
 
     private func listen(_ request: BridgeRequest) async -> BridgeResponse {
         guard let lease = request.lease else {
-            return .failure(.badRequest, loc("listen needs a lease — claim one first."))
+            return .failure(.badRequest, "listen needs a lease — claim one first.")
         }
         if let refusal = validate(lease) { return refusal }
-        guard let host else { return .failure(.unavailable, loc("Aloud isn't ready.")) }
+        guard let host else { return .failure(.unavailable, "Aloud isn't ready.") }
 
         // Ask the policy rather than consulting a cached flag. It answers
         // uniformly for every mode — open grants outright, an existing
@@ -344,9 +351,9 @@ final class AgentBridgeService {
             case .accepted(let granted, _):
                 grant = granted
             case .denied:
-                return .failure(.denied, loc("The user declined."))
+                return .failure(.denied, "The user declined.")
             case .timedOut, .unrecognized, .ignored:
-                return .failure(.timeout, loc("Nobody answered."))
+                return .failure(.timeout, "Nobody answered.")
             }
         }
 
@@ -371,7 +378,7 @@ final class AgentBridgeService {
             }
         case .start, .poll, .stop:
             return .failure(.badRequest,
-                            loc("This version of Aloud only supports a single blocking listen."))
+                            "This version of Aloud only supports a single blocking listen.")
         }
     }
 
@@ -382,11 +389,11 @@ final class AgentBridgeService {
         case .success:
             return nil
         case .failure(.disabled):
-            return .failure(.disabled, loc("Voice is turned off in Aloud."))
+            return .failure(.disabled, "Agent Speak is turned off in Aloud.")
         case .failure(.notHolder):
             // Expired, reaped, or never theirs. Distinct from `queued`: there
             // is nothing to wait for, the session is simply over.
-            return .failure(.notHolder, loc("That session has ended — claim again."))
+            return .failure(.notHolder, "That session has ended — claim again.")
         }
     }
 

@@ -46,7 +46,7 @@ struct AgentsSettings: View {
     var body: some View {
         Form {
             SwiftUI.Section {
-                Toggle(loc("Agent voice"), isOn: $settings.experimentalAgentVoice)
+                Toggle(loc("Agent Speak"), isOn: $settings.experimentalAgentVoice)
             } header: {
                 Text(loc("Experimental"))
             } footer: {
