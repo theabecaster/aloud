@@ -9,12 +9,19 @@ import Foundation
 // ones (see docs/agent-voice-bridge.md §6) get a snippet rather than us
 // reaching into somebody's repo.
 //
-// Every path in the table below was verified by listing a real installation on
+// Most paths in the table below were verified by listing a real installation on
 // a real Mac, never from documentation. That is not politeness: the launch set
 // already shipped one wrong assumption (Cursor filed as per-project because of
 // `.cursor/rules/*.mdc`, when `~/.cursor/skills/<name>/SKILL.md` exists and
 // behaves exactly like Claude Code's), and a harness added from memory looks
 // installed while doing nothing at all.
+//
+// Two rows — OpenClaw and Hermes — are the deliberate exception: neither is
+// installed on this Mac, so both were built from published documentation and
+// source. Each carries a comment saying so at every point where it could be
+// wrong, and each is detected off a marker file only the real tool creates, so
+// the failure mode is "row never appears" rather than "row says Installed while
+// writing somewhere nobody reads".
 //
 // Everything here is filesystem work on files we do not own, so the rules are
 // strict: never write a file we could not parse, back up anything we modify,
@@ -34,6 +41,10 @@ enum AgentHarness: String, CaseIterable, Codable {
     // it positionally.
     case opencode
     case pi
+    // Documentation-derived rather than verified against a live install — see
+    // the comments on `mechanism`, `detectionPaths` and `instructionPath`.
+    case openclaw
+    case hermes
 
     // The id baked into `--harness` in the instructions we write, and the label
     // the indicator shows. Never authentication — see §7.1c.
@@ -49,6 +60,8 @@ enum AgentHarness: String, CaseIterable, Codable {
         // Lowercase on purpose: the binary, the config directory and the
         // project's own docs all call it `pi`.
         case .pi: return "pi"
+        case .openclaw: return "OpenClaw"
+        case .hermes: return "Hermes"
         }
     }
 
@@ -81,7 +94,23 @@ enum AgentHarness: String, CaseIterable, Codable {
         //    put there by another tool — is *not* read: that is pi's per-project
         //    layout applied to the home directory by mistake. Exactly the kind
         //    of plausible wrong path that looks installed and does nothing.
-        case .claudeCode, .cursor, .opencode, .pi: return .skillFile
+        //
+        // OpenClaw and Hermes are the two rows that were *not* verified against
+        // an installed copy — neither is on this Mac. They are here on the
+        // strength of published docs plus the projects' own source, which is
+        // weaker evidence than a directory listing and is called out again at
+        // every path below:
+        //  - OpenClaw's skill roots are, highest precedence first, <workspace>/skills,
+        //    <workspace>/.agents/skills, ~/.agents/skills, then <state-dir>/skills
+        //    with the state dir defaulting to ~/.openclaw. A SKILL.md anywhere
+        //    under a root counts, and the skill's name comes from frontmatter.
+        //  - Hermes resolves its skills directory as <HERMES_HOME>/skills with
+        //    HERMES_HOME defaulting to ~/.hermes on POSIX, and looks for
+        //    <skills dir>/<name>/SKILL.md.
+        // Both take the plain home-relative root for the same reason OpenCode
+        // does: the alternatives move with an environment variable this
+        // installer does not know about.
+        case .claudeCode, .cursor, .opencode, .pi, .openclaw, .hermes: return .skillFile
         case .codex: return .appendedBlock
         case .copilot: return .snippet
         }
@@ -101,15 +130,54 @@ enum AgentHarness: String, CaseIterable, Codable {
         }
     }
 
+    // The allowlist dialects we have to speak. Same idea in both — "let the
+    // agent run this command without stopping to ask" — spelled differently,
+    // and the spelling is load-bearing: an entry that does not match is a
+    // permission prompt on the first `listen`, which breaks hands-free on turn
+    // one (§6). Both files happen to be JSON with the same
+    // `permissions.allow` shape, so only the pattern text differs.
+    enum PermissionAllowlist {
+        case claudeSettings   // ~/.claude/settings.json, `Bash(…)` patterns
+        case cursorCLIConfig  // ~/.cursor/cli-config.json, `Shell(…)` patterns
+    }
+
     // Whether this harness will stop and ask the user before the agent's first
-    // `aloud listen` unless we write an allowlist entry — the prompt that
-    // breaks hands-free on turn one (§6).
+    // `aloud listen` unless we write an allowlist entry.
     //
-    // Only Claude Code, and that is a verified "only", not an assumption:
-    // OpenCode's built-in agents default to `"*": "allow"`, so bash needs no
-    // entry, and pi's bash tool has no allowlist concept at all. Writing a
-    // permission block into either would be editing a config for no reason.
-    var hasPermissionAllowlist: Bool { self == .claudeCode }
+    // Two of them, and the absences are verified rather than assumed:
+    //  - Claude Code: `permissions.allow` in ~/.claude/settings.json.
+    //  - Cursor CLI: `permissions.allow` in ~/.cursor/cli-config.json, which on
+    //    a real machine already carries entries like `Shell(ls)`. Cursor's row
+    //    installed a skill and no allowlist entry until this was noticed, which
+    //    is the exact turn-one prompt above.
+    //  - OpenCode's built-in agents default to `"*": "allow"`, so bash needs no
+    //    entry, and pi's bash tool has no allowlist concept at all.
+    //  - OpenClaw has an exec allowlist (~/.openclaw/exec-approvals.json,
+    //    `allowedBinaries`), but its documented default security mode for the
+    //    hosts that run a shell is `full` — nothing is gated, so there is
+    //    nothing to add. Unverified against a live install like the rest of the
+    //    OpenClaw row; the cost of being wrong is a prompt on turn one, not a
+    //    damaged config, because we do not write the file either way.
+    //  - Hermes prompts only for commands its dangerous-pattern detector or its
+    //    content scanner flags; anything else is approved without asking. A
+    //    plain absolute-path invocation with no shell operators matches
+    //    neither, so it never reaches an approval prompt and needs no entry.
+    //    Recorded because the format *is* establishable if that ever changes:
+    //    a top-level `command_allowlist:` list in ~/.hermes/config.yaml, each
+    //    item compared to the whole command by string equality or, when it
+    //    contains `*?[`, by case-sensitive fnmatch. We still would not write it
+    //    today: it is YAML, we have no YAML parser, and a hand-rolled writer
+    //    would break the rule that we never rewrite a config we cannot parse.
+    //    So: false, and the uncertainty is the *need*, not the format.
+    var permissionAllowlist: PermissionAllowlist? {
+        switch self {
+        case .claudeCode: return .claudeSettings
+        case .cursor: return .cursorCLIConfig
+        case .codex, .copilot, .opencode, .pi, .openclaw, .hermes: return nil
+        }
+    }
+
+    var hasPermissionAllowlist: Bool { permissionAllowlist != nil }
 
     // Home-relative paths that mean "this harness has been run on this Mac".
     // Any one of them is enough — the harnesses disagree about where they keep
@@ -137,6 +205,32 @@ enum AgentHarness: String, CaseIterable, Codable {
             // *per-project* config directory name, so a home directory that is
             // itself a project would false-positive.
             return [".pi/agent"]
+        case .openclaw:
+            // Documentation-derived, and deliberately narrower than the row's
+            // own state directory. `~/.openclaw` alone would be a weaker claim
+            // than these two, which OpenClaw writes itself: `openclaw.json` is
+            // its config file and `workspace` is the seeded agent workspace.
+            //
+            // What is *not* here matters more. OpenClaw also reads
+            // `~/.agents/skills` — and that directory exists on this Mac,
+            // populated by an entirely different tool, with no OpenClaw
+            // anywhere. Detecting on it would light up the row for anyone who
+            // has ever installed any agent skill. That is the `~/.pi/skills`
+            // trap again, and it is the reason neither the marker nor the
+            // install target is allowed to be a shared, conventional path.
+            //
+            // Nor is `.openclaw/skills` here: that is where *we* write, so
+            // using it as a marker would make a row detect its own install.
+            return [".openclaw/openclaw.json", ".openclaw/workspace"]
+        case .hermes:
+            // Documentation-derived. Hermes' home is ~/.hermes on POSIX
+            // (HERMES_HOME overrides it, which this installer cannot follow),
+            // and these are two files it creates there rather than the bare
+            // directory: config.yaml is its settings file and SOUL.md is the
+            // persona file that occupies the first slot in its system prompt.
+            // As above, `.hermes/skills` is excluded on purpose — it is our own
+            // install target.
+            return [".hermes/config.yaml", ".hermes/SOUL.md"]
         }
     }
 
@@ -156,6 +250,23 @@ enum AgentHarness: String, CaseIterable, Codable {
         // reason not to be surprised by the warning.
         case .opencode: return ".opencode/skills/aloud-voice/SKILL.md"
         case .pi: return ".pi/agent/skills/aloud-voice/SKILL.md"
+        // Documentation-derived, unverified against a live install: OpenClaw's
+        // managed skill root is <state-dir>/skills and the state dir defaults
+        // to ~/.openclaw. Its higher-precedence roots are the workspace and
+        // `~/.agents/skills`; we take neither. The workspace is the user's own
+        // memory directory, and `~/.agents` is shared with every other tool
+        // that has adopted the convention — writing there would install one
+        // file that several harnesses each read under a different `--harness`
+        // id, which the id is not equipped to describe.
+        case .openclaw: return ".openclaw/skills/aloud-voice/SKILL.md"
+        // Documentation-derived, unverified against a live install: Hermes
+        // resolves <HERMES_HOME>/skills, HERMES_HOME defaults to ~/.hermes, and
+        // a skill is <skills dir>/<name>/SKILL.md. Named profiles get their own
+        // home under ~/.hermes/profiles/<profile>/ with their own skills
+        // directory, so a user who works inside a non-default profile will not
+        // see this skill. Nothing here can fix that without enumerating
+        // profiles, which is more than a row in a table.
+        case .hermes: return ".hermes/skills/aloud-voice/SKILL.md"
         }
     }
 }
@@ -223,20 +334,70 @@ enum AgentVoiceInstructions {
     // MARK: how the agent types our name
     //
     // One function, and everything that has to agree comes out of it: the
-    // sample commands in the instructions and the `Bash(… :*)` patterns in
-    // Claude Code's allowlist. They only match if they are character-identical,
-    // and an allowlist that misses means a permission prompt on the first
-    // `listen` — hands-free broken on turn one, the failure §6 warns about. A
-    // comment asking two call sites to stay in step is not enough; this is the
-    // step.
+    // sample commands in the instructions, the `Bash(… :*)` patterns in Claude
+    // Code's allowlist, and the `Shell(…)` patterns in Cursor CLI's. They only
+    // match if they are character-identical, and an allowlist that misses means
+    // a permission prompt on the first `listen` — hands-free broken on turn
+    // one, the failure §6 warns about. A comment asking three call sites to
+    // stay in step is not enough; this is the step.
     static func invocation(command: String) -> String { shellQuoted(command) }
 
-    // `Bash(<invocation> <verb>:*)` — Claude Code matches the literal prefix of
-    // the command line, so the quoting has to be the quoting the agent will
-    // actually type.
-    static func permissionEntries(command: String) -> [String] {
+    // The two allowlist spellings, side by side so the difference is visible
+    // rather than discovered.
+    //
+    //  - Claude Code matches the literal *prefix of the whole command line*, so
+    //    an entry is `Bash(<invocation> <verb>:*)` and the quoting has to be the
+    //    quoting the agent will actually type.
+    //  - Cursor CLI matches the *command base* — the first token — with an
+    //    optional `:<args glob>` for finer control, so an entry is
+    //    `Shell(<invocation>:<verb>*)`. `Shell(<invocation>)` on its own would
+    //    also work and is shorter, and is exactly what we do not want: it
+    //    permits every argument list forever, including verbs a later Aloud
+    //    might add. The args glob keeps the grant the same size as Claude
+    //    Code's. Verified against a real ~/.cursor/cli-config.json, which
+    //    carries entries in the `Shell(ls)` form — *not* Claude Code's `Bash(…)`.
+    static func permissionEntries(style: AgentHarness.PermissionAllowlist,
+                                  command: String) -> [String] {
         let invocation = invocation(command: command)
-        return verbs.map { "Bash(\(invocation) \($0):*)" }
+        return verbs.map { verb in
+            switch style {
+            case .claudeSettings: return "Bash(\(invocation) \(verb):*)"
+            case .cursorCLIConfig: return "Shell(\(invocation):\(verb)*)"
+            }
+        }
+    }
+
+    // The command line an entry claims to permit — `<invocation> <verb>` — or
+    // nil when the entry is not shaped like one of ours.
+    //
+    // This is the other half of the single-source rule. Generating the entries
+    // from `invocation` is what makes them agree with the instructions;
+    // *parsing them back to a command line* is what lets a test prove it,
+    // against the bytes on disk, in a way that survives somebody changing the
+    // pattern syntax of either dialect.
+    static func permittedCommandLine(_ entry: String,
+                                     style: AgentHarness.PermissionAllowlist) -> String? {
+        switch style {
+        case .claudeSettings:
+            guard entry.hasPrefix("Bash("), entry.hasSuffix(":*)") else { return nil }
+            let inner = String(entry.dropFirst("Bash(".count).dropLast(":*)".count))
+            guard let space = inner.lastIndex(of: " ") else { return nil }
+            guard verbs.contains(String(inner[inner.index(after: space)...])) else { return nil }
+            return inner
+        case .cursorCLIConfig:
+            guard entry.hasPrefix("Shell("), entry.hasSuffix(")") else { return nil }
+            let inner = String(entry.dropFirst("Shell(".count).dropLast(1))
+            // Last colon, not first: the invocation is an absolute path and a
+            // path is allowed to contain one, while none of our verbs can.
+            guard let colon = inner.lastIndex(of: ":") else { return nil }
+            let base = String(inner[..<colon])
+            // Looser than what we write, on purpose — see `isPermissionEntry`.
+            // `listen*`, `listen ` and a bare `listen` all name the same verb.
+            let args = String(inner[inner.index(after: colon)...])
+                .trimmingCharacters(in: CharacterSet(charactersIn: "* \t"))
+            guard verbs.contains(args) else { return nil }
+            return "\(base) \(args)"
+        }
     }
 
     // Recognising our entries on the way out is deliberately looser than
@@ -244,13 +405,15 @@ enum AgentVoiceInstructions {
     // older Aloud that assumed a bare `aloud` on PATH, or by this one before
     // the user moved the bundle — and an entry we fail to recognise is one we
     // leave behind pointing at a binary that no longer exists. Anything shaped
-    // like `Bash(<something named aloud> <one of our verbs>:*)` is ours.
-    static func isPermissionEntry(_ entry: String) -> Bool {
-        guard entry.hasPrefix("Bash("), entry.hasSuffix(":*)") else { return false }
-        let inner = entry.dropFirst("Bash(".count).dropLast(":*)".count)
-        guard let space = inner.lastIndex(of: " ") else { return false }
-        guard verbs.contains(String(inner[inner.index(after: space)...])) else { return false }
-        let command = String(inner[..<space])
+    // like `<something named aloud> <one of our verbs>` is ours.
+    //
+    // The name check is what keeps it from being *too* loose: a hand-written
+    // `Shell(aloudmixer:listen*)`, or a rule for a verb we do not ship, stays.
+    static func isPermissionEntry(_ entry: String,
+                                  style: AgentHarness.PermissionAllowlist) -> Bool {
+        guard let line = permittedCommandLine(entry, style: style),
+              let space = line.lastIndex(of: " ") else { return false }
+        let command = String(line[..<space])
             .trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
         return (command as NSString).lastPathComponent.lowercased() == "aloud"
     }
@@ -396,9 +559,13 @@ struct HarnessInstaller {
     // for a permission prompt. In a feature whose entire point is not touching
     // the keyboard, that prompt is the difference between a demo that lands and
     // one that stalls on turn one.
-    var claudePermissionEntries: [String] {
-        AgentVoiceInstructions.permissionEntries(command: command)
+    func permissionEntries(for harness: AgentHarness) -> [String] {
+        guard let style = harness.permissionAllowlist else { return [] }
+        return AgentVoiceInstructions.permissionEntries(style: style, command: command)
     }
+
+    var claudePermissionEntries: [String] { permissionEntries(for: .claudeCode) }
+    var cursorPermissionEntries: [String] { permissionEntries(for: .cursor) }
 
     init(home: URL, command: String = HarnessInstaller.defaultCommand, fileManager: FileManager = .default) {
         self.home = home
@@ -455,22 +622,23 @@ struct HarnessInstaller {
             return .installed(changed: changed ? [url] : [])
 
         case .skillFile:
-            // Order matters for the one harness with an allowlist. The
-            // permission file is the only thing here that can refuse, so parse
-            // it before writing anything — a failure must not leave a
-            // half-installed skill behind.
-            let settings = claudeSettingsURL
-            let updated = harness.hasPermissionAllowlist
-                ? try claudeSettings(at: settings, addingEntries: true)
-                : nil
+            // Order matters for the harnesses with an allowlist. The permission
+            // file is the only thing here that can refuse, so parse it before
+            // writing anything — a failure must not leave a half-installed
+            // skill behind.
+            let allowlist = allowlistURL(for: harness)
+            var updated: Data?
+            if let allowlist {
+                updated = try allowlistJSON(at: allowlist, for: harness, addingEntries: true)
+            }
 
             var changed: [URL] = []
             let skill = home.appendingPathComponent(harness.instructionPath)
             let file = AgentVoiceInstructions.skillFile(harness: harness, command: command)
             if try writeIfDifferent(file, to: skill) { changed.append(skill) }
-            if let data = updated {
-                try write(data, to: settings)
-                changed.append(settings)
+            if let data = updated, let allowlist {
+                try write(data, to: allowlist)
+                changed.append(allowlist)
             }
             return .installed(changed: changed)
         }
@@ -510,32 +678,48 @@ struct HarnessInstaller {
         case .skillFile:
             try removeSkillDirectory(at: home.appendingPathComponent(harness.instructionPath))
             // The skill file goes first and unconditionally, so a harness with
-            // no allowlist is finished here and the one that has an allowlist
-            // still loses its skill even if the settings step throws.
-            guard harness.hasPermissionAllowlist else { return }
-            // A malformed settings.json on the way out is still not ours to
-            // rewrite — surface it so the pane can say the allowlist is stale.
-            if let data = try claudeSettings(at: claudeSettingsURL, addingEntries: false) {
-                try write(data, to: claudeSettingsURL)
+            // no allowlist is finished here and the ones that have an allowlist
+            // still lose their skill even if the settings step throws.
+            guard let allowlist = allowlistURL(for: harness) else { return }
+            // A malformed config on the way out is still not ours to rewrite —
+            // surface it so the pane can say the allowlist is stale.
+            if let data = try allowlistJSON(at: allowlist, for: harness, addingEntries: false) {
+                try write(data, to: allowlist)
             }
-            removeBackup(of: claudeSettingsURL)
+            removeBackup(of: allowlist)
         }
     }
 
-    // MARK: - Claude Code settings.json
+    // MARK: - permission allowlists
 
+    // Both dialects live in a JSON file with a `permissions.allow` array, which
+    // is why one reader/writer serves both. Only the pattern text differs, and
+    // that difference is `AgentVoiceInstructions`' business, not this one's.
     var claudeSettingsURL: URL { home.appendingPathComponent(".claude/settings.json") }
+    var cursorCLIConfigURL: URL { home.appendingPathComponent(".cursor/cli-config.json") }
+
+    func allowlistURL(for harness: AgentHarness) -> URL? {
+        switch harness.permissionAllowlist {
+        case .claudeSettings: return claudeSettingsURL
+        case .cursorCLIConfig: return cursorCLIConfigURL
+        case nil: return nil
+        }
+    }
 
     // Returns the bytes to write, or nil when nothing needs changing — which is
     // what makes a second install byte-identical rather than merely equivalent.
     // Throws rather than writing if the file is not JSON we understand.
-    private func claudeSettings(at url: URL, addingEntries adding: Bool) throws -> Data? {
+    private func allowlistJSON(at url: URL,
+                               for harness: AgentHarness,
+                               addingEntries adding: Bool) throws -> Data? {
+        guard let style = harness.permissionAllowlist else { return nil }
+        let snippet = permissionSnippet(for: harness)
         var root: [String: Any] = [:]
         if let data = try? Data(contentsOf: url) {
             guard let parsed = try? JSONSerialization.jsonObject(with: data),
                   let object = parsed as? [String: Any] else {
                 throw HarnessInstallError.unreadableSettings(path: url.path,
-                                                             snippet: permissionSnippet)
+                                                             snippet: snippet)
             }
             root = object
         } else if !adding {
@@ -546,7 +730,7 @@ struct HarnessInstaller {
         if let existing = root["permissions"] {
             guard let object = existing as? [String: Any] else {
                 throw HarnessInstallError.unreadableSettings(path: url.path,
-                                                             snippet: permissionSnippet)
+                                                             snippet: snippet)
             }
             permissions = object
         }
@@ -558,7 +742,7 @@ struct HarnessInstaller {
         if let existing = permissions["allow"] {
             guard let list = existing as? [Any] else {
                 throw HarnessInstallError.unreadableSettings(path: url.path,
-                                                             snippet: permissionSnippet)
+                                                             snippet: snippet)
             }
             allow = list
         }
@@ -566,7 +750,7 @@ struct HarnessInstaller {
         var changed = false
         if adding {
             let present = Set(allow.compactMap { $0 as? String })
-            for entry in claudePermissionEntries where !present.contains(entry) {
+            for entry in permissionEntries(for: harness) where !present.contains(entry) {
                 allow.append(entry)
                 changed = true
             }
@@ -574,7 +758,7 @@ struct HarnessInstaller {
             let before = allow.count
             allow.removeAll { element in
                 guard let entry = element as? String else { return false }
-                return AgentVoiceInstructions.isPermissionEntry(entry)
+                return AgentVoiceInstructions.isPermissionEntry(entry, style: style)
             }
             changed = allow.count != before
         }
@@ -586,11 +770,14 @@ struct HarnessInstaller {
                                           options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }
 
-    // What we offer when we refuse to touch a broken settings.json.
-    var permissionSnippet: String {
-        let entries = claudePermissionEntries.map { "    \"\($0)\"" }.joined(separator: ",\n")
+    // What we offer when we refuse to touch a config we could not parse. Both
+    // dialects nest the same way, so only the entries inside differ.
+    func permissionSnippet(for harness: AgentHarness) -> String {
+        let entries = permissionEntries(for: harness).map { "    \"\($0)\"" }.joined(separator: ",\n")
         return "\"permissions\": {\n  \"allow\": [\n\(entries)\n  ]\n}"
     }
+
+    var permissionSnippet: String { permissionSnippet(for: .claudeCode) }
 
     // MARK: - markdown blocks
 

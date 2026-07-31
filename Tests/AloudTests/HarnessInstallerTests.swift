@@ -40,6 +40,20 @@ final class HarnessInstallerTests: XCTestCase {
                                withIntermediateDirectories: true)
     }
 
+    // Detection only asks "does this path exist", so a marker could be faked
+    // with a directory either way. It is created as whatever the real tool
+    // writes — `~/.openclaw/openclaw.json` is a file, `~/.pi/agent` is a
+    // directory — because a fixture that does not look like the real thing is a
+    // test agreeing with itself rather than with the machine.
+    private func makeMarker(_ relative: String, under root: URL? = nil) throws {
+        let url = (root ?? home).appendingPathComponent(relative)
+        let name = url.lastPathComponent
+        let isFile = name.dropFirst().contains(".")
+        try fm.createDirectory(at: isFile ? url.deletingLastPathComponent() : url,
+                               withIntermediateDirectories: true)
+        if isFile { try "".write(to: url, atomically: true, encoding: .utf8) }
+    }
+
     private func write(_ text: String, to relative: String) throws {
         let url = home.appendingPathComponent(relative)
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -59,6 +73,39 @@ final class HarnessInstallerTests: XCTestCase {
         let permissions = try XCTUnwrap(settingsJSON()["permissions"] as? [String: Any])
         return try XCTUnwrap(permissions["allow"] as? [String])
     }
+
+    // Cursor CLI keeps its own allowlist in its own file, in its own dialect.
+    private static let cursorConfigPath = ".cursor/cli-config.json"
+
+    private func cursorConfigJSON() throws -> [String: Any] {
+        let data = try Data(contentsOf: home.appendingPathComponent(Self.cursorConfigPath))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func cursorAllowList() throws -> [String] {
+        let permissions = try XCTUnwrap(cursorConfigJSON()["permissions"] as? [String: Any])
+        return try XCTUnwrap(permissions["allow"] as? [String])
+    }
+
+    // The real file on this Mac, reproduced so the fixture is the format we
+    // actually have to survive rather than the format we imagined: version and
+    // editor keys we must not disturb, and an allow list already carrying a
+    // `Shell(...)` entry — not Claude Code's `Bash(...)`.
+    private static let realCursorConfig = """
+    {
+      "version": 1,
+      "editor": {
+        "vimMode": false
+      },
+      "hasChangedDefaultModel": false,
+      "permissions": {
+        "allow": [
+          "Shell(ls)"
+        ],
+        "deny": []
+      }
+    }
+    """
 
     // MARK: - detection
 
@@ -318,7 +365,9 @@ final class HarnessInstallerTests: XCTestCase {
             return XCTFail("Cursor installs globally, not as a snippet")
         }
         let skill = home.appendingPathComponent(".cursor/skills/aloud-voice/SKILL.md")
-        XCTAssertEqual(changed, [skill])
+        let config = home.appendingPathComponent(Self.cursorConfigPath)
+        XCTAssertEqual(changed, [skill, config],
+                       "Cursor takes both halves: the skill, and the allowlist that keeps the first `listen` from prompting")
         XCTAssertTrue(fm.fileExists(atPath: skill.path))
         XCTAssertTrue(installer().isInstalled(.cursor))
 
@@ -331,6 +380,201 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: skill.path))
         XCTAssertFalse(fm.fileExists(atPath: skill.deletingLastPathComponent().path))
         XCTAssertFalse(installer().isInstalled(.cursor))
+    }
+
+    // MARK: - Cursor CLI's allowlist
+
+    // Cursor's row shipped with a skill and no allowlist entry, which is the
+    // turn-one permission prompt §6 warns about — the same hole that was
+    // already fixed for Claude Code — in the one harness where it was easy to
+    // miss because the skill install looked complete.
+    func testCursorInstallWritesItsOwnAllowlistInItsOwnDialect() throws {
+        try write(Self.realCursorConfig, to: Self.cursorConfigPath)
+        _ = try installer().install(.cursor)
+
+        let allow = try cursorAllowList()
+        XCTAssertEqual(allow.first, "Shell(ls)", "the user's own entry stays, and stays first")
+        for verb in AgentVoiceInstructions.verbs {
+            XCTAssertTrue(allow.contains("Shell(\(Self.command):\(verb)*)"),
+                          "missing a Cursor allowlist entry for \(verb)")
+        }
+        // Cursor's syntax is `Shell(...)`, not Claude Code's `Bash(...)`. Both
+        // files carry a `permissions.allow` array, so the wrong dialect would
+        // write cleanly, parse cleanly, and silently match nothing.
+        XCTAssertFalse(allow.contains(where: { $0.hasPrefix("Bash(") }))
+
+        // Keys we never look at survive the round trip.
+        let root = try cursorConfigJSON()
+        XCTAssertEqual(root["version"] as? Int, 1)
+        XCTAssertEqual(root["hasChangedDefaultModel"] as? Bool, false)
+        XCTAssertEqual((root["editor"] as? [String: Any])?["vimMode"] as? Bool, false)
+        XCTAssertEqual((root["permissions"] as? [String: Any])?["deny"] as? [String], [])
+    }
+
+    // The single-source rule, for Cursor. An entry only silences the prompt if
+    // it names the command line the agent was told to type — and Cursor spells
+    // that differently from Claude Code, so "we already tested this" is exactly
+    // the assumption that would let the two drift.
+    func testEveryCursorAllowlistEntryNamesACommandTheInstructionsTeach() {
+        for command in [Self.command, "aloud", "/opt/my apps/Aloud.app/Contents/MacOS/Aloud"] {
+            let installer = HarnessInstaller(home: home, command: command)
+            let body = AgentVoiceInstructions.body(harness: .cursor, command: command)
+            XCTAssertEqual(installer.cursorPermissionEntries.count, AgentVoiceInstructions.verbs.count)
+            for entry in installer.cursorPermissionEntries {
+                let typed = AgentVoiceInstructions.permittedCommandLine(entry, style: .cursorCLIConfig)
+                XCTAssertNotNil(typed, "\(entry) does not parse back to a command line")
+                XCTAssertTrue(body.contains(typed ?? "\u{0}"),
+                              "the allowlist expects `\(typed ?? "")`, which the instructions never tell the agent to type")
+            }
+        }
+    }
+
+    // Same invariant held against the bytes on disk, so a future change to the
+    // skill wrapper — frontmatter, escaping, indentation — is caught too.
+    func testTheInstalledCursorSkillAndItsAllowlistAgree() throws {
+        _ = try installer().install(.cursor)
+        let skill = try XCTUnwrap(read(".cursor/skills/aloud-voice/SKILL.md"))
+        let ours = try cursorAllowList().filter {
+            AgentVoiceInstructions.isPermissionEntry($0, style: .cursorCLIConfig)
+        }
+        XCTAssertEqual(ours.count, AgentVoiceInstructions.verbs.count)
+        for entry in ours {
+            let typed = try XCTUnwrap(AgentVoiceInstructions.permittedCommandLine(entry, style: .cursorCLIConfig))
+            XCTAssertTrue(skill.contains(typed), "cli-config.json allows `\(typed)` but the skill never mentions it")
+        }
+    }
+
+    // A bundle kept somewhere with a space in its path is ordinary, and the two
+    // files have to agree on the quoting or the entry matches nothing.
+    func testCursorQuotesASpacedPathTheSameWayInBothPlaces() throws {
+        let spaced = "/Users/someone/My Apps/Aloud.app/Contents/MacOS/Aloud"
+        let installer = HarnessInstaller(home: home, command: spaced)
+        _ = try installer.install(.cursor)
+
+        let skill = try XCTUnwrap(read(".cursor/skills/aloud-voice/SKILL.md"))
+        XCTAssertTrue(skill.contains("'\(spaced)' listen"), "the sample commands must be runnable as written")
+        XCTAssertTrue(try cursorAllowList().contains("Shell('\(spaced)':listen*)"))
+    }
+
+    func testCursorDoubleInstallChangesNothing() throws {
+        try write(Self.realCursorConfig, to: Self.cursorConfigPath)
+        _ = try installer().install(.cursor)
+        let configBefore = try XCTUnwrap(read(Self.cursorConfigPath))
+
+        guard case .installed(let changed) = try installer().install(.cursor) else {
+            return XCTFail("expected an install result")
+        }
+        XCTAssertEqual(changed, [], "a repeat install must report that it wrote nothing")
+        XCTAssertEqual(read(Self.cursorConfigPath), configBefore)
+    }
+
+    // Removal takes exactly our four and nothing that merely looks like them:
+    // a differently named tool, a verb we do not ship, and the user's own rules.
+    func testCursorUninstallRemovesOnlyOurEntries() throws {
+        try write("""
+        {
+          "version": 1,
+          "permissions": {
+            "allow": [
+              "Shell(ls)",
+              "Shell(aloudmixer:listen*)",
+              "Shell(\(Self.command):deploy*)",
+              "Shell(git)"
+            ],
+            "deny": ["Shell(rm)"]
+          }
+        }
+        """, to: Self.cursorConfigPath)
+
+        _ = try installer().install(.cursor)
+        XCTAssertEqual(try cursorAllowList().count, 8)
+
+        try installer().uninstall(.cursor)
+        XCTAssertEqual(try cursorAllowList(),
+                       ["Shell(ls)", "Shell(aloudmixer:listen*)",
+                        "Shell(\(Self.command):deploy*)", "Shell(git)"])
+        XCTAssertEqual((try cursorConfigJSON()["permissions"] as? [String: Any])?["deny"] as? [String],
+                       ["Shell(rm)"])
+        XCTAssertEqual(try cursorConfigJSON()["version"] as? Int, 1)
+    }
+
+    // Recognising an entry on the way out has to be looser than writing one, or
+    // an install from a build that quoted differently, or ran from a different
+    // bundle location, leaves a rule permitting a binary that no longer exists.
+    func testCursorUninstallRemovesEntriesFromAnyEarlierInvocationForm() throws {
+        try write("""
+        {
+          "permissions": {
+            "allow": [
+              "Shell(aloud:listen*)",
+              "Shell(/Volumes/Old/Aloud.app/Contents/MacOS/Aloud:claim*)",
+              "Shell('/Users/someone/My Apps/Aloud.app/Contents/MacOS/Aloud':speak*)",
+              "Shell(/Applications/Aloud.app/Contents/MacOS/Aloud:release)",
+              "Shell(ls)",
+              "Shell(aloud)",
+              "Shell(curl:*)"
+            ]
+          }
+        }
+        """, to: Self.cursorConfigPath)
+
+        try installer().uninstall(.cursor)
+
+        // What stays: two of the user's own rules, plus the bare
+        // `Shell(aloud)` — no verb, so it grants every argument list and is not
+        // a shape this app has ever written. Guessing that one is ours would be
+        // us deleting a permission somebody chose.
+        XCTAssertEqual(try cursorAllowList(), ["Shell(ls)", "Shell(aloud)", "Shell(curl:*)"])
+    }
+
+    // The same refusal Claude Code gets. A cli-config.json we cannot parse is
+    // the file standing between the user and a working Cursor CLI, and the
+    // refusal has to happen before the skill is written so a failed install
+    // does not leave instructions behind that will prompt on every call.
+    func testMalformedCursorConfigIsRefusedNotClobbered() throws {
+        let broken = "{ \"permissions\": { \"allow\": [ \"Shell(ls)\",, }"
+        try write(broken, to: Self.cursorConfigPath)
+
+        XCTAssertThrowsError(try installer().install(.cursor)) { error in
+            guard case .unreadableSettings(let path, let snippet)? = error as? HarnessInstallError else {
+                return XCTFail("expected an unreadableSettings refusal, got \(error)")
+            }
+            XCTAssertTrue(path.hasSuffix(Self.cursorConfigPath), "the refusal has to name Cursor's file, not Claude Code's")
+            // The text to paste has to be the text we would have written, in
+            // Cursor's dialect.
+            XCTAssertTrue(snippet.contains("Shell(\(Self.command):listen*)"))
+        }
+
+        XCTAssertEqual(read(Self.cursorConfigPath), broken, "the broken file must be byte-identical")
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".cursor/skills/aloud-voice/SKILL.md").path),
+                       "nothing may be written once the install is going to fail")
+    }
+
+    // The file is Cursor's, not ours, so it is copied before it is changed.
+    func testCursorConfigIsBackedUpBeforeBeingModifiedAndTidiedAfter() throws {
+        try write(Self.realCursorConfig, to: Self.cursorConfigPath)
+        _ = try installer().install(.cursor)
+        XCTAssertEqual(read(Self.cursorConfigPath + ".aloud-backup"), Self.realCursorConfig)
+
+        try installer().uninstall(.cursor)
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(Self.cursorConfigPath + ".aloud-backup").path),
+                       "once the file is back the way we found it, the backup is our litter")
+    }
+
+    // Neither harness with an allowlist may reach for the other's file. They
+    // share the install branch and the `permissions.allow` shape, so crossing
+    // them would write valid JSON into the wrong config and match nothing.
+    func testTheTwoAllowlistHarnessesStayOutOfEachOthersConfigs() throws {
+        try write("{\"model\":\"opus\"}", to: ".claude/settings.json")
+        try write(Self.realCursorConfig, to: Self.cursorConfigPath)
+
+        _ = try installer().install(.cursor)
+        XCTAssertEqual(read(".claude/settings.json"), "{\"model\":\"opus\"}",
+                       "installing Cursor must not touch Claude Code's settings")
+
+        _ = try installer().install(.claudeCode)
+        XCTAssertEqual(try cursorAllowList().filter { $0.hasPrefix("Bash(") }, [])
+        XCTAssertEqual(try allowList().filter { $0.hasPrefix("Shell(") }, [])
     }
 
     // A skill of ours is deleted on uninstall; one that merely shares the name
@@ -359,14 +603,26 @@ final class HarnessInstallerTests: XCTestCase {
     //    ~/.pi/skills — which does exist on real machines, written there by
     //    other tools — is pi's *per-project* layout misapplied to home, and pi
     //    never reads it.
+    //
+    // OpenClaw and Hermes join the same list on weaker evidence, and the list
+    // is where that costs nothing: neither is installed on this Mac, so their
+    // paths come from published docs and the projects' own source rather than a
+    // directory listing. What these tests can still prove is everything on our
+    // side of the line — that the row reuses the shared branch, writes only
+    // where the table says, is idempotent, and comes back out — and that is
+    // most of what goes wrong. The one thing they cannot prove is that the tool
+    // reads the directory at all, which is why detection is pinned to a marker
+    // only the real tool writes (below).
     private static let addedHarnesses: [(AgentHarness, String, String)] = [
         (.opencode, ".opencode", ".opencode/skills/aloud-voice/SKILL.md"),
         (.pi, ".pi/agent", ".pi/agent/skills/aloud-voice/SKILL.md"),
+        (.openclaw, ".openclaw/openclaw.json", ".openclaw/skills/aloud-voice/SKILL.md"),
+        (.hermes, ".hermes/config.yaml", ".hermes/skills/aloud-voice/SKILL.md"),
     ]
 
     func testAddedHarnessesInstallAsGlobalSkillFiles() throws {
         for (harness, marker, path) in Self.addedHarnesses {
-            try makeDir(marker)
+            try makeMarker(marker)
             guard case .installed(let changed) = try installer().install(harness) else {
                 return XCTFail("\(harness.id) installs globally, not as a snippet")
             }
@@ -389,7 +645,7 @@ final class HarnessInstallerTests: XCTestCase {
     // and a rename of either alone is a skill that silently never appears.
     func testTheSkillNameMatchesTheDirectoryItIsWrittenInto() throws {
         for (harness, marker, path) in Self.addedHarnesses {
-            try makeDir(marker)
+            try makeMarker(marker)
             _ = try installer().install(harness)
             let directory = home.appendingPathComponent(path)
                 .deletingLastPathComponent().lastPathComponent
@@ -402,7 +658,7 @@ final class HarnessInstallerTests: XCTestCase {
     // The reopen-Settings-and-press-it-again case, for the new rows too.
     func testAddedHarnessesDoubleInstallChangesNothing() throws {
         for (harness, marker, path) in Self.addedHarnesses {
-            try makeDir(marker)
+            try makeMarker(marker)
             _ = try installer().install(harness)
             let first = try XCTUnwrap(read(path))
 
@@ -416,7 +672,7 @@ final class HarnessInstallerTests: XCTestCase {
 
     func testAddedHarnessesUninstallCleanlyIncludingTheDirectory() throws {
         for (harness, marker, path) in Self.addedHarnesses {
-            try makeDir(marker)
+            try makeMarker(marker)
             _ = try installer().install(harness)
 
             try installer().uninstall(harness)
@@ -447,8 +703,7 @@ final class HarnessInstallerTests: XCTestCase {
         for (harness, _, _) in Self.addedHarnesses {
             for marker in harness.detectionPaths {
                 let scratch = home.appendingPathComponent(UUID().uuidString, isDirectory: true)
-                try fm.createDirectory(at: scratch.appendingPathComponent(marker, isDirectory: true),
-                                       withIntermediateDirectories: true)
+                try makeMarker(marker, under: scratch)
                 let found = HarnessInstaller(home: scratch, command: Self.command).detect().map(\.harness)
                 XCTAssertEqual(found, [harness], "\(marker) should mean \(harness.id) and nothing else")
             }
@@ -463,6 +718,81 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertEqual(installer().detect(), [])
     }
 
+    // MARK: - the rows we could not verify against a live install
+
+    // The whole risk of adding a harness from documentation is a row that reads
+    // "Installed" while the file it wrote is somewhere the tool never looks.
+    // Detection is the only defence: if the marker is something only the real
+    // tool creates, then being wrong about the *install* path costs a skill
+    // that does nothing, while being wrong about the *marker* costs a row that
+    // appears for people who have never heard of the tool.
+    //
+    // So these two are pinned to files the tools write themselves —
+    // openclaw.json is OpenClaw's config, config.yaml and SOUL.md are Hermes'
+    // settings and persona files — and the near-misses below are pinned as
+    // misses.
+    func testTheUnverifiedRowsNeedAMarkerOnlyTheRealToolWrites() throws {
+        // ~/.agents/skills is a cross-tool convention: it exists on this
+        // developer's Mac, put there by something that is not OpenClaw, and
+        // OpenClaw does read it. Detecting on it would light the row up for
+        // anyone who has ever installed any agent skill anywhere — the
+        // ~/.pi/skills mistake with a different directory name.
+        try makeDir(".agents/skills")
+        XCTAssertEqual(installer().detect(), [], "a shared skills directory is not evidence of any one harness")
+
+        // A bare state directory is not much better: empty, or left behind by
+        // an uninstall, or made by hand.
+        try makeDir(".openclaw")
+        try makeDir(".hermes")
+        XCTAssertEqual(installer().detect(), [], "an empty state directory does not mean the tool has run")
+
+        try makeMarker(".openclaw/openclaw.json")
+        try makeMarker(".hermes/SOUL.md")
+        XCTAssertEqual(Set(installer().detect().map(\.harness)), [.openclaw, .hermes])
+    }
+
+    // The subtlest version of the same mistake: if a detection marker is a
+    // directory our own install creates, the row lights up because we
+    // installed, for everyone, whether or not the harness exists — and it looks
+    // exactly like success.
+    //
+    // Held only against the two documentation-derived rows, and that limit is
+    // the point rather than an oversight. The older rows detect on the state
+    // directory they also install into (`~/.claude`, `~/.codex`, `~/.cursor`,
+    // `~/.opencode`, `~/.pi/agent`), which is survivable there because the
+    // install path was verified: writing into it means the tool is real. Here
+    // the install path is the guess, so it is not allowed to be the evidence
+    // as well.
+    func testTheUnverifiedRowsCannotDetectThemselvesFromTheirOwnInstall() throws {
+        for harness in [AgentHarness.openclaw, .hermes] {
+            let scratch = home.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try fm.createDirectory(at: scratch, withIntermediateDirectories: true)
+            let installer = HarnessInstaller(home: scratch, command: Self.command)
+            _ = try installer.install(harness)
+            XCTAssertTrue(installer.isInstalled(harness), "the skill really was written")
+            XCTAssertEqual(installer.detect(), [],
+                           "\(harness.id) detects itself from the files we wrote")
+        }
+    }
+
+    // Every path we write to has to be under a directory belonging to the
+    // harness it is for. A typo that put OpenClaw's skill under ~/.hermes would
+    // otherwise pass every test above — both rows install, both are idempotent,
+    // both uninstall — while each tool reads the other's file.
+    func testEachHarnessWritesUnderItsOwnRoot() {
+        let roots: [AgentHarness: String] = [
+            .claudeCode: ".claude/", .codex: ".codex/", .cursor: ".cursor/",
+            .copilot: ".github/", .opencode: ".opencode/", .pi: ".pi/",
+            .openclaw: ".openclaw/", .hermes: ".hermes/",
+        ]
+        for harness in AgentHarness.allCases {
+            let root = roots[harness]
+            XCTAssertNotNil(root, "\(harness.id) was added without saying where it writes")
+            XCTAssertTrue(harness.instructionPath.hasPrefix(root ?? "\u{0}"),
+                          "\(harness.id) writes to \(harness.instructionPath), outside \(root ?? "")")
+        }
+    }
+
     // Only Claude Code has an allowlist that would otherwise stop the first
     // `listen` for a permission prompt. OpenCode's agents default to allowing
     // bash and pi has no allowlist concept at all, so writing one for them
@@ -472,7 +802,7 @@ final class HarnessInstallerTests: XCTestCase {
     func testAHarnessWithoutAnAllowlistNeverTouchesClaudeCodesSettings() throws {
         try write("{\"model\":\"opus\"}", to: ".claude/settings.json")
         for (harness, marker, _) in Self.addedHarnesses {
-            try makeDir(marker)
+            try makeMarker(marker)
             _ = try installer().install(harness)
             try installer().uninstall(harness)
         }

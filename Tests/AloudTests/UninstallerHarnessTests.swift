@@ -48,12 +48,18 @@ final class UninstallerHarnessTests: XCTestCase {
         fm.fileExists(atPath: home.appendingPathComponent(relative).path)
     }
 
-    private func allowList() throws -> [String] {
-        let data = try Data(contentsOf: home.appendingPathComponent(".claude/settings.json"))
+    private func allowList(_ relative: String = ".claude/settings.json") throws -> [String] {
+        let data = try Data(contentsOf: home.appendingPathComponent(relative))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let permissions = try XCTUnwrap(root["permissions"] as? [String: Any])
         return try XCTUnwrap(permissions["allow"] as? [String])
     }
+
+    // Two harnesses carry an allowlist now, in two files and two dialects, and
+    // the sweep has to reach both. Cursor's was added late — its row installed
+    // a skill and no allowlist for a while — so it is the one most likely to be
+    // forgotten again here.
+    private static let cursorConfigPath = ".cursor/cli-config.json"
 
     // Every harness we are able to write to. Derived from the table rather than
     // listed by hand, so a harness added later is swept by these tests the day
@@ -71,6 +77,7 @@ final class UninstallerHarnessTests: XCTestCase {
             _ = try installer().install(harness)
         }
         XCTAssertEqual(try allowList().count, 4)
+        XCTAssertEqual(try allowList(Self.cursorConfigPath).count, 4)
 
         XCTAssertEqual(sweep(), [])
 
@@ -84,12 +91,46 @@ final class UninstallerHarnessTests: XCTestCase {
         // wrong place twice.
         XCTAssertFalse(exists(".opencode/skills/aloud-voice/SKILL.md"))
         XCTAssertFalse(exists(".pi/agent/skills/aloud-voice/SKILL.md"))
+        XCTAssertFalse(exists(".openclaw/skills/aloud-voice/SKILL.md"))
+        XCTAssertFalse(exists(".hermes/skills/aloud-voice/SKILL.md"))
 
         XCTAssertEqual(try allowList(), [], "the allowlist must not keep permitting a binary that is going away")
+        XCTAssertEqual(try allowList(Self.cursorConfigPath), [],
+                       "Cursor's allowlist is ours to clean up too, in its own file and its own dialect")
         for harness in AgentHarness.allCases {
             XCTAssertFalse(installer().isInstalled(harness))
             XCTAssertFalse(exists(harness.instructionPath),
                            "\(harness.id) kept its instructions after the sweep")
+        }
+    }
+
+    // The sweep walks `AgentHarness.allCases`, which is what makes a new row
+    // swept the day it is added — but "it is driven off allCases" is a claim
+    // about the code, and this is the test that makes it a claim about the
+    // behaviour. Everything below is derived from the table, so a row added
+    // without a thought here is still covered, and a row that quietly stops
+    // being swept fails.
+    func testTheSweepIsDrivenOffTheTableSoNewRowsAreCoveredTheDayTheyAreAdded() throws {
+        for harness in globalHarnesses {
+            _ = try installer().install(harness)
+            XCTAssertTrue(exists(harness.instructionPath), "\(harness.id) did not install where the table says")
+        }
+        // Every allowlist we know how to write is non-empty before the sweep,
+        // whichever file and dialect it uses.
+        for harness in AgentHarness.allCases {
+            guard let url = installer().allowlistURL(for: harness) else { continue }
+            let relative = url.path.replacingOccurrences(of: home.path + "/", with: "")
+            XCTAssertEqual(try allowList(relative).count, 4, "\(harness.id) never wrote its allowlist")
+        }
+
+        XCTAssertEqual(sweep(), [])
+
+        for harness in AgentHarness.allCases {
+            XCTAssertFalse(installer().isInstalled(harness))
+            XCTAssertFalse(exists(harness.instructionPath), "\(harness.id) kept its instructions")
+            guard let url = installer().allowlistURL(for: harness) else { continue }
+            let relative = url.path.replacingOccurrences(of: home.path + "/", with: "")
+            XCTAssertEqual(try allowList(relative), [], "\(harness.id) kept its allowlist entries")
         }
     }
 
@@ -122,6 +163,8 @@ final class UninstallerHarnessTests: XCTestCase {
                        "a file that no longer carries our marker is not ours to delete")
         XCTAssertEqual(read(".codex/AGENTS.md"), "Always use tabs.\n")
         XCTAssertEqual(try allowList(), [], "the allowlist entries are still ours even if the skill file is not")
+        XCTAssertEqual(try allowList(Self.cursorConfigPath), [],
+                       "the same holds for Cursor: the skill was deleted by hand, the allowlist entries were not")
     }
 
     // The failure that must not cascade. A settings.json we cannot parse is a
@@ -144,6 +187,11 @@ final class UninstallerHarnessTests: XCTestCase {
         XCTAssertFalse(exists(".cursor/skills/aloud-voice/SKILL.md"))
         XCTAssertFalse(exists(".opencode/skills/aloud-voice/SKILL.md"))
         XCTAssertFalse(exists(".pi/agent/skills/aloud-voice/SKILL.md"))
+        XCTAssertFalse(exists(".openclaw/skills/aloud-voice/SKILL.md"))
+        XCTAssertFalse(exists(".hermes/skills/aloud-voice/SKILL.md"))
+        // Including the other harness that has an allowlist: two allowlists in
+        // two files means one unreadable file must not strand the other.
+        XCTAssertEqual(try allowList(Self.cursorConfigPath), [])
         // Even the failing harness gets as far as it can: the skill file goes,
         // only the allowlist is left stale.
         XCTAssertFalse(exists(".claude/skills/aloud-voice/SKILL.md"))
@@ -183,10 +231,11 @@ final class UninstallerHarnessTests: XCTestCase {
     // because the sweep asks every harness, and the one that has no on-disk
     // state must not answer with a failure.
     func testTheSweepAsksEveryHarnessIncludingTheOnesWeNeverWroteTo() throws {
-        // Claude Code, Codex, Cursor, Copilot at launch; OpenCode and pi added
-        // after. The count is asserted so that adding a harness without
-        // revisiting this file is a failing test rather than a silent gap.
-        XCTAssertEqual(AgentHarness.allCases.count, 6)
+        // Claude Code, Codex, Cursor, Copilot at launch; OpenCode, pi, OpenClaw
+        // and Hermes added after. The count is asserted so that adding a
+        // harness without revisiting this file is a failing test rather than a
+        // silent gap.
+        XCTAssertEqual(AgentHarness.allCases.count, 8)
         for harness in AgentHarness.allCases where harness.scope == .perProject {
             _ = try installer().install(harness)
         }
