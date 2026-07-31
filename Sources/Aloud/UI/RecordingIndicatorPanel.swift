@@ -513,6 +513,16 @@ final class RecordingIndicatorPanel {
                 self.isFadingOut = false
                 panel.orderOut(nil)
                 self.model.revealed = true   // rest state for the next show
+                // Leave agent mode once the pill is actually gone. `hide()`
+                // never reset it, so a second agent session's `enterAgentMode`
+                // saw `mode == .agent` and short-circuited — keeping the
+                // previous conversation's transcript on screen under the new
+                // question. Doing it here, off-screen, avoids any mid-fade
+                // flicker.
+                if self.model.mode == .agent {
+                    self.model.mode = .recording
+                    self.model.agentTranscript = ""
+                }
             }
         })
     }

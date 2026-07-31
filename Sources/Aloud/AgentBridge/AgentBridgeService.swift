@@ -17,6 +17,12 @@ import Foundation
 // What the running app has to provide for an agent session to actually happen.
 // Implemented by DictationController; faked in tests.
 protocol AgentVoiceHost: AnyObject, Sendable {
+    // Whether the user is in the middle of their own dictation right now. An
+    // agent claiming while someone is mid-hold must not put a consent prompt
+    // over the top of it — the prompt would seize the hotkey and swallow the
+    // commit. The service checks this before it asks.
+    @MainActor var userDictationInProgress: Bool { get }
+
     // Say something out loud. Returns when playback has finished — the
     // half-duplex gate depends on that being true, not approximately true.
     func speak(_ text: String) async throws
@@ -284,6 +290,24 @@ final class AgentBridgeService {
                 return response
 
             case .awaiting(let prompt):
+                // A prompt for this lease already open (the holder re-claimed
+                // while its earlier claim is still parked on an answer): a
+                // second `ask` would overwrite the first continuation and hang
+                // that caller to its own timeout. Tell the duplicate to wait
+                // rather than opening a second prompt over the first.
+                if pendingConsent[lease] != nil {
+                    return .failure(.queued, "A consent prompt for this session is already open.")
+                }
+                // Never over a live dictation. Seizing the hotkey for the
+                // prompt would swallow the user's commit and lose what they
+                // were saying; the agent is told to try again shortly.
+                if host?.userDictationInProgress == true {
+                    leases.release(lease: lease, now: now())
+                    var response = BridgeResponse.failure(.queued,
+                        "You're in the middle of dictating — try again in a moment.")
+                    response.retryAfter = 3
+                    return response
+                }
                 let resolution = await ask(prompt)
                 switch resolution {
                 case .accepted:
@@ -405,8 +429,12 @@ final class AgentBridgeService {
 
     private func timeOutConsent(lease: String) {
         guard pendingConsent[lease] != nil else { return }
-        guard let resolution = consent.check(now: now()) else { return }
-        resolve(lease, resolution)
+        // The deadline fired. If the policy still has a live prompt it hands
+        // back the real resolution; if it does not — a mid-session consent-mode
+        // change reset it, or another lease's claim cleared it — the
+        // continuation is still parked and would hang forever, so time it out
+        // rather than leaving it dangling.
+        resolve(lease, consent.check(now: now()) ?? .timedOut(preConsentAudio: .discarded))
     }
 
     private func resolve(_ lease: String, _ resolution: ConsentResolution) {
@@ -420,9 +448,16 @@ final class AgentBridgeService {
         guard let lease = request.lease else {
             return .failure(.badRequest, "release needs the lease it is releasing.")
         }
+        // Only tear the session down if this lease actually held it. A release
+        // for a lease that was already reaped or never held — a late polite
+        // release from a crashed agent, or a stray call from any local
+        // process — must not hide the pill and force the phase idle out from
+        // under whoever holds the microphone now, be that another agent or the
+        // user's own dictation.
+        let wasHolder = leases.holder?.id == lease
         consent.endLease(lease)
         leases.release(lease: lease, now: now())
-        await host?.endAgentSession()
+        if wasHolder { await host?.endAgentSession() }
         return .success()
     }
 
@@ -440,6 +475,10 @@ final class AgentBridgeService {
 
         do {
             try await host.speak(text)
+            // Same reclaim check as listen: if the lease was pulled while the
+            // prompt was still playing, report it rather than a success the
+            // agent would read as "the user heard me".
+            if let refusal = validate(lease) { return refusal }
             return .success()
         } catch {
             return .failure(.unavailable, error.localizedDescription)
@@ -490,6 +529,14 @@ final class AgentBridgeService {
                 // consent is in scope, which is what keeps a pre-consent
                 // buffer out of the agent's hands.
                 let transcript = try await host.listen(from: grant.streamStartsAt)
+                // The user may have taken the microphone back — End all, the
+                // per-row end, or the gate switched off — while the capture
+                // was already running. The host stops recording, but the
+                // audio buffered up to that instant would otherwise transcribe
+                // and return as a success. Re-checking the lease turns that
+                // into the refusal the reclaim intended: the words the user
+                // pulled the mic away from do not reach the agent.
+                if let refusal = validate(lease) { return refusal }
                 var response = BridgeResponse.success()
                 response.text = transcript.text
                 response.raw = transcript.raw
@@ -501,6 +548,13 @@ final class AgentBridgeService {
                 // or give up on the feature. Nobody spoke, which is the same
                 // shape as a consent prompt nobody answered.
                 return .failure(.timeout, "Didn't hear anything.")
+            } catch AgentListenError.busy {
+                // The user is dictating right now — a transient "try again",
+                // not `unavailable`, which the skill teaches agents to read as
+                // "the feature is gone" and stop using.
+                var response = BridgeResponse.failure(.queued, "Aloud is busy right now.")
+                response.retryAfter = 3
+                return response
             } catch {
                 return .failure(.unavailable, error.localizedDescription)
             }

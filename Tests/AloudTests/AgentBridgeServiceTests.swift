@@ -20,6 +20,8 @@ final class AgentBridgeServiceTests: XCTestCase {
                                          cleanup: .concise)
         var speakError: Error?
         var listenError: Error?
+        // Drives the service's "don't prompt over a live dictation" guard.
+        var userDictationInProgress = false
 
         // Ordered log of everything the host was asked to do, so a test can
         // assert the microphone opens AFTER the prompt has been spoken.
@@ -168,6 +170,51 @@ final class AgentBridgeServiceTests: XCTestCase {
 
     private var peer: BridgeServer.PeerIdentity {
         BridgeServer.PeerIdentity(pid: 4242, name: "claude")
+    }
+
+    // MARK: review-hardening regressions
+
+    // A release naming a lease that no longer holds the microphone must not
+    // tear down whoever holds it now — another agent, or the user's own
+    // dictation. Before the fix, `release` called endAgentSession
+    // unconditionally.
+    func testStaleReleaseDoesNotEndTheLiveSession() async {
+        let service = makeService(mode: .open)
+        _ = await service.handle(request(.claim), peer: peer)
+        let before = host.sessionsEnded
+        _ = await service.handle(request(.release, lease: "not-the-holder"), peer: peer)
+        XCTAssertEqual(host.sessionsEnded, before,
+                       "a release for a non-holding lease must not end the live session")
+    }
+
+    // A holder re-claiming while its consent prompt is still open must not
+    // start a second prompt — that overwrote the first continuation and hung
+    // the original caller forever.
+    func testReclaimWhileConsentPendingDoesNotStartASecondPrompt() async {
+        let service = makeService(mode: .confirmByVoice)
+        let caller = peer
+        let claimReq = request(.claim)
+        async let first = service.handle(claimReq, peer: caller)
+        try? await Task.sleep(nanoseconds: 80_000_000)   // let the prompt come up
+        let second = await service.handle(request(.claim), peer: caller)
+        XCTAssertFalse(second.ok)
+        XCTAssertEqual(second.reason, .queued,
+                       "a re-claim during an open prompt is told to wait, not given a second prompt")
+        XCTAssertEqual(host.prompts.count, 1, "exactly one prompt, not two")
+        // Let the original resolve so the task doesn't leak.
+        host.acceptFromPill?()
+        _ = await first
+    }
+
+    // A claim that would prompt while the user is mid-dictation is refused
+    // rather than seizing the hotkey out from under them.
+    func testClaimIsRefusedWhileTheUserIsDictating() async {
+        let service = makeService(mode: .confirmByVoice)
+        host.userDictationInProgress = true
+        let response = await service.handle(request(.claim), peer: peer)
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.reason, .queued)
+        XCTAssertEqual(host.prompts.count, 0, "no consent prompt over a live dictation")
     }
 
     // MARK: the gate

@@ -300,12 +300,19 @@ enum HarnessInstallError: LocalizedError, Equatable {
     // is the only thing standing between them and a Claude Code that won't
     // start; clobbering it to add a permission line is not a trade we make.
     case unreadableSettings(path: String, snippet: String)
+    // Our marked block is present but its start/end markers don't pair up —
+    // a hand edit or an interrupted write. We cannot tell which lines are ours,
+    // so we refuse to rewrite or delete rather than guess and eat the user's
+    // own content.
+    case damagedBlock(path: String)
     case writeFailed(path: String, message: String)
 
     var errorDescription: String? {
         switch self {
         case .unreadableSettings(let path, _):
             return "\(path) isn't valid JSON, so Aloud left it alone. Add the permission entries by hand."
+        case .damagedBlock(let path):
+            return "\(path) has an Aloud section with a broken start/end marker, so Aloud left it alone. Fix or remove that section by hand."
         case .writeFailed(let path, let message):
             return "Couldn't write \(path): \(message)"
         }
@@ -763,7 +770,15 @@ struct HarnessInstaller {
         guard let style = harness.permissionAllowlist else { return nil }
         let snippet = permissionSnippet(for: harness)
         var root: [String: Any] = [:]
-        if let data = try? Data(contentsOf: url) {
+        if fm.fileExists(atPath: url.path) {
+            // A file that exists but will not read (permissions, an ACL) is not
+            // the same as no file. Treating it as absent would let the atomic
+            // write below replace the user's whole settings with just our four
+            // entries — so refuse it exactly as we refuse unparseable JSON.
+            guard let data = try? Data(contentsOf: url) else {
+                throw HarnessInstallError.unreadableSettings(path: url.path,
+                                                             snippet: snippet)
+            }
             guard let parsed = try? JSONSerialization.jsonObject(with: data),
                   let object = parsed as? [String: Any] else {
                 throw HarnessInstallError.unreadableSettings(path: url.path,
@@ -836,7 +851,20 @@ struct HarnessInstaller {
         let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let updated: String
         if existing.contains(AgentVoiceInstructions.markerStart) {
-            updated = replacingBlock(in: existing, with: block)
+            // Strip whatever we wrote before, then write one block. If the
+            // strip could not run — a damaged or orphaned marker — appending
+            // would stack a second block on top, and since a refresh runs
+            // every launch the file would grow without bound. Refuse instead;
+            // the pane surfaces it, and `refreshInstalled` skips it quietly.
+            guard let stripped = removingBlock(from: existing) else {
+                throw HarnessInstallError.damagedBlock(path: url.path)
+            }
+            if stripped.isEmpty {
+                updated = block
+            } else {
+                let separator = stripped.hasSuffix("\n") ? "\n" : "\n\n"
+                updated = stripped + separator + block
+            }
         } else if existing.isEmpty {
             updated = block
         } else {
@@ -846,17 +874,14 @@ struct HarnessInstaller {
         return try writeIfDifferent(updated, to: url)
     }
 
-    private func replacingBlock(in text: String, with block: String) -> String {
-        let stripped = removingBlock(from: text)
-        if stripped.isEmpty { return block }
-        let separator = stripped.hasSuffix("\n") ? "\n" : "\n\n"
-        return stripped + separator + block
-    }
-
     private func removeBlock(from url: URL) throws {
         guard let existing = try? String(contentsOf: url, encoding: .utf8),
               existing.contains(AgentVoiceInstructions.markerStart) else { return }
-        let stripped = removingBlock(from: existing)
+        guard let stripped = removingBlock(from: existing) else {
+            // Damaged markers — we cannot prove which lines are ours, so we
+            // touch neither the file nor the user's pre-Aloud backup.
+            throw HarnessInstallError.damagedBlock(path: url.path)
+        }
         if stripped.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // The file held nothing but our section, so we created it. Leaving
             // an empty AGENTS.md behind is litter, not caution.
@@ -868,30 +893,28 @@ struct HarnessInstaller {
         removeBackup(of: url)
     }
 
-    // Line-based rather than range-based so a stray marker inside a code fence
-    // cannot swallow half the file, and so the blank line we inserted with the
-    // block comes back out with it.
-    private func removingBlock(from text: String) -> String {
+    // Removes EVERY well-formed block we wrote, line-based so a stray marker
+    // inside a code fence cannot swallow half the file and so the blank line we
+    // inserted with a block comes back out with it. Returns nil — refusing the
+    // whole edit — if any start marker cannot be cleanly paired with an end
+    // (an orphan, or a start nested inside another block's span): a file we
+    // cannot parse with certainty is not one to guess at.
+    private func removingBlock(from text: String) -> String? {
+        func trimmed(_ line: String) -> String { line.trimmingCharacters(in: .whitespaces) }
         var lines = text.components(separatedBy: "\n")
-        guard let start = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == AgentVoiceInstructions.markerStart })
-        else { return text }
-        guard let end = lines[start...].firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == AgentVoiceInstructions.markerEnd })
-        else { return text }
-        // The end must belong to this start. If another start marker sits
-        // inside the span, the first block lost its own end (an interrupted
-        // write, a hand edit) and the range would swallow the user's content
-        // between the orphan and the next real block. A mutation that cannot
-        // prove its bounds leaves the file alone.
-        guard !lines[(start + 1)..<end].contains(where: {
-            $0.trimmingCharacters(in: .whitespaces) == AgentVoiceInstructions.markerStart
-        }) else { return text }
+        while let start = lines.firstIndex(where: { trimmed($0) == AgentVoiceInstructions.markerStart }) {
+            guard let end = lines[start...].firstIndex(where: { trimmed($0) == AgentVoiceInstructions.markerEnd })
+            else { return nil }
+            guard !lines[(start + 1)..<end].contains(where: { trimmed($0) == AgentVoiceInstructions.markerStart })
+            else { return nil }
 
-        lines.removeSubrange(start...end)
-        // Collapse the separator blank line we added on the way in.
-        if start > 0, start < lines.count, lines[start - 1].isEmpty, lines[start].isEmpty {
-            lines.remove(at: start)
-        } else if start > 0, start == lines.count, lines[start - 1].isEmpty {
-            lines.removeLast()
+            lines.removeSubrange(start...end)
+            // Collapse the separator blank line we added on the way in.
+            if start > 0, start < lines.count, lines[start - 1].isEmpty, lines[start].isEmpty {
+                lines.remove(at: start)
+            } else if start > 0, start == lines.count, lines[start - 1].isEmpty {
+                lines.removeLast()
+            }
         }
         return lines.joined(separator: "\n")
     }

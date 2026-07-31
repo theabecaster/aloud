@@ -714,8 +714,10 @@ private struct AgentSessionList: View {
                         // Which tool, underneath what it is doing: two sessions
                         // can be named alike, and this is the tiebreak.
                         Text(session.isHolder
-                             ? loc("%@ — using the microphone", session.harness)
-                             : loc("%@ — waiting", session.harness))
+                             ? loc("%@ — using the microphone",
+                                   ConsentPolicy.displayName(forHarness: session.harness))
+                             : loc("%@ — waiting",
+                                   ConsentPolicy.displayName(forHarness: session.harness)))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)

@@ -236,7 +236,7 @@ struct AgentsSettings: View {
                 copy(snippet.contents, from: harness)
             }
         } catch {
-            failures[harness] = describe(error)
+            failures[harness] = describe(error, removing: false)
         }
     }
 
@@ -245,7 +245,7 @@ struct AgentsSettings: View {
         do {
             try installer.uninstall(harness)
         } catch {
-            failures[harness] = describe(error)
+            failures[harness] = describe(error, removing: true)
         }
         // Whatever happened, redraw from disk: uninstall can pull the skill
         // and still refuse the permissions file.
@@ -254,12 +254,24 @@ struct AgentsSettings: View {
 
     // The installer's own errorDescription is English-only, so the sentence the
     // user reads is built here instead, from the case.
-    private func describe(_ error: Error) -> InstallFailure {
+    private func describe(_ error: Error, removing: Bool) -> InstallFailure {
         switch error as? HarnessInstallError {
         case .unreadableSettings(let path, let snippet):
+            // The snippet is the entries to add, so it only helps an install.
+            // On removal the user needs to take those lines out, not put them
+            // in — offering the add-snippet would be exactly backwards.
+            if removing {
+                return InstallFailure(
+                    message: loc("%@ isn’t valid JSON, so Aloud left it alone. Remove the Aloud permission entries by hand.", path),
+                    snippet: nil)
+            }
             return InstallFailure(
                 message: loc("%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand.", path),
                 snippet: snippet)
+        case .damagedBlock(let path):
+            return InstallFailure(
+                message: loc("%@ has an Aloud section with a broken marker, so Aloud left it alone. Fix or remove that section by hand.", path),
+                snippet: nil)
         case .writeFailed(let path, let message):
             return InstallFailure(message: loc("Couldn’t write %1$@ — %2$@", path, message),
                                   snippet: nil)

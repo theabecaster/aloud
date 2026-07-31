@@ -722,6 +722,11 @@ final class DictationController: ObservableObject {
 
     private func beginRecording() {
         guard phase == .idle || phase.isError else { return }
+        // Half-duplex covers the user's hotkey too, not just the agent's own
+        // listen: `speak` leaves phase at .idle while TTS plays, so without
+        // this a dictation press mid-prompt opens the mic straight into
+        // Aloud's own voice and types it into the focused app.
+        guard !agentSpeaking else { return }
         // The model still loading — the ten-odd seconds after every launch —
         // is no reason to turn the hotkey away: capture doesn't need the
         // model, and the commit waits for it (the pill is showing a spinner
@@ -1479,6 +1484,7 @@ final class DictationController: ObservableObject {
     // the transcript is an instruction, not content.
     private func beginCommandRecording() {
         guard phase == .idle || phase.isError else { return }
+        guard !agentSpeaking else { return }   // half-duplex — see beginRecording
         guard commandsAvailable else {
             indicator.showHint(loc("Commands aren’t available on this Mac"))
             return
@@ -1725,7 +1731,7 @@ final class DictationController: ObservableObject {
         isAgentSession = true
         agentManualDone = false
         phase = .recording
-        indicatorShowAgentSession(harness: agentHarnessName ?? "")
+        indicatorShowAgentSession(harness: agentSessionHolder?.name ?? agentHarnessName ?? "")
 
         // A microphone that will not open must put everything back. Leaving
         // `phase = .recording` and `isAgentSession = true` behind a throw
@@ -1948,7 +1954,7 @@ final class DictationController: ObservableObject {
         isAgentSession = true
         agentManualDone = false
         phase = .recording
-        indicatorShowAgentSession(harness: agentHarnessName ?? "")
+        indicatorShowAgentSession(harness: agentSessionHolder?.name ?? agentHarnessName ?? "")
 
         let session = AgentPollSession(id: "S\(sessionGeneration)-\(UInt32.random(in: 0..<UInt32.max))",
                                        stream: stream)
@@ -1963,6 +1969,17 @@ final class DictationController: ObservableObject {
             phase = .idle
             indicator.hide()
             throw error
+        }
+        // Opening the microphone is a real suspension (a Bluetooth device can
+        // take over a second), and this actor is reentrant across it: a
+        // release, an end-session, or the sweep reaping the lease can run
+        // `endAgentSession` while we are parked, clearing `agentPoll`. If the
+        // session we started is no longer the live one, the mic just opened
+        // for nobody — stop it rather than wiring a pump to a dead session and
+        // handing back an id that can never be stopped.
+        guard agentPoll === session else {
+            _ = recorder.stop()
+            throw AgentListenError.busy
         }
         recorder.onChunk = { [weak stream] chunk in stream?.append(samples: chunk) }
         playCue(.listening)
@@ -2015,11 +2032,19 @@ final class DictationController: ObservableObject {
         phase = .transcribing
         defer { phase = .idle }
 
-        let result = try await session.stream.finish()
-        let raw = verbatim(result)
-        let transcript = await agentTranscript(raw: raw)
-        indicator.hide()
-        return transcript
+        // Hide on the way out however this ends: a stream that throws while
+        // finishing would otherwise leave the pill stuck on "transcribing"
+        // with no bridge call coming to take it down.
+        do {
+            let result = try await session.stream.finish()
+            let raw = verbatim(result)
+            let transcript = await agentTranscript(raw: raw)
+            indicator.hide()
+            return transcript
+        } catch {
+            indicator.hide()
+            throw error
+        }
     }
 
     // Cut a running agent capture short — the user pulling the plug.
@@ -2055,7 +2080,27 @@ enum AgentListenError: LocalizedError {
 // The app side of the bridge. Thin on purpose: policy — the gate, the lease,
 // consent — lives in AgentBridgeService, which knows nothing about audio.
 extension DictationController: AgentVoiceHost {
+    // A user hold-to-talk in flight — not an agent session, whose capture also
+    // sits at `.recording`. The service reads this before it puts a consent
+    // prompt on the hotkey.
+    var userDictationInProgress: Bool {
+        !isAgentSession && (phase == .recording || phase == .transcribing)
+    }
+
     func speak(_ text: String) async throws {
+        // Half-duplex in the other direction too: a user hold-to-talk (or an
+        // agent's own listen — both sit at `.recording`) means the microphone
+        // is open, and speaking into it would be transcribed. Refuse rather
+        // than talk over a live capture.
+        guard phase == .idle || phase.isError else { throw AgentListenError.busy }
+        // One prompt at a time. The Speaker singleton keeps mutable per-call
+        // state that is safe only for a single caller (its own comment says
+        // so), and two overlapping `speak` calls — an agent firing twice
+        // without waiting, or a client retry over a still-running first — would
+        // race it and can double-resume a continuation, which traps. `listen`
+        // is already single-flighted by its phase guard; this is the matching
+        // one for `speak`.
+        guard !agentSpeaking else { throw AgentListenError.busy }
         // The pill carries the speaking too, not just the listening. Half of
         // this feature is Aloud talking to someone who is not looking at the
         // screen, and until now that half was invisible: `speak` put nothing on
@@ -2135,6 +2180,10 @@ extension DictationController: AgentVoiceHost {
             stopSpeechActivity()
             Task { await session.stream.cancel() }
         }
+        // Cut off a prompt still playing: the session is over, so the user
+        // should not keep hearing a question from an agent that no longer
+        // holds the microphone.
+        if agentSpeaking { Self.agentSpeaker.stop() }
         isAgentSession = false
         indicator.hide()
         if phase == .recording { phase = .idle }
@@ -2172,6 +2221,12 @@ extension DictationController: AgentVoiceHost {
             return note("no speech model: state=\(transcriber.state)")
         }
         await ensureTranscriberReady()
+        // `ensureTranscriberReady` can await for seconds on a cold model, and
+        // `consentAudio` is not set yet — so a decline or teardown during it
+        // runs `stopConsentListening`, which nils `pendingConsentHeard` but
+        // finds nothing to stop. Bailing here is the only thing that keeps us
+        // from opening the microphone for a prompt already answered.
+        guard pendingConsentHeard != nil else { return note("consent ended while the model loaded") }
 
         let audio = ConsentAudioBuffer()
         consentAudio = audio
@@ -2180,6 +2235,15 @@ extension DictationController: AgentVoiceHost {
         } catch {
             consentAudio = nil
             return note("microphone refused: \(error.localizedDescription)")
+        }
+        // The mic-open above suspends this reentrant actor; a decline or
+        // teardown during it runs `stopConsentListening`, which nils
+        // `consentAudio`. Proceeding would open the mic for a prompt already
+        // answered — and because that same nil makes every later
+        // `stopConsentListening` a silent no-op, nothing could take it down.
+        guard consentAudio === audio else {
+            _ = recorder.stop()
+            return note("consent torn down while the microphone was opening")
         }
         note("listening for accept/decline")
         recorder.onChunk = { [weak audio] chunk in audio?.append(chunk) }

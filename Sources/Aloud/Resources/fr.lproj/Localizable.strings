@@ -380,7 +380,6 @@
 /* Agent Speak — the spoken consent prompt. This is the string that
    tells someone a decision is being asked of them, so it must never
    fall back to English. */
-"Let an agent listen? Yes or no" = "Laisser un agent écouter ? Oui ou non";
 "Let %@ listen? Yes or no" = "Laisser %@ écouter ? Oui ou non";
 
 /* Agent Speak — Settings → Agents. The master switch, how a listen is
@@ -458,6 +457,7 @@
 "End all" = "Tout terminer";
 "Close" = "Fermer";
 "End every session, including waiting ones" = "Terminer toutes les sessions, y compris celles en attente";
-"End Session" = "Terminer la session";
-"End" = "Terminer";
 "It gives the microphone back and tells the agent the session is over." = "Le micro est rendu et l’agent est informé que la session est terminée.";
+"%@ isn’t valid JSON, so Aloud left it alone. Remove the Aloud permission entries by hand." = "%@ n’est pas un JSON valide, donc Aloud n’y a pas touché. Retirez les entrées d’autorisation Aloud à la main.";
+"%@ has an Aloud section with a broken marker, so Aloud left it alone. Fix or remove that section by hand." = "%@ contient une section Aloud avec un marqueur endommagé, donc Aloud n’y a pas touché. Corrigez ou retirez cette section à la main.";
+"Let an agent listen? Yes or no" = "Laisser un agent écouter ? Oui ou non";
