@@ -69,6 +69,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return Self.executableFileID() != atLaunch
     }
 
+    // A clean quit must not leave `bridge.sock` on disk. Startup can cope with
+    // a stale file — it probes for a listener before unlinking — but a socket
+    // that outlives its app reads as "Aloud left something behind" to anyone
+    // who finds it, and the probe is a slower path than not needing one.
+    func applicationWillTerminate(_ notification: Notification) {
+        bridge?.stop()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = launchExecutableID
         AppPaths.ensureStateDir()
