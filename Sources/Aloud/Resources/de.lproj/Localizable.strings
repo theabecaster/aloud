@@ -354,3 +354,21 @@
 "%@ didn’t take the text — it’s in History" = "%@ hat den Text nicht übernommen – er ist im Verlauf";
 "The front app" = "Die aktive App";
 "That app" = "Diese App";
+
+/* Correction suggestions (menu bar cells + Settings — vocabulary) */
+"%ld suggested fixes" = "%ld vorgeschlagene Korrekturen";
+"Suggested" = "Vorgeschlagen";
+"Review" = "Prüfen";
+"Corrections Aloud saw you make. Accept one and it joins the list below; decline and it won’t be suggested again." = "Korrekturen, die Aloud bei dir gesehen hat. Übernommene wandern in die Liste unten; abgelehnte werden nie wieder vorgeschlagen.";
+"Suggested: type “%1$@” instead of “%2$@”" = "Vorschlag: „%1$@“ statt „%2$@“ schreiben";
+"Review %ld suggested fixes" = "%ld vorgeschlagene Korrekturen prüfen";
+"Suggested Fixes" = "Vorgeschlagene Korrekturen";
+"Aloud noticed these corrections. Accepting one fixes that word automatically from now on." = "Aloud hat diese Korrekturen bemerkt. Wird eine übernommen, wird dieses Wort ab sofort automatisch korrigiert.";
+"Accept All" = "Alle übernehmen";
+"Deny All" = "Alle ablehnen";
+"Fix it automatically next time" = "Beim nächsten Mal automatisch korrigieren";
+"Never suggest this fix" = "Diese Korrektur nie wieder vorschlagen";
+"Suggest fixes from your edits" = "Korrekturen aus deinen Änderungen vorschlagen";
+"Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac." = "Aloud bemerkt, wenn du ein Diktat direkt im Text korrigierst, und bietet an, es beim nächsten Mal automatisch zu korrigieren. Nichts verlässt diesen Mac.";
+"Learned from your edits" = "Aus deinen Änderungen gelernt";
+"Aloud noticed a fix — review it in the menu bar" = "Aloud hat eine Korrektur bemerkt – prüfe sie im Menüleisten-Menü";

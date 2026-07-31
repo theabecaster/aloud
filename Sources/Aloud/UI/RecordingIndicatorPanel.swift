@@ -153,8 +153,15 @@ final class RecordingIndicatorPanel {
     // Whether the pill currently wears the hands-free lock. The controller
     // reads this across its async session start: a lock that arrived while
     // the engine was still spinning up must survive the flip from "Getting
-    // ready…" to the live meter (show() resets it for fresh sessions).
+    // ready…" to the live meter. For that read to mean "locked during the
+    // session now starting", the flag has to be cleared when one begins —
+    // hiding the pill leaves it set, and a stale one would carry the lock's
+    // orange mic and stop button onto the next ordinary push-to-talk.
     var isHandsFreeLocked: Bool { model.isLocked }
+
+    func clearHandsFreeLock() {
+        model.isLocked = false
+    }
 
     // Hands-free lock engaged: keep the live meter, add the lock affordance.
     // Only the locked pill takes mouse input (for its close button) — everywhere

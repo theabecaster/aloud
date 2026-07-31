@@ -11,6 +11,11 @@ final class LocalizationTests: XCTestCase {
     // A spread of keys across surfaces: menu bar, status line, settings,
     // onboarding, indicator, uninstall.
     private static let knownKeys = [
+        "Suggested Fixes",
+        "Suggested",
+        "Corrections Aloud saw you make. Accept one and it joins the list below; decline and it won’t be suggested again.",
+        "Review %ld suggested fixes",
+        "Aloud noticed these corrections. Accepting one fixes that word automatically from now on.",
         "Quit Aloud",
         "Hold %@ to dictate",
         "Welcome to Aloud",
@@ -26,6 +31,9 @@ final class LocalizationTests: XCTestCase {
         "%@ didn’t take the text — it’s in History",
         "The front app",
         "That app",
+        "%ld suggested fixes",
+        "Suggest fixes from your edits",
+        "Aloud noticed a fix — review it in the menu bar",
     ]
 
     private let missingMarker = "\u{7F}missing\u{7F}"

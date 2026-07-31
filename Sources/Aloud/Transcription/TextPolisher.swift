@@ -70,6 +70,29 @@ struct Replacement: Codable, Equatable, Identifiable {
     var id = UUID()
     var pattern: String       // what the model wrote
     var replacement: String   // what it should say
+    // Provenance: a rule accepted from a correction suggestion, as opposed to
+    // one the user typed by hand. Only learned rules may be retired
+    // automatically when the user keeps undoing them — hand-made rules are
+    // never touched without the user asking.
+    var learned: Bool = false
+
+    init(id: UUID = UUID(), pattern: String, replacement: String, learned: Bool = false) {
+        self.id = id
+        self.pattern = pattern
+        self.replacement = replacement
+        self.learned = learned
+    }
+
+    // Stored replacement JSON predates `learned` (and users hand-edit these
+    // files) — every field decodes defensively so existing rules survive the
+    // schema change instead of wiping the whole list.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        pattern = try c.decodeIfPresent(String.self, forKey: .pattern) ?? ""
+        replacement = try c.decodeIfPresent(String.self, forKey: .replacement) ?? ""
+        learned = try c.decodeIfPresent(Bool.self, forKey: .learned) ?? false
+    }
 }
 
 struct TextPolisher {

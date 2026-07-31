@@ -40,6 +40,7 @@ final class SettingsStore: ObservableObject {
             : storedLanguages
         pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
         noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? false
+        learnCorrections = defaults.object(forKey: Keys.learnCorrections) as? Bool ?? true
     }
 
     private static func resolveDefaults() -> UserDefaults {
@@ -69,6 +70,7 @@ final class SettingsStore: ObservableObject {
         static let declaredLanguages = "declaredLanguages"
         static let pressEnterCommand = "pressEnterCommand"
         static let noiseReduction = "noiseReduction"
+        static let learnCorrections = "learnCorrections"
         static let deafDevices = "noiseReductionDeafDevices"
     }
 
@@ -164,6 +166,12 @@ final class SettingsStore: ObservableObject {
     // to work out why their voice was being processed.
     @Published var noiseReduction: Bool {
         didSet { defaults.set(noiseReduction, forKey: Keys.noiseReduction) }
+    }
+    // Notice when the user edits a just-typed dictation and offer the fix as a
+    // standing Replacement. Off = no capture and nothing new persisted; pairs
+    // already learned stay where they are.
+    @Published var learnCorrections: Bool {
+        didSet { defaults.set(learnCorrections, forKey: Keys.learnCorrections) }
     }
 
     // Microphones that went completely silent under macOS voice processing.
