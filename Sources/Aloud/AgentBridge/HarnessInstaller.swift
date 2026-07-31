@@ -43,8 +43,12 @@ enum AgentHarness: String, CaseIterable, Codable {
 
     var scope: Scope {
         switch self {
-        case .claudeCode, .codex: return .global
-        case .cursor, .copilot: return .perProject
+        // Cursor keeps global skills in exactly the layout Claude Code uses —
+        // ~/.cursor/skills/<name>/SKILL.md — verified against a real installed
+        // skill on this machine. An earlier draft had it as per-project on the
+        // strength of .cursor/rules/*.mdc, which is a different mechanism.
+        case .claudeCode, .codex, .cursor: return .global
+        case .copilot: return .perProject
         }
     }
 
@@ -72,7 +76,7 @@ enum AgentHarness: String, CaseIterable, Codable {
         switch self {
         case .claudeCode: return ".claude/skills/aloud-voice/SKILL.md"
         case .codex: return ".codex/AGENTS.md"
-        case .cursor: return ".cursor/rules/aloud-voice.mdc"
+        case .cursor: return ".cursor/skills/aloud-voice/SKILL.md"
         case .copilot: return ".github/copilot-instructions.md"
         }
     }
@@ -214,17 +218,6 @@ enum AgentVoiceInstructions {
         return frontmatter + "\n\n" + markedBlock(body(harness: harness, command: command))
     }
 
-    // A Cursor rule is its own file too, but with Cursor's frontmatter.
-    static func cursorRuleFile(command: String) -> String {
-        let frontmatter = """
-        ---
-        description: \(summary)
-        alwaysApply: true
-        ---
-        """
-        return frontmatter + "\n\n" + markedBlock(body(harness: .cursor, command: command))
-    }
-
     // A section to append to a file somebody else owns. The markers are what
     // make removal exact and a second install a no-op.
     static func markedBlock(_ inner: String) -> String {
@@ -294,9 +287,11 @@ struct HarnessInstaller {
     func install(_ harness: AgentHarness) throws -> InstallResult {
         switch harness {
         case .cursor:
-            return .snippet(ProjectSnippet(harness: .cursor,
-                                           relativePath: harness.instructionPath,
-                                           contents: AgentVoiceInstructions.cursorRuleFile(command: command)))
+            let skill = home.appendingPathComponent(harness.instructionPath)
+            let file = AgentVoiceInstructions.skillFile(harness: .cursor, command: command)
+            let wrote = try writeIfDifferent(file, to: skill)
+            return .installed(changed: wrote ? [skill] : [])
+
         case .copilot:
             let block = AgentVoiceInstructions.markedBlock(
                 AgentVoiceInstructions.body(harness: .copilot, command: command))
@@ -329,28 +324,35 @@ struct HarnessInstaller {
         }
     }
 
+    // Delete a skill file we wrote, and the directory it sat in if that leaves
+    // it empty. Guarded by our marker: a hand-written skill that happens to
+    // share the name is not something we get to remove.
+    private func removeSkillDirectory(at skill: URL) throws {
+        guard let text = try? String(contentsOf: skill, encoding: .utf8),
+              text.contains(AgentVoiceInstructions.markerStart) else { return }
+        try? fm.removeItem(at: skill)
+        let dir = skill.deletingLastPathComponent()
+        if (try? fm.contentsOfDirectory(atPath: dir.path))?.isEmpty == true {
+            try? fm.removeItem(at: dir)
+        }
+    }
+
     // MARK: uninstall
 
     func uninstall(_ harness: AgentHarness) throws {
         switch harness {
-        case .cursor, .copilot:
+        case .copilot:
             return  // nothing of ours is on disk to remove
+
+        case .cursor:
+            try removeSkillDirectory(at: home.appendingPathComponent(harness.instructionPath))
 
         case .codex:
             try removeBlock(from: home.appendingPathComponent(harness.instructionPath))
 
         case .claudeCode:
             let skill = home.appendingPathComponent(harness.instructionPath)
-            if let text = try? String(contentsOf: skill, encoding: .utf8),
-               text.contains(AgentVoiceInstructions.markerStart) {
-                // Only ours. A hand-written skill that happens to share the name
-                // is not something we get to delete.
-                try? fm.removeItem(at: skill)
-                let dir = skill.deletingLastPathComponent()
-                if (try? fm.contentsOfDirectory(atPath: dir.path))?.isEmpty == true {
-                    try? fm.removeItem(at: dir)
-                }
-            }
+            try removeSkillDirectory(at: skill)
             // A malformed settings.json on the way out is still not ours to
             // rewrite — surface it so the pane can say the allowlist is stale.
             if let data = try claudeSettings(at: claudeSettingsURL, addingEntries: false) {

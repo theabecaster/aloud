@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 // The transport half of the agent bridge: a Unix domain socket in the running
@@ -182,10 +183,22 @@ enum BridgeServerError: Error, Equatable {
 // MARK: - server
 
 final class BridgeServer: @unchecked Sendable {
+    // What we know about the process on the other end, independent of anything
+    // it told us. `request.harness` is a self-reported label any local process
+    // can set; this is the kernel's answer. The indicator uses it to
+    // corroborate the name it shows, so "Claude Code is listening" rests on
+    // something unforgeable rather than on the caller's word.
+    struct PeerIdentity: Sendable {
+        let pid: pid_t          // -1 when the kernel wouldn't say
+        let name: String?       // executable name for that pid, if resolvable
+
+        var isKnown: Bool { pid > 0 }
+    }
+
     // Every decision the bridge makes lives behind this. The server contains no
     // policy: it decodes, calls out, encodes the answer back. `@Sendable`
     // because the call happens on a background queue, never the main thread.
-    typealias Handler = @Sendable (BridgeRequest) async -> BridgeResponse
+    typealias Handler = @Sendable (BridgeRequest, PeerIdentity) async -> BridgeResponse
 
     // A request is a few hundred bytes. A megabyte is orders of magnitude of
     // headroom and still a hard ceiling on what one connection can make us
@@ -352,6 +365,9 @@ final class BridgeServer: @unchecked Sendable {
 
     private func serve(_ fd: Int32) {
         let limit = maxLineBytes
+        // Read the peer's identity at accept time, before anything it sends can
+        // influence us, and while the process is still guaranteed to exist.
+        let peer = BridgeServer.peerIdentity(of: fd)
         connectionQueue.async { [weak self] in
             guard let self else { close(fd); return }
 
@@ -390,7 +406,7 @@ final class BridgeServer: @unchecked Sendable {
                 // and the write hops back to the I/O queue afterwards. Nothing
                 // blocks waiting on it.
                 Task {
-                    let response = await handler(request)
+                    let response = await handler(request, peer)
                     self.connectionQueue.async { self.reply(fd: fd, response: response) }
                 }
             }
@@ -406,4 +422,19 @@ final class BridgeServer: @unchecked Sendable {
         BridgeSocketIO.writeAll(fd: fd, data: data)
         BridgeSocketIO.drainAndClose(fd: fd)
     }
+
+    // LOCAL_PEERPID is the SO_PEERCRED equivalent on Darwin: the kernel's view
+    // of who connected, which the peer cannot spoof.
+    static func peerIdentity(of fd: Int32) -> PeerIdentity {
+        var pid: pid_t = -1
+        var size = socklen_t(MemoryLayout<pid_t>.size)
+        guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &size) == 0, pid > 0 else {
+            return PeerIdentity(pid: -1, name: nil)
+        }
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let written = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        let path = written > 0 ? String(cString: buffer) : nil
+        return PeerIdentity(pid: pid, name: path.map { URL(fileURLWithPath: $0).lastPathComponent })
+    }
+
 }

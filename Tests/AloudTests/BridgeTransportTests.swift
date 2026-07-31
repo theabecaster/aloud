@@ -44,14 +44,44 @@ final class BridgeTransportTests: XCTestCase {
         func set(_ newValue: T) { lock.lock(); defer { lock.unlock() }; value = newValue }
     }
 
+    // Most tests don't care who the peer is, so the helper takes the
+    // request-only shape and drops the identity. testPeerIdentity… uses the
+    // full handler directly.
     @discardableResult
     private func startServer(maxLineBytes: Int = BridgeServer.defaultMaxLineBytes,
-                             handler: BridgeServer.Handler? = nil) throws -> BridgeServer {
+                             handler: (@Sendable (BridgeRequest) async -> BridgeResponse)? = nil)
+        throws -> BridgeServer {
         let server = BridgeServer(socketURL: socketURL, maxLineBytes: maxLineBytes)
-        server.handler = handler
+        if let handler { server.handler = { request, _ in await handler(request) } }
         try server.start()
         self.server = server
         return server
+    }
+
+    // The --harness flag is a label any local process can set. The indicator
+    // says "Claude Code is listening", so that name has to be corroborated
+    // against something the caller cannot forge — the kernel's view of who
+    // actually connected.
+    func testPeerIdentityIsReadFromTheKernelNotTheRequest() throws {
+        let seen = Box<BridgeServer.PeerIdentity?>(BridgeServer.PeerIdentity?.none)
+        let server = BridgeServer(socketURL: socketURL)
+        server.handler = { _, peer in
+            seen.set(peer)
+            return BridgeResponse.success()
+        }
+        try server.start()
+        self.server = server
+
+        var claim = request(.claim)
+        claim.harness = "definitely-not-who-i-am"
+        claim.pid = 999_999                     // a pid the caller made up
+        _ = BridgeClient.send(claim, timeout: 5, socketURL: socketURL)
+
+        let peer = try XCTUnwrap(seen.current)
+        XCTAssertTrue(peer.isKnown, "the kernel should identify a local peer")
+        XCTAssertEqual(peer.pid, getpid(), "tests connect to themselves, so the peer is this process")
+        XCTAssertNotEqual(peer.pid, claim.pid, "the self-reported pid must not be what we trust")
+        XCTAssertNotNil(peer.name)
     }
 
     private func request(_ op: BridgeOperation = .status) -> BridgeRequest {

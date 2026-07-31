@@ -83,7 +83,7 @@ final class HarnessInstallerTests: XCTestCase {
 
         let before = installer().detect()
         XCTAssertEqual(before.first(where: { $0.harness == .claudeCode })?.isInstalled, false)
-        XCTAssertEqual(before.first(where: { $0.harness == .cursor })?.scope, .perProject)
+        XCTAssertEqual(before.first(where: { $0.harness == .cursor })?.scope, .global)
 
         _ = try installer().install(.claudeCode)
         let after = installer().detect()
@@ -279,39 +279,62 @@ final class HarnessInstallerTests: XCTestCase {
 
     // MARK: - per-project harnesses
 
-    // Cursor and Copilot keep their config inside the user's repo. Writing
-    // there would mean Aloud creating files in a git working tree the user did
-    // not ask us to touch, so the install hands back text instead.
-    func testPerProjectHarnessesReturnASnippetAndWriteNothing() throws {
-        try makeDir(".cursor")
+    // Copilot keeps its instructions inside the user's repo. Writing there
+    // would mean Aloud creating files in a git working tree the user did not
+    // ask us to touch, so the install hands back text instead.
+    func testCopilotReturnsASnippetAndWritesNothing() throws {
         try makeDir(".config/github-copilot")
 
-        for harness in [AgentHarness.cursor, .copilot] {
-            guard case .snippet(let snippet) = try installer().install(harness) else {
-                return XCTFail("\(harness.displayName) must not write into a project")
-            }
-            XCTAssertEqual(snippet.harness, harness)
-            XCTAssertEqual(snippet.relativePath, harness.instructionPath)
-            XCTAssertTrue(snippet.contents.contains("--harness \(harness.id)"))
-            XCTAssertTrue(snippet.contents.contains(AgentVoiceInstructions.markerStart),
-                          "the snippet carries the markers so a later manual removal is still exact")
+        guard case .snippet(let snippet) = try installer().install(.copilot) else {
+            return XCTFail("Copilot must not write into a project")
         }
+        XCTAssertEqual(snippet.harness, .copilot)
+        XCTAssertEqual(snippet.relativePath, AgentHarness.copilot.instructionPath)
+        XCTAssertTrue(snippet.contents.contains("--harness copilot"))
+        XCTAssertTrue(snippet.contents.contains(AgentVoiceInstructions.markerStart),
+                      "the snippet carries the markers so a later manual removal is still exact")
 
-        // Nothing new on disk beyond the two marker directories we made.
-        let entries = try fm.contentsOfDirectory(atPath: home.path).sorted()
-        XCTAssertEqual(entries, [".config", ".cursor"])
-        XCTAssertFalse(installer().isInstalled(.cursor))
+        // Nothing new on disk beyond the marker directory we made.
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: home.path).sorted(), [".config"])
         XCTAssertFalse(installer().isInstalled(.copilot))
     }
 
-    // Cursor rules are read from frontmatter; without `alwaysApply` the rule
-    // sits there and never fires.
-    func testCursorSnippetCarriesRuleFrontmatter() throws {
-        guard case .snippet(let snippet) = try installer().install(.cursor) else {
-            return XCTFail("expected a snippet")
+    // Cursor reads global skills from ~/.cursor/skills/<name>/SKILL.md, the
+    // same layout Claude Code uses — verified against a real installed skill.
+    // An earlier draft treated it as per-project on the strength of
+    // .cursor/rules/*.mdc, which is a different mechanism, and made Cursor
+    // users do by hand what we can do for them.
+    func testCursorInstallsGloballyLikeClaudeCode() throws {
+        try makeDir(".cursor")
+        guard case .installed(let changed) = try installer().install(.cursor) else {
+            return XCTFail("Cursor installs globally, not as a snippet")
         }
-        XCTAssertTrue(snippet.contents.hasPrefix("---\n"))
-        XCTAssertTrue(snippet.contents.contains("alwaysApply: true"))
+        let skill = home.appendingPathComponent(".cursor/skills/aloud-voice/SKILL.md")
+        XCTAssertEqual(changed, [skill])
+        XCTAssertTrue(fm.fileExists(atPath: skill.path))
+        XCTAssertTrue(installer().isInstalled(.cursor))
+
+        let text = try String(contentsOf: skill, encoding: .utf8)
+        XCTAssertTrue(text.contains("--harness cursor"))
+        XCTAssertTrue(text.hasPrefix("---\n"), "skills are read from their frontmatter")
+
+        // And it comes back out cleanly, directory and all.
+        try installer().uninstall(.cursor)
+        XCTAssertFalse(fm.fileExists(atPath: skill.path))
+        XCTAssertFalse(fm.fileExists(atPath: skill.deletingLastPathComponent().path))
+        XCTAssertFalse(installer().isInstalled(.cursor))
+    }
+
+    // A skill of ours is deleted on uninstall; one that merely shares the name
+    // is somebody else's file.
+    func testCursorUninstallLeavesAForeignSkillAlone() throws {
+        let skill = home.appendingPathComponent(".cursor/skills/aloud-voice/SKILL.md")
+        try fm.createDirectory(at: skill.deletingLastPathComponent(),
+                               withIntermediateDirectories: true)
+        try "hand written, not ours".write(to: skill, atomically: true, encoding: .utf8)
+
+        try installer().uninstall(.cursor)
+        XCTAssertTrue(fm.fileExists(atPath: skill.path))
     }
 
     // MARK: - the instructions themselves
