@@ -36,6 +36,7 @@ struct SettingsView: View {
         case vocabulary = "Vocabulary"
         case snippets = "Snippets"
         case appRules = "App Rules"
+        case agents = "Agent Speak"
         case history = "History"
         case about = "About"
         var id: String { rawValue }
@@ -47,6 +48,7 @@ struct SettingsView: View {
             case .vocabulary: return loc("Teach Aloud the words that matter to you.")
             case .snippets: return loc("Turn short phrases into text you use often.")
             case .appRules: return loc("Choose how Aloud writes in specific apps.")
+            case .agents: return loc("Let coding agents ask you questions out loud.")
             case .history: return loc("Find, copy, and correct your recent dictations.")
             case .about: return loc("Version, updates, and privacy.")
             }
@@ -58,6 +60,7 @@ struct SettingsView: View {
             case .vocabulary: return "character.book.closed"
             case .snippets: return "text.insert"
             case .appRules: return "macwindow"
+            case .agents: return "sparkles"
             case .history: return "clock"
             case .about: return "info.circle"
             }
@@ -66,11 +69,15 @@ struct SettingsView: View {
 
     // Headerless clusters: the grouping reads as rhythm in the sidebar
     // without inventing category names the user has to learn.
-    private let clusters: [[Section]] = [
-        [.general, .dictation],
-        [.vocabulary, .snippets, .appRules],
-        [.history, .about],
-    ]
+    // Agents is absent, not disabled, until the experiment is switched on: the
+    // gate's promise is that the feature does not exist until asked for, and a
+    // greyed row advertising it would break that. The onboarding page and
+    // Settings → General are the two ways in.
+    private var clusters: [[Section]] {
+        var middle: [Section] = [.vocabulary, .snippets, .appRules]
+        if settings.experimentalAgentVoice { middle.append(.agents) }
+        return [[.general, .dictation], middle, [.history, .about]]
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -119,6 +126,12 @@ struct SettingsView: View {
         }
         .frame(minWidth: 760, idealWidth: 820, maxWidth: 1040,
                minHeight: 540, idealHeight: 620, maxHeight: 920)
+        // Turning the experiment off while standing in its pane would leave the
+        // selection pointing at a row that no longer exists — the sidebar
+        // empties out and the detail keeps rendering. Step back to General.
+        .onChange(of: settings.experimentalAgentVoice) { _, on in
+            if !on, navigation.section == .agents { navigation.section = .general }
+        }
         .overlay(alignment: .top) {
             if controller.showSettingsStopBanner {
                 Label(loc("Stopped listening so you can change settings"), systemImage: "mic.slash")
@@ -143,6 +156,7 @@ struct SettingsView: View {
         case .vocabulary: VocabularySettings(settings: controller.settings)
         case .snippets: SnippetsSettings(settings: controller.settings)
         case .appRules: AppRulesSettings(settings: controller.settings)
+        case .agents: AgentsSettings(settings: controller.settings)
         case .history: HistorySettings(history: controller.history, settings: controller.settings)
         case .about: AboutSettings()
         }
@@ -480,6 +494,20 @@ struct GeneralSettings: View {
     // a bare Spacer between sections draws as an empty card.
     private var startup: some View {
         Form {
+            // The way back in for anyone who skipped the onboarding page. The
+            // Agents pane carries its own off switch, but it does not exist
+            // while the experiment is off — so without this the only route in
+            // would be a screen the user has already passed.
+            SwiftUI.Section {
+                Toggle(loc("Agent Speak"), isOn: $settings.experimentalAgentVoice)
+            } header: {
+                Text(loc("Experimental"))
+            } footer: {
+                Text(loc("Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             SwiftUI.Section {
                 Toggle(loc("Open Aloud at login"), isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in

@@ -7,6 +7,8 @@ let cliArgs = Array(CommandLine.arguments.dropFirst())
 // The indicator demo is a CLI verb that needs the app loop: it puts the real
 // pill on screen with no microphone, model, or permissions so the indicator can
 // be looked at (or screenshotted) on a machine that hasn't granted anything.
+// Development tooling, so it goes with the rest of the dev verbs (see CLI.swift).
+#if !ALOUD_PROD_CLI
 if cliArgs.first == "--indicator-demo" {
     let code = CLI.prepareIndicatorDemo(path: cliArgs.count > 1 ? cliArgs[1] : nil)
     if code != 0 { exit(code) }
@@ -15,8 +17,16 @@ if cliArgs.first == "--indicator-demo" {
     app.run()
     exit(0)
 }
+#endif
 
-if let first = cliArgs.first, first.hasPrefix("--") {
+// Agent verbs are bare subcommands, not --flags: `aloud speak "…"` reads
+// naturally in the skill files we install, and it keeps the supported surface
+// visibly separate from the development tooling. They have to be matched
+// explicitly — anything unrecognised must still fall through to launching the
+// menu bar app, which is what a bare `open -a Aloud` relies on.
+let agentVerbs: Set<String> = ["claim", "release", "speak", "listen", "status"]
+
+if let first = cliArgs.first, first.hasPrefix("--") || agentVerbs.contains(first) {
     let code = await CLI.run(cliArgs)
     exit(code)
 }

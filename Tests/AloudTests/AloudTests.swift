@@ -184,6 +184,23 @@ final class HotkeyEngineTests: XCTestCase {
             "It cannot ship this week.", original: "um it cannot ship this week testing is not done"))
     }
 
+    // Observed live (2026-07-31): an agent listen ended by the hotkey cut the
+    // speaker off mid-sentence, and the model finished the sentence for them —
+    // "…I think it's gonna be a very good" came back ending "…a good
+    // response." A single invented word survives the kept-ratio net, so the
+    // truncated-tail net has to convict on the last word alone.
+    func testTruncatedTranscriptMustNotBeCompleted() {
+        let original = "Okay, so I'm talking about this thing and then when I'm going on about it and then I'm actually trying to build this up and I'm very excited about it, I think it's gonna be a very good"
+        XCTAssertNil(EnhancerOutputCheck.validate(
+            "I'm excited about this thing and think it's gonna be a good response.",
+            original: original))
+        // The same cut-off transcript tightened without inventing an ending
+        // must survive — the net reads the tail, not the truncation itself.
+        XCTAssertNotNil(EnhancerOutputCheck.validate(
+            "I'm talking about this thing, building it up, and I'm excited — I think it's gonna be a very good",
+            original: original))
+    }
+
     @MainActor
     func testContextHintBuiltFromFieldText() {
         XCTAssertNil(DictationController.contextHint(from: nil))
@@ -726,9 +743,22 @@ final class LanguageDetectionTests: XCTestCase {
 }
 
 final class SettingsStoreTests: XCTestCase {
+    // One fixed suite, emptied on the way in rather than a fresh UUID per run.
+    // removePersistentDomain empties the domain but cfprefsd rewrites the plist
+    // asynchronously afterwards, so a random name leaves a file in
+    // ~/Library/Preferences every time that race is lost. A stable name still
+    // isolates and can leave at most one.
+    private static let suite = "aloud-tests-settings-store"
+
+    private func freshDefaults() -> UserDefaults {
+        let defaults = UserDefaults(suiteName: Self.suite)!
+        defaults.removePersistentDomain(forName: Self.suite)
+        return defaults
+    }
+
     func testRoundTrip() {
-        let suite = "aloud-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = Self.suite
+        let defaults = freshDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let s1 = SettingsStore(defaults: defaults)
@@ -749,8 +779,8 @@ final class SettingsStoreTests: XCTestCase {
     // A key in two slots means one of them silently never fires: the dictation
     // key keeps it, the hands-free key beats the command key, losers clear.
     func testCollidingKeysAreDropped() {
-        let suite = "aloud-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = Self.suite
+        let defaults = freshDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let settings = SettingsStore(defaults: defaults)

@@ -41,6 +41,13 @@ final class SettingsStore: ObservableObject {
         pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
         noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? false
         learnCorrections = defaults.object(forKey: Keys.learnCorrections) as? Bool ?? true
+        installedHarnesses = defaults.object(forKey: Keys.installedHarnesses) as? [String] ?? []
+        agentConsentMode = (defaults.string(forKey: Keys.agentConsentMode))
+            .flatMap(AgentConsentMode.init) ?? .confirmByVoice
+        // Off unless the user has opted in. `bool(forKey:)` is false for a key
+        // that was never written, which is exactly the default we want — an
+        // experiment nobody asked for should not be running.
+        experimentalAgentVoice = defaults.bool(forKey: Keys.experimentalAgentVoice)
     }
 
     private static func resolveDefaults() -> UserDefaults {
@@ -72,6 +79,9 @@ final class SettingsStore: ObservableObject {
         static let noiseReduction = "noiseReduction"
         static let learnCorrections = "learnCorrections"
         static let deafDevices = "noiseReductionDeafDevices"
+        static let experimentalAgentVoice = "experimentalAgentVoice"
+        static let agentConsentMode = "agentConsentMode"
+        static let installedHarnesses = "installedHarnesses"
     }
 
     @Published var hotkey: Hotkey {
@@ -173,6 +183,41 @@ final class SettingsStore: ObservableObject {
     @Published var learnCorrections: Bool {
         didSet { defaults.set(learnCorrections, forKey: Keys.learnCorrections) }
     }
+
+    // MARK: agent voice
+
+    // The experimental gate, and the feature's master switch — one control, not
+    // two. Off is the shipping default and means the whole feature is
+    // unavailable: Settings shows no Agents section, and every agent call is
+    // refused with `disabled`, which tells an agent to stop asking rather than
+    // to retry. Nothing underneath is conditional on it; only reachability is.
+    //
+    // Note this cannot be derived from whether a harness is installed the way a
+    // plain master switch could: the install UI lives on the page this reveals,
+    // so a harness can never exist before the switch is on.
+    @Published var experimentalAgentVoice: Bool {
+        didSet { defaults.set(experimentalAgentVoice, forKey: Keys.experimentalAgentVoice) }
+    }
+    // How an agent's request to listen is approved. Chosen on the onboarding
+    // install page rather than buried here, because that is the screen where
+    // the user is actually weighing it up.
+    @Published var agentConsentMode: AgentConsentMode {
+        didSet { defaults.set(agentConsentMode.rawValue, forKey: Keys.agentConsentMode) }
+    }
+    // Harness ids the installer has wired up. Drives whether the spoken prompt
+    // names the caller: with one installed "an agent wants to listen" is
+    // clearer than naming it, so the name only appears when there is genuine
+    // ambiguity to resolve.
+    @Published var installedHarnesses: [String] {
+        didSet { defaults.set(installedHarnesses, forKey: Keys.installedHarnesses) }
+    }
+
+    var namesHarnessWhenSpeaking: Bool { installedHarnesses.count > 1 }
+
+    // What the bridge asks before doing anything for an agent. Kept as one
+    // named question so every call site reads the same, and so turning the
+    // experiment off can never be half-applied.
+    var agentVoiceAvailable: Bool { experimentalAgentVoice }
 
     // Microphones that went completely silent under macOS voice processing.
     // Some inputs — Bluetooth headsets in particular — accept it and then

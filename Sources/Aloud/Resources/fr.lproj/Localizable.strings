@@ -30,6 +30,8 @@
 "Voice download didn’t finish" = "Le téléchargement vocal ne s’est pas terminé";
 "Dictation key isn’t working — try reopening Aloud" = "La touche de dictée ne fonctionne pas – essayez de rouvrir Aloud";
 "Hold %@ to dictate" = "Maintenez %@ pour dicter";
+"%@ is using the microphone" = "%@ utilise le micro";
+"End %@’s session" = "Terminer la session de %@";
 
 /* Windows */
 "Welcome to Aloud" = "Bienvenue dans Aloud";
@@ -123,6 +125,7 @@
 "Reduce background noise" = "Réduire le bruit de fond";
 "The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again." = "Le filtre fonctionne via les haut-parleurs du Mac ; il se met donc en pause tant que le son va vers %@. Il revient — avec votre réglage — dès que les haut-parleurs redeviennent la sortie.";
 "Not available with %@." = "Indisponible avec %@.";
+"this output" = "cette sortie";
 "Getting ready…" = "Préparation…";
 "%@ (Bluetooth)" = "%@ (Bluetooth)";
 "A Bluetooth mic puts the whole headset into mono call audio while Aloud listens." = "Un micro Bluetooth fait basculer tout le casque en audio d’appel mono pendant qu’Aloud écoute.";
@@ -131,6 +134,7 @@
 "Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin." = "Filtre le bruit ambiant, le cliquetis du clavier et le son des haut-parleurs du Mac. Laissez-le désactivé si votre voix paraît fluette.";
 "More info" = "Plus d’infos";
 "Sound when recording starts" = "Son au début de l’enregistrement";
+"Play sound effects" = "Jouer les effets sonores";
 "Open Aloud at login" = "Ouvrir Aloud à l’ouverture de session";
 
 /* Settings — keys */
@@ -265,7 +269,7 @@
 "Setting Up Voice Recognition" = "Configuration de la reconnaissance vocale";
 "A one-time download, about 500 MB. After this, dictation works offline." = "Un téléchargement unique d’environ 500 Mo. Ensuite, la dictée fonctionne hors ligne.";
 "No internet connection" = "Aucune connexion Internet";
-"This screen continues on its own once you're back online." = "Cet écran continue tout seul dès que vous êtes de nouveau en ligne.";
+"This screen continues on its own once you’re back online." = "Cet écran continue tout seul dès que vous êtes de nouveau en ligne.";
 "Download" = "Télécharger";
 "%ld%% — you can keep using your Mac" = "%ld %% – vous pouvez continuer à utiliser votre Mac";
 "Almost ready…" = "Presque prêt…";
@@ -372,3 +376,88 @@
 "Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac." = "Aloud remarque quand vous corrigez une dictée là où elle a été tapée et propose de la corriger automatiquement la prochaine fois. Rien ne quitte ce Mac.";
 "Learned from your edits" = "Apprise de vos modifications";
 "Aloud noticed a fix — review it in the menu bar" = "Aloud a remarqué une correction — vérifiez-la dans la barre des menus";
+
+/* Agent Speak — the spoken consent prompt. This is the string that
+   tells someone a decision is being asked of them, so it must never
+   fall back to English. */
+"Let %@ listen? Yes or no" = "Laisser %@ écouter ? Oui ou non";
+
+/* Agent Speak — Settings → Agents. The master switch, how a listen is
+   approved, and the agent tools Aloud can set itself up in. */
+"Agents can ask to speak through your speakers and hear your answer. Turning this off refuses every request — anything set up below stays, so switching it back on doesn’t mean starting over." = "Les agents peuvent demander à parler par vos haut-parleurs et à entendre votre réponse. Désactiver cette option refuse toutes les demandes ; ce que vous avez configuré ci-dessous est conservé, donc la réactiver ne vous fera pas repartir de zéro.";
+"Consent" = "Consentement";
+"The recording indicator always shows while an agent is listening, and nothing leaves this Mac." = "L’indicateur d’enregistrement reste visible tant qu’un agent écoute, et rien ne quitte ce Mac.";
+"Agent Tools" = "Outils d’agent";
+"No agent tools found on this Mac." = "Aucun outil d’agent trouvé sur ce Mac.";
+"Aloud looks for the agent tools you already use. Open one, then come back." = "Aloud recherche les outils d’agent que vous utilisez déjà. Ouvrez-en un, puis revenez ici.";
+"Aloud writes a short instructions file so an agent knows it can talk to you. Remove deletes that file again." = "Aloud écrit un court fichier d’instructions pour qu’un agent sache qu’il peut vous parler. « Supprimer » efface ce fichier.";
+"Install" = "Installer";
+"Already set up on this Mac" = "Déjà configuré sur ce Mac";
+"Lives in each project — paste it into %@ in the repos you want it in." = "Se place dans chaque projet : collez-le dans %@ des dépôts où vous le voulez.";
+"%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand." = "%@ n’est pas du JSON valide : Aloud n’y a pas touché. Ajoutez ces lignes à la main.";
+"Couldn’t write %1$@ — %2$@" = "Impossible d’écrire %1$@ — %2$@";
+"Let coding agents ask you questions out loud." = "Laissez les agents vous poser des questions à voix haute.";
+"Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings." = "Permet aux agents de codage de vous poser une question à voix haute et d’entendre votre réponse. Ajoute la section « Voix des agents » aux Réglages.";
+
+/* Agent Speak — the banner when the feature is on but the bridge never
+   started. The technical reason is shown verbatim underneath, so these
+   two carry the plain-language part: what is wrong, and the one thing
+   worth trying. The apostrophe is straight because the loc() call is —
+   the key has to match the source byte for byte. */
+"Agents can’t reach Aloud right now." = "Les agents ne peuvent pas joindre Aloud pour le moment.";
+"Restarting Aloud usually clears this." = "Relancer Aloud règle généralement le problème.";
+
+/* Agent Speak — the consent modes: how an agent's request to listen
+   is approved, and what each mode costs. */
+"Open" = "Ouvert";
+"Agents can start listening right away. The recording indicator always shows when they do." = "Les agents peuvent commencer à écouter immédiatement. L’indicateur d’enregistrement s’affiche toujours quand ils le font.";
+"Confirm on screen" = "Confirmer à l’écran";
+"Nothing reaches the agent until you accept on screen." = "Rien ne parvient à l’agent tant que vous n’avez pas accepté à l’écran.";
+"Confirm by voice" = "Confirmer à la voix";
+"Aloud asks out loud and waits for you to say accept — no need to look at the screen." = "Aloud pose la question à voix haute et attend que vous disiez accepter — inutile de regarder l’écran.";
+
+/* Agent Speak — the onboarding opt-in. A consent screen: what is being
+   granted, and the two answers. */
+"Let Agents Ask You Out Loud" = "Laissez les agents vous poser des questions à voix haute";
+"A coding agent can ask you a question out loud and hear your answer, so you can keep working instead of switching to its window." = "Un agent de codage peut vous poser une question à voix haute et entendre votre réponse : vous continuez à travailler au lieu de basculer vers sa fenêtre.";
+"This is experimental. You can turn it on or off any time in Settings." = "C’est expérimental. Vous pouvez l’activer ou le désactiver à tout moment dans les Réglages.";
+"Agents can turn on the microphone" = "Les agents peuvent activer le micro";
+"To hear your answer to a question they asked." = "Pour entendre votre réponse à la question qu’ils ont posée.";
+"Agents can speak through your speakers" = "Les agents peuvent parler par vos haut-parleurs";
+"That is how the question reaches you." = "C’est ainsi que la question vous parvient.";
+"You always see it happening" = "Vous le voyez toujours";
+"The recording indicator appears every time, and names the agent." = "L’indicateur d’enregistrement apparaît à chaque fois et nomme l’agent.";
+"Nothing leaves this Mac" = "Rien ne quitte ce Mac";
+"Questions and answers stay on this Mac, like the rest of Aloud." = "Les questions et les réponses restent sur ce Mac, comme le reste d’Aloud.";
+"Turn Off" = "Désactiver";
+"Not Now" = "Pas maintenant";
+"Turn On" = "Activer";
+
+/* Agent Speak — the pill while an agent has the mic. Room is tight:
+   the headline is one line beside a glyph and the buttons, so these
+   stay as short as the English. The heads match the spoken consent
+   prompt word for word — one event should not read as two. */
+"An agent" = "Un agent";
+"An agent wants to listen" = "Un agent veut écouter";
+"%@ wants to listen" = "%@ veut écouter";
+"Accept — or press the Aloud hotkey" = "Accepter – ou appuyez sur la touche Aloud";
+"Decline — or press Esc" = "Refuser – ou appuyez sur Échap";
+"Waiting for your answer" = "En attente de votre réponse";
+"Listening — this goes to the agent" = "À l’écoute – ceci va à l’agent";
+"The agent is speaking" = "L’agent parle";
+"Agent Speak" = "Voix des agents";
+
+/* Agent Speak — live sessions in the menu bar footer. */
+"%@ — using the microphone" = "%@ — utilise le micro";
+"%@ — waiting" = "%@ — en attente";
+"%ld sessions" = "%ld sessions";
+"Agent sessions using the microphone" = "Sessions d’agents utilisant le micro";
+"Agent sessions" = "Sessions d’agents";
+"End %@’s session?" = "Terminer la session de %@ ?";
+"End all" = "Tout terminer";
+"Close" = "Fermer";
+"End every session, including waiting ones" = "Terminer toutes les sessions, y compris celles en attente";
+"It gives the microphone back and tells the agent the session is over." = "Le micro est rendu et l’agent est informé que la session est terminée.";
+"%@ isn’t valid JSON, so Aloud left it alone. Remove the Aloud permission entries by hand." = "%@ n’est pas un JSON valide, donc Aloud n’y a pas touché. Retirez les entrées d’autorisation Aloud à la main.";
+"%@ has an Aloud section with a broken marker, so Aloud left it alone. Fix or remove that section by hand." = "%@ contient une section Aloud avec un marqueur endommagé, donc Aloud n’y a pas touché. Corrigez ou retirez cette section à la main.";
+"Let an agent listen? Yes or no" = "Laisser un agent écouter ? Oui ou non";

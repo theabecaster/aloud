@@ -9,8 +9,27 @@ cd "$DIR"
 VERSION="${1:-0.0.0}"
 case "$VERSION" in (*[!0-9.]*) VERSION="0.0.0" ;; esac
 
-echo "==> swift build -c release"
-swift build -c release
+# Every staged bundle locks the CLI down to the verbs a user-facing build should
+# answer (--version, plus the agent verbs). The development verbs type into the
+# focused app, open the microphone, and print the user's paths and devices —
+# nothing a signed, TCC-trusted binary should offer to any process that runs it.
+#
+# ALOUD_DEV_CLI=1 stages an unlocked bundle instead, for the tests that must
+# drive an *installed* app (scripts/loop-test.sh --simulate-hold). Release
+# automation never sets it. Note this is deliberately not tied to the build
+# configuration: CI, scripts/e2e.sh and loop-test.sh all use release builds and
+# all need the development verbs, so the split has to happen at packaging.
+#
+# Spelled out rather than built as an array: macOS ships bash 3.2, where
+# expanding an empty array under `set -u` is an unbound-variable error.
+if [ "${ALOUD_DEV_CLI:-0}" = "1" ]; then
+  echo "==> WARNING: ALOUD_DEV_CLI=1 — staging with development CLI verbs exposed"
+  echo "==> swift build -c release"
+  swift build -c release
+else
+  echo "==> swift build -c release -Xswiftc -DALOUD_PROD_CLI"
+  swift build -c release -Xswiftc -DALOUD_PROD_CLI
+fi
 
 APP="dist/Aloud.app"
 rm -rf "$APP"

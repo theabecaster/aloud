@@ -35,6 +35,18 @@ final class SpeechActivity: @unchecked Sendable {
         return ProcessInfo.processInfo.systemUptime - reference
     }
 
+    // Whether anyone has actually spoken this session.
+    //
+    // `secondsSinceSpeech` cannot answer this: with nothing heard yet it counts
+    // from the session start, so a freshly started detector reports ~0 — which
+    // reads exactly like someone talking right now. Anything endpointing on
+    // silence needs to know the difference, or it fires on an empty room the
+    // moment it starts.
+    var hasHeardSpeech: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return running && lastSpeechUptime != nil
+    }
+
     // Begin a session. No-op (and `secondsSinceSpeech` stays nil) when the
     // detector isn't loaded, so this is always safe to call.
     func start() {

@@ -34,6 +34,11 @@ final class RecordingIndicatorPanel {
     // invisible. Defined once because it is set in two places, and when those
     // two drifted apart the reposition quietly squashed the badge flat.
     static let panelSize = NSSize(width: 280, height: 80)
+    // The agent variant carries a name, a phase glyph and a line or two of
+    // transcript, so it needs a wider window with headroom for the second row
+    // to grow into. Same reasoning as above: the window is only the space the
+    // pill floats in, and the pill stays centred in it.
+    static let agentPanelSize = NSSize(width: 380, height: 140)
     // Hands-free silence reminder ("Still listening…", rule in SilenceReminder
     // below). These two track it when no speech detector is available: the
     // input level that counts as a voice, and when it was last cleared.
@@ -322,12 +327,169 @@ final class RecordingIndicatorPanel {
         }
     }
 
+    // MARK: - agent sessions (docs/agent-voice-bridge.md §7.1d)
+
+    // Whether the pill names the caller, overriding the settings rule
+    // (`namesHarnessWhenSpeaking`: name it only when more than one harness is
+    // installed). Nil is the rule; --indicator-demo sets it directly so both
+    // wordings can be looked at without writing to the user's settings.
+    var namesCaller: Bool?
+
+    // An agent session is on screen. Calling it again is how the phase moves —
+    // the transcript, the consent controls and the meter survive, because the
+    // pill is one session's worth of state, not one message's.
+    //
+    // The meter providers are optional: pass them once when capture starts and
+    // leave them off for later phase changes.
+    func showAgentSession(harness: String?,
+                          phase: AgentIndicatorPhase = .listening,
+                          levelProvider: (() -> Float)? = nil,
+                          bandsProvider: (() -> [Float])? = nil) {
+        announceTask?.cancel()
+        enterAgentMode()
+        model.agentPhase = phase
+        model.agentCaller = callerLabel(harness)
+        present()
+        // Agent pills are clickable throughout — the accept/deny controls can
+        // appear at any point in the session, and a pill that only started
+        // taking clicks at that moment would drop the first one.
+        panel?.ignoresMouseEvents = false
+        guard let levelProvider else { return }
+        attachMeter(levelProvider: levelProvider, bandsProvider: bandsProvider)
+    }
+
+    // Start the meter on a pill that is already up. Confirm-by-voice needs it:
+    // the question is shown first and the microphone opens only once the spoken
+    // prompt has finished playing, so there is nothing to meter at show time.
+    // Without this the pill renders a resting meter under a question that is
+    // waiting on the user's voice — which is indistinguishable from a
+    // microphone that never opened, and that is a failure this feature has
+    // already had. A dead meter must mean a dead microphone.
+    func attachMeter(levelProvider: @escaping () -> Float,
+                     bandsProvider: (() -> [Float])? = nil,
+                     micIsLive: Bool = true) {
+        model.micIsLive = micIsLive
+        levelTimer?.invalidate()
+        levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            let level = levelProvider()
+            let bands = bandsProvider?() ?? [Float](repeating: level, count: SpectrumAnalyzer.bandCount)
+            Task { @MainActor in
+                guard let self else { return }
+                self.model.level = level > self.model.level
+                    ? level
+                    : self.model.level + (level - self.model.level) * 0.25
+                self.model.bands = Self.smooth(self.model.bands, toward: bands)
+            }
+        }
+    }
+
+    // The phase alone, for a session that is already up.
+    func updateAgentPhase(_ phase: AgentIndicatorPhase) {
+        model.agentPhase = phase
+    }
+
+    func setMicIsLive(_ live: Bool) {
+        model.micIsLive = live
+    }
+
+    // What has been heard so far, in full — the pill keeps only the tail of it.
+    // Deliberately ungated: a first partial that arrives a beat before the
+    // session is shown is kept rather than dropped, and entering an agent
+    // session clears whatever the last one left behind.
+    func updateTranscript(_ text: String) {
+        model.agentTranscript = text
+    }
+
+    // Consent mode 2: the same pill, in a pending state. The callbacks are
+    // whatever the controller wants an accept or a decline to mean — Esc and
+    // the hotkey are wired up outside, and land on these same two.
+    func showConsent(prompt: ConsentPrompt,
+                     onAccept: @escaping () -> Void,
+                     onDecline: @escaping () -> Void) {
+        announceTask?.cancel()
+        enterAgentMode()
+        model.agentPhase = .pending
+        model.agentCaller = callerLabel(prompt.name)
+        model.consent = prompt
+        model.onAcceptConsent = onAccept
+        model.onDeclineConsent = onDecline
+        present()
+        panel?.ignoresMouseEvents = false
+    }
+
+    // The question resolved — by a click, a spoken answer or the deadline.
+    // Only the controls go; the pill stays for whatever happens next.
+    func dismissConsent(phase: AgentIndicatorPhase = .listening) {
+        model.consent = nil
+        model.onAcceptConsent = nil
+        model.onDeclineConsent = nil
+        model.agentPhase = phase
+    }
+
+    // Switching into the agent variant. A session already in it keeps
+    // everything; arriving from anywhere else starts clean, so no dictation
+    // state (a lock, a notice, a Basic tag) and no previous agent's words can
+    // ride along.
+    private func enterAgentMode() {
+        // The carry-over clears run on EVERY session start, not just the
+        // transition into agent mode: two agent sessions can follow each other
+        // faster than the pill's fade-out, so `mode` is still `.agent` when
+        // the second begins and the old guard skipped the whole reset —
+        // leaving the previous conversation's transcript on the new pill.
+        model.agentTranscript = ""
+        model.consent = nil
+        model.onAcceptConsent = nil
+        model.onDeclineConsent = nil
+        guard model.mode != .agent else { return }
+        levelTimer?.invalidate()
+        levelTimer = nil
+        model.mode = .agent
+        model.hint = nil
+        model.notice = nil
+        model.isLocked = false
+        model.isCommand = false
+        model.stillListening = false
+        model.level = 0
+        model.bands = SpectrumAnalyzer.silent
+        applyPanelSize()
+    }
+
+    // What the session calls itself — "fixing tests" — which is what the user
+    // reads on the pill and hears in the prompt. It used to be the tool's name,
+    // shown only when more than one was installed, and that answered a question
+    // nobody had: with one harness "an agent" was noise, and with two windows
+    // of the same one "Claude Code" could not tell them apart. Falls back to
+    // nothing, which the pill reads as "an agent".
+    private func callerLabel(_ name: String?) -> String? {
+        guard let name, !name.isEmpty else { return nil }
+        return name
+    }
+
+    // The window the pill floats in differs per variant. position() sets it for
+    // a pill that is about to appear; this is the other case — a variant change
+    // while it is already on screen, which resizes around the pill's own centre
+    // so it doesn't appear to move.
+    private func applyPanelSize() {
+        guard let panel, panel.isVisible, panel.frame.size != currentPanelSize else { return }
+        let centre = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
+        isRepositioning = true
+        defer { isRepositioning = false }
+        panel.setContentSize(currentPanelSize)
+        panel.setFrameOrigin(NSPoint(x: centre.x - panel.frame.width / 2,
+                                     y: centre.y - panel.frame.height / 2))
+    }
+
+    private var currentPanelSize: NSSize {
+        model.mode == .agent ? Self.agentPanelSize : Self.panelSize
+    }
+
     func hide() {
         announceTask?.cancel()
         levelTimer?.invalidate()
         levelTimer = nil
         model.level = 0   // let the meter drain rather than freeze mid-fade
         model.bands = SpectrumAnalyzer.silent
+        model.micIsLive = false
         guard let panel, isShowing else { return }
         isShowing = false
         panel.ignoresMouseEvents = true
@@ -356,6 +518,16 @@ final class RecordingIndicatorPanel {
                 self.isFadingOut = false
                 panel.orderOut(nil)
                 self.model.revealed = true   // rest state for the next show
+                // Leave agent mode once the pill is actually gone. `hide()`
+                // never reset it, so a second agent session's `enterAgentMode`
+                // saw `mode == .agent` and short-circuited — keeping the
+                // previous conversation's transcript on screen under the new
+                // question. Doing it here, off-screen, avoids any mid-fade
+                // flicker.
+                if self.model.mode == .agent {
+                    self.model.mode = .recording
+                    self.model.agentTranscript = ""
+                }
             }
         })
     }
@@ -446,7 +618,7 @@ final class RecordingIndicatorPanel {
         guard let screen else { return }
         isRepositioning = true
         defer { isRepositioning = false }
-        panel.setContentSize(Self.panelSize)
+        panel.setContentSize(currentPanelSize)
         let f = screen.visibleFrame
         if let saved = settings?.indicatorPosition {
             let fx = min(max(saved.x, 0), 1)
@@ -463,7 +635,7 @@ final class RecordingIndicatorPanel {
 
 @MainActor
 final class IndicatorModel: ObservableObject {
-    enum Mode: Equatable { case recording, transcribing, hint }
+    enum Mode: Equatable { case recording, transcribing, hint, agent }
     @Published var mode: Mode = .recording
     @Published var level: Float = 0
     // Per-band levels (0…1), low frequency first — what the meter draws.
@@ -488,6 +660,28 @@ final class IndicatorModel: ObservableObject {
     // back from wherever it was, and leaves it un-animated when the user has
     // turned the effect off.
     @Published var revealed = true
+    // The agent variant (§7.1d). Inert in every other mode — the pill only
+    // reads these while `mode == .agent`.
+    @Published var agentPhase: AgentIndicatorPhase = .listening
+    // The caller's display name, or nil for "an agent" when naming it would
+    // add nothing (§7.1c).
+    @Published var agentCaller: String?
+    // Everything heard so far this turn; the pill draws the tail of it.
+    @Published var agentTranscript = ""
+    // A decision the user has not made yet: while this is set the pill wears
+    // its accept/deny controls.
+    @Published var consent: ConsentPrompt?
+
+    // Whether the microphone is genuinely capturing right now. Set by the
+    // controller when capture starts and clears when it stops, rather than
+    // inferred from the consent mode: confirm-by-voice keeps the mic shut for
+    // the several seconds it takes to speak the question, so a pill that
+    // inferred "mode 3 means listening" drew a level meter over a closed
+    // microphone — a listening affordance at the one moment nothing is
+    // listening, and indistinguishable from a microphone that had failed.
+    @Published var micIsLive = false
+    var onAcceptConsent: (() -> Void)?
+    var onDeclineConsent: (() -> Void)?
     var onStop: (() -> Void)?
     var onToggleNoiseReduction: (() -> Void)?
     var onResetPosition: (() -> Void)?
@@ -576,6 +770,10 @@ struct IndicatorView: View {
                     .controlSize(.small)
                 Text(model.transcribingLabel ?? (model.isCommand ? loc("Working…") : loc("Typing…")))
                     .foregroundStyle(.secondary)
+            case .agent:
+                // A whole variant rather than a row of its own: it stacks two
+                // rows inside the same capsule (AgentIndicator.swift).
+                AgentIndicatorContent(model: model)
             case .hint:
                 Image(systemName: "info.circle")
                     .foregroundStyle(.secondary)
@@ -591,15 +789,26 @@ struct IndicatorView: View {
         .background {
             ZStack {
                 Capsule().fill(.ultraThinMaterial)
-                // Filtering on: the pill takes Aloud's own blue, as a tint
-                // through the material and a border around it. Both are
-                // revealed by a circle opening out from the badge, so the
-                // colour arrives from the thing that was just pressed and
-                // meets itself at the far end.
-                Capsule().fill(Color.aloud.opacity(0.22))
-                    .mask { revealMask(tintReveal) }
-                Capsule().strokeBorder(Color.aloud.opacity(0.85), lineWidth: 1.5)
-                    .mask { revealMask(borderReveal) }
+                if model.mode == .agent {
+                    // The agent variant wears its accent for the whole session
+                    // — the one thing on screen that says this microphone was
+                    // opened by something other than the user. It takes the
+                    // capsule's colour outright rather than sharing it with the
+                    // filtering tint, which means the same "Aloud is doing
+                    // something to your audio" blue and would only muddy it.
+                    Capsule().fill(Color.agent.opacity(0.12))
+                    Capsule().strokeBorder(Color.agent.opacity(0.75), lineWidth: 1.5)
+                } else {
+                    // Filtering on: the pill takes Aloud's own blue, as a tint
+                    // through the material and a border around it. Both are
+                    // revealed by a circle opening out from the badge, so the
+                    // colour arrives from the thing that was just pressed and
+                    // meets itself at the far end.
+                    Capsule().fill(Color.aloud.opacity(0.22))
+                        .mask { revealMask(tintReveal) }
+                    Capsule().strokeBorder(Color.aloud.opacity(0.85), lineWidth: 1.5)
+                        .mask { revealMask(borderReveal) }
+                }
             }
         }
         .overlay(Capsule().strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
@@ -831,6 +1040,85 @@ private struct StillListeningCaption: View {
 // gap, so the meter always says "the mic is on" even when nobody is talking.
 // System colours, rounded rectangles, no markings — nothing to read, only
 // something to recognise.
+// Aloud talking, drawn as two strands winding around each other — a helix seen
+// side on. It exists to answer one question the meter cannot: the meter means
+// "we are listening to you", and during a spoken prompt the microphone is
+// deliberately shut, so a meter there is a listening affordance shown at the
+// exact moment nothing is listening. Someone watching it saw a flat meter and
+// reasonably concluded the microphone was broken.
+//
+// Two properties carry the meaning. It always *moves* while Aloud speaks, so
+// "not listening, talking" reads at a glance even from the corner of the eye.
+// And it *reacts*, so the movement is this sentence rather than a spinner: the
+// strands swell on words and pinch to a line in the gaps. Where the engine
+// cannot tell us the level — the system voice never hands over its samples —
+// the motion continues at a resting amplitude, which is the honest picture of
+// "speaking, loudness unknown".
+struct VoiceWave: View {
+    var level: Float
+    var tint: Color
+
+    // Turns across the width. Few enough to read as a helix rather than a
+    // texture at this size.
+    private let turns: Double = 2.2
+    private let strandWidth: CGFloat = 2
+    // Never fully closed: a helix pinched to a line reads as "stopped", and it
+    // is speaking even between two words.
+    private let restAmplitude: CGFloat = 0.18
+    private let rungs = 11
+
+    var body: some View {
+        // .animation drives this from the display link, so the phase advances
+        // on its own and the drawing is never waiting on an audio frame.
+        TimelineView(.animation) { context in
+            Canvas { ctx, size in
+                let t = context.date.timeIntervalSinceReferenceDate
+                let mid = size.height / 2
+                let swell = restAmplitude + (1 - restAmplitude) * CGFloat(min(max(level, 0), 1))
+                let amplitude = mid * swell
+
+                func strand(_ offset: Double) -> Path {
+                    var path = Path()
+                    let steps = 48
+                    for step in 0...steps {
+                        let fraction = Double(step) / Double(steps)
+                        let angle = fraction * turns * 2 * .pi + t * 3.2 + offset
+                        // Waist the ends so the strands meet rather than being
+                        // sliced off by the frame — that join is what makes it
+                        // read as one twisting ribbon.
+                        let taper = sin(fraction * .pi)
+                        let point = CGPoint(x: fraction * size.width,
+                                            y: mid + sin(angle) * amplitude * taper)
+                        step == 0 ? path.move(to: point) : path.addLine(to: point)
+                    }
+                    return path
+                }
+
+                let front = strand(0)
+                let back = strand(.pi)
+                // The rungs are what separate a helix from two sine waves. They
+                // fade as the strands cross, which is the visual shorthand for
+                // the far side of the twist.
+                for rung in 0..<rungs {
+                    let fraction = (Double(rung) + 0.5) / Double(rungs)
+                    let angle = fraction * turns * 2 * .pi + t * 3.2
+                    let taper = sin(fraction * .pi)
+                    let y = sin(angle) * amplitude * taper
+                    var bar = Path()
+                    bar.move(to: CGPoint(x: fraction * size.width, y: mid + y))
+                    bar.addLine(to: CGPoint(x: fraction * size.width, y: mid - y))
+                    ctx.stroke(bar, with: .color(tint.opacity(0.10 + 0.30 * abs(sin(angle)))),
+                               lineWidth: 1)
+                }
+                ctx.stroke(back, with: .color(tint.opacity(0.45)),
+                           style: StrokeStyle(lineWidth: strandWidth, lineCap: .round))
+                ctx.stroke(front, with: .color(tint.opacity(0.95)),
+                           style: StrokeStyle(lineWidth: strandWidth, lineCap: .round))
+            }
+        }
+    }
+}
+
 struct SpectrumMeter: View {
     var bands: [Float]
     var tint: Color
