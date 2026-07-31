@@ -1710,6 +1710,15 @@ final class DictationController: ObservableObject {
             // ("Fix it forward.") needs no rewriting and still got the best
             // this Mac has. Reporting `basic` for it told the agent to treat a
             // finished answer as a raw transcript.
+            // Nobody said anything. An empty transcript returned as a success
+            // is the worst shape this can take: the agent cannot tell it from
+            // a real answer that happened to be blank, so it acts on nothing
+            // instead of falling back to text. Refusals are a documented
+            // return value here (§7.1b) precisely so this case is legible.
+            guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                indicator.hide()
+                throw AgentListenError.nothingHeard
+            }
             let transcript = await agentTranscript(raw: raw)
             indicator.hide()
             return transcript

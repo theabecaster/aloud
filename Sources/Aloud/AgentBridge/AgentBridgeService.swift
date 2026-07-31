@@ -443,6 +443,12 @@ final class AgentBridgeService {
                 response.raw = transcript.raw
                 response.cleanup = transcript.cleanup
                 return response
+            } catch AgentListenError.nothingHeard {
+                // Not a malfunction, and specifically not `unavailable` — that
+                // reads as "Aloud isn't running" and invites an agent to retry
+                // or give up on the feature. Nobody spoke, which is the same
+                // shape as a consent prompt nobody answered.
+                return .failure(.timeout, "Didn't hear anything.")
             } catch {
                 return .failure(.unavailable, error.localizedDescription)
             }
