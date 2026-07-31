@@ -17,7 +17,9 @@ protocol AgentVoiceHost: AnyObject, Sendable {
     // Put a pending consent request on the indicator, or take it down. Mode 2
     // draws accept/deny controls; mode 3 shows the same prompt while it is
     // spoken, so the user can also just click.
-    func presentConsent(_ prompt: ConsentPrompt) async
+    func presentConsent(_ prompt: ConsentPrompt,
+                        onAccept: @escaping () -> Void,
+                        onDecline: @escaping () -> Void) async
     func dismissConsent() async
 
     // Capture and transcribe until the speaker stops. `from` is the instant
@@ -54,6 +56,13 @@ final class AgentBridgeService {
     private var refusedUntil: [String: Date] = [:]
     static let refusalBackoff: TimeInterval = 60
 
+    // How long a `claim --wait` may park. Deliberately short of any plausible
+    // harness command timeout: a wait that outlives the shell holding it is a
+    // lease granted to nobody, and the microphone would sit reserved for a
+    // caller that has already gone.
+    static let maxQueueWait: TimeInterval = 300
+    static let queuePoll: TimeInterval = 0.25
+
     init(leases: LeaseManager = LeaseManager(),
          consent: ConsentPolicy = ConsentPolicy(),
          settings: SettingsStore = .shared,
@@ -68,6 +77,9 @@ final class AgentBridgeService {
     }
 
     func attach(host: AgentVoiceHost) { self.host = host }
+
+    // Test seam: who holds the microphone right now.
+    var holderHarnessForTesting: String? { leases.holder?.harness }
 
     // MARK: dispatch
 
@@ -133,7 +145,39 @@ final class AgentBridgeService {
             return response
         }
 
-        switch leases.claim(harness: request.harness, pid: pid, now: at) {
+        // `--wait N` parks here until the turn comes. An agent cannot be pushed
+        // to between CLI calls — the connection closes after every one — but it
+        // CAN hold one open, which is the same thing from its side: run the
+        // command in a background shell and it exits when the microphone is
+        // yours. Polling would cost a model turn per look; this costs none.
+        //
+        // Bounded by the caller's own ceiling, which must stay under the
+        // harness's command timeout (§7.3), so a wait can never outlive the
+        // shell that is holding it.
+        // Counted in polls rather than measured against `now()`. The sleeping
+        // here is real time while `now()` is the injectable logical clock, and
+        // mixing the two makes the ceiling unreachable whenever the clock is
+        // held still — which is exactly what a test does, and what hung one.
+        let requested = min(max(request.wait ?? 0, 0), Self.maxQueueWait)
+        let pollsRemaining = Int(requested / Self.queuePoll)
+
+        var outcome = leases.claim(harness: request.harness, pid: pid, now: at)
+        if pollsRemaining > 0 {
+            var polls = 0
+            while case .queued = outcome, polls < pollsRemaining {
+                polls += 1
+                try? await Task.sleep(nanoseconds: UInt64(Self.queuePoll * 1_000_000_000))
+                // The gate going off mid-wait must end it, not strand the
+                // caller until its ceiling.
+                guard settings.agentVoiceAvailable else {
+                    return .failure(.disabled, loc("Voice is turned off in Aloud."))
+                }
+                leases.enabled = true
+                outcome = leases.claim(harness: request.harness, pid: pid, now: now())
+            }
+        }
+
+        switch outcome {
         case .disabled:
             return .failure(.disabled, loc("Voice is turned off in Aloud."))
 
@@ -188,7 +232,13 @@ final class AgentBridgeService {
     // Show the prompt, speak it when the mode says to, and wait for whichever
     // of the three answers arrives first.
     private func ask(_ prompt: ConsentPrompt) async -> ConsentResolution {
-        await host?.presentConsent(prompt)
+        // The pill's accept/deny are a third way to answer, alongside a spoken
+        // reply and the deadline. Whichever lands first wins; the rest are
+        // ignored because the continuation resumes exactly once.
+        let lease = prompt.lease
+        await host?.presentConsent(prompt,
+                                   onAccept: { [weak self] in self?.acceptConsent(lease: lease) },
+                                   onDecline: { [weak self] in self?.declineConsent(lease: lease) })
         if prompt.mode == .confirmByVoice {
             // Spoken through whichever voice is available. A failure here is
             // not fatal on its own — the pill is still showing the same words —
@@ -197,7 +247,6 @@ final class AgentBridgeService {
         }
 
         let deadline = prompt.deadline
-        let lease = prompt.lease
         let resolution = await withCheckedContinuation { (continuation: CheckedContinuation<ConsentResolution, Never>) in
             pendingConsent[lease] = continuation
             Task { [weak self] in

@@ -38,6 +38,8 @@ final class DictationController: ObservableObject {
     // An agent-initiated capture. Kept distinct from a command session so
     // every existing guard that asks "is this a dictation?" still answers no.
     private var isAgentSession = false
+    // Who the current agent session belongs to, for the indicator's label.
+    var agentHarnessName: String?
 
     // Keeps the system default input off a Bluetooth headset that is also
     // the current output — continuously, so a session never has to switch
@@ -1581,8 +1583,7 @@ final class DictationController: ObservableObject {
         sessionGeneration += 1
         isAgentSession = true
         phase = .recording
-        indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
-                       bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
+        indicatorShowAgentSession(harness: agentHarnessName ?? "")
 
         let started = try await startAgentCapture()
         _ = started
@@ -1659,12 +1660,24 @@ final class DictationController: ObservableObject {
     // is being built separately; until it lands these are the seam, and they
     // must not silently do nothing — a consent prompt the user never sees is a
     // request that can only time out.
-    func indicatorShowConsent(_ prompt: ConsentPrompt) {
-        indicator.showHint(prompt.text)
+    func indicatorShowConsent(_ prompt: ConsentPrompt,
+                              onAccept: @escaping () -> Void,
+                              onDecline: @escaping () -> Void) {
+        indicator.showConsent(prompt: prompt, onAccept: onAccept, onDecline: onDecline)
     }
 
     func indicatorDismissConsent() {
-        indicator.hide()
+        indicator.dismissConsent()
+    }
+
+    // The transcript is the only place an agent session is visible: nothing is
+    // typed into the focused app, so without this the user is talking into a
+    // void and has no way to tell whether they were heard.
+    func indicatorShowAgentSession(harness: String) {
+        indicator.showAgentSession(harness: harness,
+                                   phase: .listening,
+                                   levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
+                                   bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
     }
 
     // Cut a running agent capture short — the user pulling the plug.
@@ -1705,10 +1718,12 @@ extension DictationController: AgentVoiceHost {
         try await listenForAgent(from: from)
     }
 
-    func presentConsent(_ prompt: ConsentPrompt) async {
+    func presentConsent(_ prompt: ConsentPrompt,
+                        onAccept: @escaping () -> Void,
+                        onDecline: @escaping () -> Void) async {
         // The pill is the only place a user who isn't looking at the agent's
         // window learns they were asked anything.
-        indicatorShowConsent(prompt)
+        indicatorShowConsent(prompt, onAccept: onAccept, onDecline: onDecline)
     }
 
     func dismissConsent() async {

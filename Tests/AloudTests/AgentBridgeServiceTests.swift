@@ -25,7 +25,17 @@ final class AgentBridgeServiceTests: XCTestCase {
             if let speakError { throw speakError }
             spoken.append(text)
         }
-        func presentConsent(_ prompt: ConsentPrompt) async { prompts.append(prompt) }
+        // The pill's accept/deny are captured so a test can answer the way a
+        // user clicking the indicator would, not just via the service API.
+        var acceptFromPill: (() -> Void)?
+        var declineFromPill: (() -> Void)?
+        func presentConsent(_ prompt: ConsentPrompt,
+                            onAccept: @escaping () -> Void,
+                            onDecline: @escaping () -> Void) async {
+            prompts.append(prompt)
+            acceptFromPill = onAccept
+            declineFromPill = onDecline
+        }
         func dismissConsent() async { dismissals += 1 }
         func listen(from: Date) async throws -> AgentTranscript {
             listenCount += 1
@@ -216,6 +226,53 @@ final class AgentBridgeServiceTests: XCTestCase {
         XCTAssertEqual(response.queuedBehind, "claude-code",
                        "an agent that can name the holder can say something useful instead of spinning")
         XCTAssertNotNil(response.retryAfter)
+    }
+
+    // An agent cannot be pushed to between CLI calls — the connection closes
+    // after every one — but it can hold one open. `claim --wait` is what lets a
+    // second agent park in a background shell and be woken when the microphone
+    // is free, instead of spending a model turn on every look.
+    func testClaimWithWaitParksUntilTheHolderReleases() async {
+        let service = makeService(mode: .open)
+        let first = await service.handle(request(.claim), peer: peer)
+        let held = try? XCTUnwrap(first.lease)
+
+        var waiting = request(.claim)
+        waiting.harness = "codex"
+        waiting.pid = 5150
+        waiting.wait = 30
+        let parked = Task {
+            await service.handle(waiting, peer: BridgeServer.PeerIdentity(pid: 5150, name: "codex"))
+        }
+
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertFalse(parked.isCancelled)
+        XCTAssertEqual(service.holderHarnessForTesting, "claude-code",
+                       "the waiter must not have taken it while someone still held it")
+
+        _ = await service.handle(request(.release, lease: held), peer: peer)
+        clock.advance(5)                       // past the audio cooldown
+
+        let granted = await parked.value
+        XCTAssertTrue(granted.ok, "the parked agent is woken with the lease, not a refusal")
+        XCTAssertNotNil(granted.lease)
+    }
+
+    // A wait that outlives the shell holding it would reserve the microphone
+    // for a caller that has already gone, so it has a ceiling and reports the
+    // queue honestly when it expires.
+    func testAWaitThatExpiresStillReportsTheQueue() async {
+        let service = makeService(mode: .open)
+        _ = await service.handle(request(.claim), peer: peer)
+
+        var waiting = request(.claim)
+        waiting.harness = "codex"
+        waiting.pid = 5150
+        waiting.wait = 0.4
+        let response = await service.handle(waiting,
+                                            peer: BridgeServer.PeerIdentity(pid: 5150, name: "codex"))
+        XCTAssertEqual(response.reason, .queued)
+        XCTAssertEqual(response.queuedBehind, "claude-code")
     }
 
     func testSpeakAndListenNeedTheLease() async {

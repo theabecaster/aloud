@@ -44,6 +44,11 @@ enum CLI {
                                     harness: value(of: "--harness", in: args) ?? "unknown",
                                     pid: ownerProcessID())
         request.lease = value(of: "--lease", in: args)
+        // `claim --wait N` blocks until the microphone is yours, so an agent
+        // can park it in a background shell and get on with something else
+        // rather than spending a model turn per look. Also accepted on listen,
+        // where it is the long-poll ceiling.
+        request.wait = value(of: "--wait", in: args).flatMap(Double.init)
         if op == .speak {
             guard let text = firstPositional(after: 1, in: args) else {
                 usage("speak --lease <id> <text>")
@@ -63,7 +68,10 @@ enum CLI {
         // Comfortably under a harness's own command timeout, and well past the
         // consent timeout the app applies — a claim that is waiting on a person
         // must not be cut off from this end.
-        let response = BridgeClient.send(request, timeout: 90)
+        // Comfortably past whatever the app will spend waiting, so we never
+        // hang up on our own request at the moment it is granted.
+        let timeout = max(90, (request.wait ?? 0) + 30)
+        let response = BridgeClient.send(request, timeout: timeout)
         emit(response)
         return response.reason == .unavailable ? 1 : 0
     }
