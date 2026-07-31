@@ -134,10 +134,64 @@ enum AgentVoiceInstructions {
 
     static let summary = "Speak to the user and hear their answer through Aloud, so you can ask a question mid-task instead of ending your turn."
 
+    // The verbs a distributed build exposes (CLI.swift). Also the verbs Claude
+    // Code's allowlist has to cover, which is why they live next to the text
+    // that teaches them rather than in the installer.
+    static let verbs = ["claim", "listen", "speak", "release"]
+
+    // MARK: how the agent types our name
+    //
+    // One function, and everything that has to agree comes out of it: the
+    // sample commands in the instructions and the `Bash(… :*)` patterns in
+    // Claude Code's allowlist. They only match if they are character-identical,
+    // and an allowlist that misses means a permission prompt on the first
+    // `listen` — hands-free broken on turn one, the failure §6 warns about. A
+    // comment asking two call sites to stay in step is not enough; this is the
+    // step.
+    static func invocation(command: String) -> String { shellQuoted(command) }
+
+    // `Bash(<invocation> <verb>:*)` — Claude Code matches the literal prefix of
+    // the command line, so the quoting has to be the quoting the agent will
+    // actually type.
+    static func permissionEntries(command: String) -> [String] {
+        let invocation = invocation(command: command)
+        return verbs.map { "Bash(\(invocation) \($0):*)" }
+    }
+
+    // Recognising our entries on the way out is deliberately looser than
+    // writing them. The allowlist in front of us may have been written by an
+    // older Aloud that assumed a bare `aloud` on PATH, or by this one before
+    // the user moved the bundle — and an entry we fail to recognise is one we
+    // leave behind pointing at a binary that no longer exists. Anything shaped
+    // like `Bash(<something named aloud> <one of our verbs>:*)` is ours.
+    static func isPermissionEntry(_ entry: String) -> Bool {
+        guard entry.hasPrefix("Bash("), entry.hasSuffix(":*)") else { return false }
+        let inner = entry.dropFirst("Bash(".count).dropLast(":*)".count)
+        guard let space = inner.lastIndex(of: " ") else { return false }
+        guard verbs.contains(String(inner[inner.index(after: space)...])) else { return false }
+        let command = String(inner[..<space])
+            .trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+        return (command as NSString).lastPathComponent.lowercased() == "aloud"
+    }
+
+    // The CLI lives inside an app bundle, so its path can contain a space the
+    // moment somebody keeps their apps somewhere else. Unquoted, the agent's
+    // shell would split it; quoted differently in the two places, the allowlist
+    // would stop matching. Both come from here.
+    private static func shellQuoted(_ command: String) -> String {
+        let safe = CharacterSet(charactersIn:
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./")
+        if !command.isEmpty, command.unicodeScalars.allSatisfy({ safe.contains($0) }) {
+            return command
+        }
+        return "'" + command.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     // `command` is the binary the harness should invoke; `harness` is baked in
     // so the agent never has to know its own name (§7.1c).
     static func body(harness: AgentHarness, command: String) -> String {
         let id = harness.id
+        let command = invocation(command: command)
         return #"""
         # Talking to the user out loud
 
@@ -231,23 +285,41 @@ struct HarnessInstaller {
     // Injected so tests run against a scratch directory. Nothing in this type
     // may reach for FileManager.default.homeDirectoryForCurrentUser.
     let home: URL
-    // How the instructions tell the agent to invoke us. A dev build pointing at
-    // a checkout binary should not tell agents to run the installed one.
+    // How the instructions tell the agent to invoke us — and, through
+    // `AgentVoiceInstructions.permissionEntries`, what Claude Code's allowlist
+    // is generated from. A dev build pointing at a checkout binary should not
+    // tell agents to run the installed one.
     let command: String
     private let fm: FileManager
 
-    // The four verbs the prod CLI exposes. Written into Claude Code's allowlist
-    // so the first `listen` doesn't stop for a permission prompt — in a feature
-    // whose entire point is not touching the keyboard, that prompt is the
-    // difference between a demo that lands and one that stalls on turn one.
-    static let claudePermissionEntries = [
-        "Bash(aloud claim:*)",
-        "Bash(aloud listen:*)",
-        "Bash(aloud speak:*)",
-        "Bash(aloud release:*)",
-    ]
+    // The real home. The app passes this; tests must not.
+    static var userHome: URL { FileManager.default.homeDirectoryForCurrentUser }
 
-    init(home: URL, command: String = "aloud", fileManager: FileManager = .default) {
+    // There is no `aloud` on PATH — the CLI ships inside the app bundle — so
+    // the running executable's own path is the only invocation that works
+    // without asking the user to edit their shell profile or dropping a shim
+    // into a directory we would then have to remember to remove. It also means
+    // a dev build teaches agents about the dev build.
+    static var defaultCommand: String {
+        let fallback = "/Applications/Aloud.app/Contents/MacOS/Aloud"
+        guard let path = Bundle.main.executableURL?.path else { return fallback }
+        // Gatekeeper may run a freshly downloaded app from a randomised
+        // read-only mount. Baking that path into somebody's settings.json would
+        // outlive the mount by months.
+        if path.contains("/AppTranslocation/") { return fallback }
+        return path
+    }
+
+    // The four verbs the prod CLI exposes, allowed for the exact command the
+    // instructions tell the agent to run — so the first `listen` doesn't stop
+    // for a permission prompt. In a feature whose entire point is not touching
+    // the keyboard, that prompt is the difference between a demo that lands and
+    // one that stalls on turn one.
+    var claudePermissionEntries: [String] {
+        AgentVoiceInstructions.permissionEntries(command: command)
+    }
+
+    init(home: URL, command: String = HarnessInstaller.defaultCommand, fileManager: FileManager = .default) {
         self.home = home
         self.command = command
         self.fm = fileManager
@@ -331,6 +403,7 @@ struct HarnessInstaller {
         guard let text = try? String(contentsOf: skill, encoding: .utf8),
               text.contains(AgentVoiceInstructions.markerStart) else { return }
         try? fm.removeItem(at: skill)
+        removeBackup(of: skill)
         let dir = skill.deletingLastPathComponent()
         if (try? fm.contentsOfDirectory(atPath: dir.path))?.isEmpty == true {
             try? fm.removeItem(at: dir)
@@ -339,6 +412,13 @@ struct HarnessInstaller {
 
     // MARK: uninstall
 
+    // Removing our instructions is the point, but leaving `.aloud-backup` files
+    // scattered through somebody's ~/.claude is our litter too — and worse, the
+    // backup we take on the way out would be a copy of the file *with* our
+    // entries in it. So a clean uninstall takes them with it. The one case
+    // where a backup is worth keeping is the one where uninstall threw: then it
+    // is the user's only record of what the file looked like before we touched
+    // it, and we never reach the deletion.
     func uninstall(_ harness: AgentHarness) throws {
         switch harness {
         case .copilot:
@@ -358,6 +438,7 @@ struct HarnessInstaller {
             if let data = try claudeSettings(at: claudeSettingsURL, addingEntries: false) {
                 try write(data, to: claudeSettingsURL)
             }
+            removeBackup(of: claudeSettingsURL)
         }
     }
 
@@ -374,7 +455,7 @@ struct HarnessInstaller {
             guard let parsed = try? JSONSerialization.jsonObject(with: data),
                   let object = parsed as? [String: Any] else {
                 throw HarnessInstallError.unreadableSettings(path: url.path,
-                                                             snippet: Self.permissionSnippet)
+                                                             snippet: permissionSnippet)
             }
             root = object
         } else if !adding {
@@ -385,7 +466,7 @@ struct HarnessInstaller {
         if let existing = root["permissions"] {
             guard let object = existing as? [String: Any] else {
                 throw HarnessInstallError.unreadableSettings(path: url.path,
-                                                             snippet: Self.permissionSnippet)
+                                                             snippet: permissionSnippet)
             }
             permissions = object
         }
@@ -397,7 +478,7 @@ struct HarnessInstaller {
         if let existing = permissions["allow"] {
             guard let list = existing as? [Any] else {
                 throw HarnessInstallError.unreadableSettings(path: url.path,
-                                                             snippet: Self.permissionSnippet)
+                                                             snippet: permissionSnippet)
             }
             allow = list
         }
@@ -405,7 +486,7 @@ struct HarnessInstaller {
         var changed = false
         if adding {
             let present = Set(allow.compactMap { $0 as? String })
-            for entry in Self.claudePermissionEntries where !present.contains(entry) {
+            for entry in claudePermissionEntries where !present.contains(entry) {
                 allow.append(entry)
                 changed = true
             }
@@ -413,7 +494,7 @@ struct HarnessInstaller {
             let before = allow.count
             allow.removeAll { element in
                 guard let entry = element as? String else { return false }
-                return Self.claudePermissionEntries.contains(entry)
+                return AgentVoiceInstructions.isPermissionEntry(entry)
             }
             changed = allow.count != before
         }
@@ -426,7 +507,7 @@ struct HarnessInstaller {
     }
 
     // What we offer when we refuse to touch a broken settings.json.
-    static var permissionSnippet: String {
+    var permissionSnippet: String {
         let entries = claudePermissionEntries.map { "    \"\($0)\"" }.joined(separator: ",\n")
         return "\"permissions\": {\n  \"allow\": [\n\(entries)\n  ]\n}"
     }
@@ -465,9 +546,11 @@ struct HarnessInstaller {
             // The file held nothing but our section, so we created it. Leaving
             // an empty AGENTS.md behind is litter, not caution.
             try? fm.removeItem(at: url)
+            removeBackup(of: url)
             return
         }
         _ = try writeIfDifferent(stripped, to: url)
+        removeBackup(of: url)
     }
 
     // Line-based rather than range-based so a stray marker inside a code fence
@@ -523,5 +606,12 @@ struct HarnessInstaller {
         let backup = url.appendingPathExtension("aloud-backup")
         try? fm.removeItem(at: backup)
         try? fm.copyItem(at: url, to: backup)
+    }
+
+    // Only ever called once the file it belonged to has been put back the way
+    // we found it. Best-effort: a backup we cannot delete is untidy, never a
+    // reason to fail an uninstall.
+    private func removeBackup(of url: URL) {
+        try? fm.removeItem(at: url.appendingPathExtension("aloud-backup"))
     }
 }

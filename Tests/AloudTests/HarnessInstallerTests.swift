@@ -25,8 +25,14 @@ final class HarnessInstallerTests: XCTestCase {
         try? fm.removeItem(at: home)
     }
 
+    // Pinned rather than defaulted: the real default is the running binary's
+    // own path, which under `swift test` is the test runner. Fixing it here
+    // keeps the expectations readable and still exercises the absolute-path
+    // form the app actually installs.
+    static let command = "/Applications/Aloud.app/Contents/MacOS/Aloud"
+
     private func installer() -> HarnessInstaller {
-        HarnessInstaller(home: home)
+        HarnessInstaller(home: home, command: Self.command)
     }
 
     private func makeDir(_ relative: String) throws {
@@ -106,7 +112,7 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertTrue(skill.contains(AgentVoiceInstructions.markerStart))
         XCTAssertTrue(skill.contains("--harness claude-code"), "the harness id is baked in, not left to the agent")
 
-        XCTAssertEqual(try allowList(), HarnessInstaller.claudePermissionEntries)
+        XCTAssertEqual(try allowList(), installer().claudePermissionEntries)
         XCTAssertTrue(installer().isInstalled(.claudeCode))
     }
 
@@ -116,7 +122,8 @@ final class HarnessInstallerTests: XCTestCase {
         _ = try installer().install(.claudeCode)
         let allow = try allowList()
         for verb in ["claim", "listen", "speak", "release"] {
-            XCTAssertTrue(allow.contains("Bash(aloud \(verb):*)"), "missing an allowlist entry for \(verb)")
+            XCTAssertTrue(allow.contains("Bash(\(Self.command) \(verb):*)"),
+                          "missing an allowlist entry for \(verb)")
         }
     }
 
@@ -176,7 +183,8 @@ final class HarnessInstallerTests: XCTestCase {
             }
             // Refusing is only half of it: the user still needs to be able to
             // fix it by hand, so the failure carries the text to paste.
-            XCTAssertTrue(snippet.contains("Bash(aloud listen:*)"))
+            XCTAssertTrue(snippet.contains("Bash(\(Self.command) listen:*)"),
+                          "the text to paste has to be the text that would have been written")
         }
 
         XCTAssertEqual(read(".claude/settings.json"), broken, "the broken file must be byte-identical")
@@ -371,5 +379,119 @@ final class HarnessInstallerTests: XCTestCase {
         let custom = HarnessInstaller(home: home, command: "/opt/aloud/bin/aloud")
         _ = try custom.install(.codex)
         XCTAssertTrue(try XCTUnwrap(read(".codex/AGENTS.md")).contains("/opt/aloud/bin/aloud claim"))
+    }
+
+    // MARK: - the invocation form
+
+    // The reason this whole invariant exists. A `Bash(…)` entry only silences
+    // the permission prompt if it is the literal prefix of what the agent
+    // typed, and what the agent types is whatever the instructions showed it.
+    // If those two are ever generated separately they will drift, and the
+    // symptom is a permission prompt on turn one of a hands-free feature —
+    // nothing crashes, nothing logs, the demo just stalls.
+    func testEveryAllowlistEntryIsAPrefixOfWhatTheInstructionsTellTheAgentToType() throws {
+        for command in [Self.command, "aloud", "/opt/my apps/Aloud.app/Contents/MacOS/Aloud"] {
+            let installer = HarnessInstaller(home: home, command: command)
+            let body = AgentVoiceInstructions.body(harness: .claudeCode, command: command)
+            for entry in installer.claudePermissionEntries {
+                let typed = String(entry.dropFirst("Bash(".count).dropLast(":*)".count))
+                XCTAssertTrue(body.contains(typed),
+                              "the allowlist expects `\(typed)`, which the instructions never tell the agent to type")
+            }
+            XCTAssertEqual(installer.claudePermissionEntries.count, AgentVoiceInstructions.verbs.count)
+        }
+    }
+
+    // Same invariant against the bytes actually on disk, so a future wrapper
+    // that rewrites the body (frontmatter, indentation, escaping) is caught too.
+    func testTheInstalledSkillAndTheInstalledAllowlistAgree() throws {
+        _ = try installer().install(.claudeCode)
+        let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        for entry in try allowList() {
+            let typed = String(entry.dropFirst("Bash(".count).dropLast(":*)".count))
+            XCTAssertTrue(skill.contains(typed), "settings.json allows `\(typed)` but the skill never mentions it")
+        }
+    }
+
+    // There is no `aloud` on PATH — the CLI lives inside the app bundle — so a
+    // default of "aloud" would mean every install shipped instructions that
+    // fail at the shell and an allowlist that matches nothing.
+    func testTheDefaultCommandIsAnAbsolutePathNotABarePathLookup() {
+        let fallback = HarnessInstaller.defaultCommand
+        XCTAssertTrue(fallback.hasPrefix("/"), "expected an absolute path, got \(fallback)")
+        XCTAssertFalse(fallback.contains("/AppTranslocation/"),
+                       "a randomised Gatekeeper mount would outlive the settings.json we wrote it into")
+    }
+
+    // A bundle kept somewhere with a space in the path is ordinary. Unquoted
+    // the agent's shell splits it; quoted differently in the two files the
+    // allowlist stops matching — so one quoting decision, applied in both.
+    func testAPathWithSpacesIsQuotedTheSameWayInBothPlaces() throws {
+        let spaced = "/Users/someone/My Apps/Aloud.app/Contents/MacOS/Aloud"
+        let installer = HarnessInstaller(home: home, command: spaced)
+        _ = try installer.install(.claudeCode)
+
+        let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        XCTAssertTrue(skill.contains("'\(spaced)' claim"), "the sample commands must be runnable as written")
+        XCTAssertTrue(try allowList().contains("Bash('\(spaced)' claim:*)"))
+    }
+
+    // Uninstall has to recognise entries this build would not have written:
+    // one left by an older Aloud that assumed a bare `aloud` on PATH, or by
+    // this one before the user moved the bundle. An entry we fail to match is
+    // one we leave behind allowing a binary that no longer exists.
+    func testUninstallRemovesAllowlistEntriesFromAnyEarlierInvocationForm() throws {
+        try write("""
+        {
+          "permissions": {
+            "allow": [
+              "Bash(aloud listen:*)",
+              "Bash(/Volumes/Old/Aloud.app/Contents/MacOS/Aloud claim:*)",
+              "Bash('/Users/someone/My Apps/Aloud.app/Contents/MacOS/Aloud' speak:*)",
+              "Bash(aloudmixer listen:*)",
+              "Bash(aloud deploy:*)",
+              "Bash(git status:*)"
+            ]
+          }
+        }
+        """, to: ".claude/settings.json")
+
+        try installer().uninstall(.claudeCode)
+
+        // The last three are not ours: a differently named tool, a verb we do
+        // not ship, and somebody's own rule.
+        XCTAssertEqual(try allowList(),
+                       ["Bash(aloudmixer listen:*)", "Bash(aloud deploy:*)", "Bash(git status:*)"])
+    }
+
+    // MARK: - hygiene
+
+    // The backup exists to answer "what did this look like before Aloud touched
+    // it". Once we have put the file back, it is our litter — and the copy we
+    // take on the way out would be the version *with* our entries in it.
+    func testUninstallTakesItsOwnBackupsWithIt() throws {
+        try write("{\"model\":\"opus\"}", to: ".claude/settings.json")
+        try write("# mine\n", to: ".codex/AGENTS.md")
+
+        _ = try installer().install(.claudeCode)
+        _ = try installer().install(.codex)
+        XCTAssertTrue(fm.fileExists(atPath: home.appendingPathComponent(".claude/settings.json.aloud-backup").path))
+        XCTAssertTrue(fm.fileExists(atPath: home.appendingPathComponent(".codex/AGENTS.md.aloud-backup").path))
+
+        try installer().uninstall(.claudeCode)
+        try installer().uninstall(.codex)
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".claude/settings.json.aloud-backup").path))
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".codex/AGENTS.md.aloud-backup").path))
+    }
+
+    // The exception: an uninstall that could not finish leaves the backup,
+    // because at that point it is the user's only record of the original file.
+    func testAFailedUninstallKeepsTheBackupItMightStillNeed() throws {
+        try write("{\"model\":\"opus\"}", to: ".claude/settings.json")
+        _ = try installer().install(.claudeCode)
+        try write("{ not json", to: ".claude/settings.json")
+
+        XCTAssertThrowsError(try installer().uninstall(.claudeCode))
+        XCTAssertEqual(read(".claude/settings.json.aloud-backup"), "{\"model\":\"opus\"}")
     }
 }
