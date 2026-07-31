@@ -42,7 +42,7 @@ enum CLI {
 
         var request = BridgeRequest(op: op,
                                     harness: value(of: "--harness", in: args) ?? "unknown",
-                                    pid: ownerProcessID())
+                                    pid: ownerProcessID(args))
         request.lease = value(of: "--lease", in: args)
         // `claim --wait N` blocks until the microphone is yours, so an agent
         // can park it in a background shell and get on with something else
@@ -108,14 +108,31 @@ enum CLI {
         return nil
     }
 
-    // No owner pid. It is tempting to send getppid() as "the harness", but a
-    // CLI invoked per call has a parent that is whatever short-lived shell the
-    // agent spawned — it dies immediately, and a lease keyed on it is reaped
-    // before the agent's next call. Saying "I have no stable process" is the
-    // honest answer, and the app falls back to the lease TTL, an explicit
-    // release, and the user's force-release. A harness that genuinely knows its
-    // own long-lived pid can start sending it without any change here.
-    private static func ownerProcessID() -> pid_t { LeaseManager.noOwnerPid }
+    // Who owns this session, as a long-lived process the app can watch.
+    //
+    // Not getppid(): a CLI invoked per call has a parent that is whatever
+    // short-lived shell the agent spawned, it dies immediately, and a lease
+    // keyed on it is reaped before the agent's next call. That is what made
+    // every lease dead on arrival.
+    //
+    // But "I have no stable process" cannot be the whole answer either,
+    // because it is also the *identity* the lease recognises its holder by,
+    // and every unnamed caller looks alike: two sessions of the same harness
+    // both say `noOwnerPid`, so the second was handed the first one's lease
+    // and could speak, listen and release on a conversation that was not its
+    // own. Confirmed against the running app before this was written.
+    //
+    // So a harness that knows its own long-lived pid says so, and gets a
+    // session the app can tell apart and can reap the instant that process
+    // dies. One that does not stays anonymous and simply queues. The
+    // installed instructions pass `--owner-pid $PPID`, which in every harness
+    // we install into is the agent process itself rather than a per-call
+    // shell — verified, not assumed.
+    private static func ownerProcessID(_ args: [String]) -> pid_t {
+        guard let raw = value(of: "--owner-pid", in: args),
+              let pid = pid_t(raw), pid > 0 else { return LeaseManager.noOwnerPid }
+        return pid
+    }
 
     #if ALOUD_PROD_CLI
     // Distribution build: the development verbs are not compiled in at all.

@@ -10,9 +10,14 @@ final class LeaseManagerTests: XCTestCase {
     // Liveness is injected everywhere: the pids in these tests are made up, and
     // with the real check pid 2 simply does not exist on this machine, so every
     // queued entry would be reaped before the assertion ran.
+    // `noOwnerPid` counts as alive, exactly as the real check does: there is no
+    // process to watch, so such a lease is governed by its TTL alone. A fake
+    // that called it dead would reap every anonymous holder instantly and
+    // quietly invert what these tests appear to prove.
     private func manager(_ config: LeaseConfig = .default,
                          alive: Set<pid_t> = [1, 2, 3, 42]) -> LeaseManager {
-        LeaseManager(config: config, isAlive: { alive.contains($0) })
+        LeaseManager(config: config,
+                     isAlive: { $0 == LeaseManager.noOwnerPid || alive.contains($0) })
     }
 
     // MARK: granting and holding
@@ -49,6 +54,45 @@ final class LeaseManagerTests: XCTestCase {
         _ = m.claim(harness: "codex", pid: 2, now: t0)
         _ = m.claim(harness: "codex", pid: 2, now: t0)
         XCTAssertEqual(m.queue.count, 1, "re-claiming must not stack duplicate queue entries")
+    }
+
+    // Two sessions of one tool are two claimants, not one.
+    //
+    // The harness id is a label — anything may pass `--harness claude-code` —
+    // so the lease recognises its holder by the long-lived process the caller
+    // names. A caller that cannot name one is anonymous, and every anonymous
+    // caller looks identical: matching them to the holder handed the second
+    // session the first's lease, and with it the power to speak, listen and
+    // release on somebody else's conversation. Seen on the running app: a
+    // second codex claim came back with the first's lease id.
+    func testAnonymousSecondSessionQueuesInsteadOfInheritingTheLease() {
+        let m = manager()
+        guard case .granted(let first) = m.claim(harness: "claude-code",
+                                                 pid: LeaseManager.noOwnerPid, now: t0) else {
+            return XCTFail("expected grant")
+        }
+        let second = m.claim(harness: "claude-code", pid: LeaseManager.noOwnerPid, now: t0)
+        XCTAssertEqual(second, .queued(position: 1, reason: .busy(holder: "claude-code")),
+                       "a second anonymous session must wait its turn")
+        if case .granted(let id) = second {
+            XCTAssertNotEqual(id, first, "…and must never be handed the holder's lease")
+        }
+        XCTAssertEqual(m.holder?.id, first, "the original session still owns the microphone")
+    }
+
+    // Named sessions of the same tool are told apart, so they queue rather than
+    // collide — and the one that named itself still gets its own lease back.
+    func testNamedSessionsOfTheSameHarnessAreDistinct() {
+        let m = manager()
+        guard case .granted(let first) = m.claim(harness: "claude-code", pid: 1, now: t0) else {
+            return XCTFail("expected grant")
+        }
+        XCTAssertEqual(m.claim(harness: "claude-code", pid: 2, now: t0),
+                       .queued(position: 1, reason: .busy(holder: "claude-code")))
+        guard case .granted(let again) = m.claim(harness: "claude-code", pid: 1, now: t0) else {
+            return XCTFail("the named holder re-claiming should get its own lease back")
+        }
+        XCTAssertEqual(first, again)
     }
 
     func testHolderKeepsTheLeaseAcrossManyCalls() {

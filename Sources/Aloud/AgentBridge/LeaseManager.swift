@@ -95,8 +95,21 @@ final class LeaseManager {
         guard enabled else { return .disabled }
         reap(now: now)
 
-        // The holder re-claiming gets its own lease back.
-        if let holder, holder.harness == harness, holder.pid == pid {
+        // The holder re-claiming gets its own lease back — but only a caller
+        // that can name itself. `pid` is the caller's own long-lived process,
+        // and `noOwnerPid` means "I have no stable one". Two sessions of the
+        // same harness both say that, so matching on harness alone hands the
+        // second one the first one's session: it can then speak, listen and
+        // release on a conversation that is not its own. Observed exactly that
+        // — a second codex claim came back with the first's lease id.
+        //
+        // Without a name there is nothing to recognise, so an unnamed caller
+        // that is not already holding a lease queues like anyone else. The
+        // cost is that an agent which loses its lease id waits out the TTL
+        // rather than being handed the session back, which is the right way
+        // round: a stalled agent is recoverable, a hijacked session is not.
+        if let holder, holder.harness == harness, holder.pid == pid,
+           pid != LeaseManager.noOwnerPid {
             touch(now: now)
             return .granted(holder.id)
         }

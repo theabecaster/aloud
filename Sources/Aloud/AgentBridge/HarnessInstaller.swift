@@ -484,13 +484,19 @@ enum AgentVoiceInstructions {
         nothing.
 
         ```sh
-        \#(command) claim   --harness \#(id)                  # {"lease":"L1","status":"granted"}
+        \#(command) claim   --harness \#(id) --owner-pid $PPID   # {"lease":"L1","status":"granted"}
         \#(command) speak   --harness \#(id) --lease L1 "The migration test is failing. Roll it back, or fix it forward?"
         \#(command) listen  --harness \#(id) --lease L1        # blocks, returns {"text":"..."}
         \#(command) release --harness \#(id) --lease L1        # always, even after an error
         ```
 
         - Pass `--harness \#(id)` on every call.
+        - Pass `--owner-pid $PPID` on `claim`, exactly as written. It is how Aloud
+          tells your session apart from another session of the same tool, so the
+          two queue for the microphone instead of sharing one lease — and it lets
+          Aloud release your session the moment you exit, rather than leaving the
+          microphone held until the lease times out. Without it you are anonymous
+          and simply wait your turn.
         - `claim` returns immediately. If it comes back `{"status":"queued"}`, ask
           your question in text instead — do not spin on it, and do not sleep and
           retry.
