@@ -154,8 +154,11 @@ struct StatusMenuView: View {
                 .background(statusColor, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Aloud")
-                    .font(.headline)
+                HStack(alignment: .top, spacing: 7) {
+                    Text("Aloud")
+                        .font(.headline)
+                    cleanUpMenu
+                }
                 Text(statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -163,8 +166,6 @@ struct StatusMenuView: View {
             }
 
             Spacer(minLength: 8)
-
-            cleanUpMenu
 
             Button(action: onOpenSettings) {
                 Image(systemName: "gearshape")
@@ -269,8 +270,8 @@ struct StatusMenuView: View {
     /// exact words for a command, tightened prose for an email. Settings owns
     /// the full segmented picker — at 360pt that control eats the popover — so
     /// this is a bare pop-up: the level's name, in the level's colour, with the
-    /// chevron that says it opens. No bezel, so it sits in the header beside
-    /// the gear without reading as a second button competing with it.
+    /// chevron that says it opens. No bezel, so it reads as part of the app's
+    /// state beside the title rather than as a button competing with the gear.
     private var cleanUpMenu: some View {
         Menu {
             // Inline picker inside the menu, not four Buttons: the checkmark
