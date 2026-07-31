@@ -108,6 +108,7 @@ final class RecordingIndicatorPanel {
     func show(levelProvider: @escaping () -> Float,
               bandsProvider: (() -> [Float])? = nil,
               command: Bool = false) {
+        announceTask?.cancel()
         model.mode = .recording
         model.hint = nil
         model.isLocked = false
@@ -255,26 +256,56 @@ final class RecordingIndicatorPanel {
         }
     }
 
+    // "Typing…"/"Working…" get the same forgiveness as "Getting ready…": a
+    // commit that lands fast never flashes them. With no explicit caption the
+    // pill keeps its meter for a beat — draining toward silence, so it still
+    // reads as alive — and the spinner appears only if the model is genuinely
+    // still at work. An explicit caption ("Getting ready…", "Polishing…")
+    // shows at once: its caller already waited out a grace of its own. Any
+    // later state change cancels the pending flip.
+    private static let announceGrace: Duration = .milliseconds(300)
+    private var announceTask: Task<Void, Never>?
+
     func showTranscribing(label: String? = nil) {
+        announceTask?.cancel()
+        // Only a live meter is worth holding on to; a hidden pill (a retry
+        // from the menu) shows its feedback immediately instead.
+        guard label == nil, model.mode == .recording, isShowing else {
+            applyTranscribing(label: label, command: false)
+            return
+        }
+        announceTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.announceGrace)
+            guard !Task.isCancelled else { return }
+            self?.applyTranscribing(label: nil, command: false)
+        }
+    }
+
+    // Command twin of showTranscribing: the model is thinking, not typing yet.
+    func showWorking() {
+        announceTask?.cancel()
+        guard model.mode == .recording, isShowing else {
+            applyTranscribing(label: nil, command: true)
+            return
+        }
+        announceTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.announceGrace)
+            guard !Task.isCancelled else { return }
+            self?.applyTranscribing(label: nil, command: true)
+        }
+    }
+
+    private func applyTranscribing(label: String?, command: Bool) {
         levelTimer?.invalidate()
         model.mode = .transcribing
-        model.isCommand = false
+        model.isCommand = command
         model.transcribingLabel = label
         present()
         panel?.ignoresMouseEvents = true
     }
 
-    // Command twin of showTranscribing: the model is thinking, not typing yet.
-    func showWorking() {
-        levelTimer?.invalidate()
-        model.mode = .transcribing
-        model.isCommand = true
-        model.transcribingLabel = nil
-        present()
-        panel?.ignoresMouseEvents = true
-    }
-
     func showHint(_ text: String) {
+        announceTask?.cancel()
         levelTimer?.invalidate()
         levelTimer = nil
         model.mode = .hint
@@ -292,6 +323,7 @@ final class RecordingIndicatorPanel {
     }
 
     func hide() {
+        announceTask?.cancel()
         levelTimer?.invalidate()
         levelTimer = nil
         model.level = 0   // let the meter drain rather than freeze mid-fade
