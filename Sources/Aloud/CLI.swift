@@ -16,31 +16,88 @@ enum CLI {
         case "--version":
             print(Updater.currentVersion())
             return 0
-        case "speak":
-            // Agent verb: say something out loud. Bare subcommand rather than
-            // a --flag because this is the supported surface, not tooling.
-            guard args.count >= 2 else {
-                FileHandle.standardError.write(Data("usage: Aloud speak <text>\n".utf8))
-                return 64
-            }
-            return await speak(text: args[1])
+        case "claim", "release", "speak", "listen", "status":
+            return await agentVerb(args)
         default:
             return await runDevelopmentVerb(args)
         }
     }
 
-    // MARK: speak
+    // MARK: agent verbs
 
-    static func speak(text: String) async -> Int32 {
-        let speaker = SpeakerFactory.make()
-        do {
-            try await speaker.speak(text)
-            return 0
-        } catch {
-            FileHandle.standardError.write(Data("speak failed: \(error.localizedDescription)\n".utf8))
-            return 1
+    // The whole supported surface. Each is one request to the running app over
+    // the bridge socket: the microphone, the model and the indicator all live
+    // there, and the singleton lock means this process could not start its own
+    // recorder even if it wanted to.
+    //
+    // Exit status is 0 for anything the app answered, including a refusal.
+    // Refusals are ordinary outcomes an agent is taught to read from the JSON
+    // (`disabled` means stop asking, `denied` means this request only) — a
+    // non-zero exit would make the harness report a failed *command*, which is
+    // a different and misleading thing. Non-zero is reserved for usage errors
+    // and for never reaching the app at all.
+    static func agentVerb(_ args: [String]) async -> Int32 {
+        let verb = args[0]
+        guard let op = BridgeOperation(rawValue: verb) else { return 64 }
+
+        var request = BridgeRequest(op: op,
+                                    harness: value(of: "--harness", in: args) ?? "unknown",
+                                    pid: parentProcessID())
+        request.lease = value(of: "--lease", in: args)
+        if op == .speak {
+            guard let text = firstPositional(after: 1, in: args) else {
+                usage("speak --lease <id> <text>")
+                return 64
+            }
+            request.text = text
         }
+        if op == .claim, value(of: "--harness", in: args) == nil {
+            usage("claim --harness <id>")
+            return 64
+        }
+        if (op == .speak || op == .listen || op == .release), request.lease == nil {
+            usage("\(verb) --lease <id>   (claim one first)")
+            return 64
+        }
+
+        // Comfortably under a harness's own command timeout, and well past the
+        // consent timeout the app applies — a claim that is waiting on a person
+        // must not be cut off from this end.
+        let response = BridgeClient.send(request, timeout: 90)
+        emit(response)
+        return response.reason == .unavailable ? 1 : 0
     }
+
+    private static func emit(_ response: BridgeResponse) {
+        guard let data = try? BridgeCodec.encode(response) else { return }
+        FileHandle.standardOutput.write(data)
+    }
+
+    private static func usage(_ line: String) {
+        FileHandle.standardError.write(Data("usage: Aloud \(line)\n".utf8))
+    }
+
+    private static func value(of flag: String, in args: [String]) -> String? {
+        guard let index = args.firstIndex(of: flag), args.count > index + 1 else { return nil }
+        return args[index + 1]
+    }
+
+    // The first argument that is neither a flag nor a flag's value — the text
+    // for `speak`, wherever the caller chose to put it.
+    private static func firstPositional(after start: Int, in args: [String]) -> String? {
+        var index = start
+        while index < args.count {
+            if args[index].hasPrefix("--") { index += 2; continue }
+            return args[index]
+        }
+        return nil
+    }
+
+    // The harness process, not this short-lived CLI: the lease is reaped when
+    // its owner dies, and the owner is the agent's shell, not one invocation of
+    // it. The app corroborates this against the socket peer anyway (§7.1c), so
+    // a wrong answer here degrades rather than grants anything.
+    private static func parentProcessID() -> pid_t { getppid() }
 
     #if ALOUD_PROD_CLI
     // Distribution build: the development verbs are not compiled in at all.

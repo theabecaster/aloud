@@ -24,7 +24,7 @@ if cliArgs.first == "--indicator-demo" {
 // visibly separate from the development tooling. They have to be matched
 // explicitly — anything unrecognised must still fall through to launching the
 // menu bar app, which is what a bare `open -a Aloud` relies on.
-let agentVerbs: Set<String> = ["speak"]
+let agentVerbs: Set<String> = ["claim", "release", "speak", "listen", "status"]
 
 if let first = cliArgs.first, first.hasPrefix("--") || agentVerbs.contains(first) {
     let code = await CLI.run(cliArgs)
