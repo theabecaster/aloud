@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // to keep that promise is to not open the socket at all.
     private var bridge: BridgeServer?
     private var bridgeService: AgentBridgeService?
+    private var bridgeSweep: Timer?
     private var bridgeGateObserver: AnyCancellable?
     private let settingsNavigation = SettingsNavigationModel()
     private var onboardingWindow: NSWindow?
@@ -214,6 +215,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let on = enabled ?? controller.settings.experimentalAgentVoice
         guard on else {
             bridgeService?.forceRelease()
+            bridgeSweep?.invalidate()
+            bridgeSweep = nil
             bridge?.stop()
             bridge = nil
             bridgeService = nil
@@ -234,6 +237,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             try server.start()
             bridgeService = service
             bridge = server
+            // Nothing else will notice an abandoned session. Every other reap
+            // rides in on a bridge call, and the case that strands the pill on
+            // screen is precisely the one where no more calls are coming.
+            bridgeSweep = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak service] _ in
+                Task { @MainActor in await service?.sweepAndEndFinishedSessions() }
+            }
             BridgeStartFailure.clear()
         } catch {
             // Never fatal: dictation is the app, Agent Speak is an experiment

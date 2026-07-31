@@ -1933,6 +1933,17 @@ extension DictationController: AgentVoiceHost {
         await startConsentListening(onHeard: onHeard)
     }
 
+    // Released, force-released, or reaped. Whatever the session was doing, it
+    // is over: the pill comes down rather than sitting there indefinitely
+    // saying an agent holds a microphone that has already been handed back.
+    func endAgentSession() async {
+        stopConsentListening()
+        indicatorDismissConsent()
+        isAgentSession = false
+        indicator.hide()
+        if phase == .recording { phase = .idle }
+    }
+
     func dismissConsent(accepted: Bool) async {
         stopConsentListening()
         indicatorDismissConsent()

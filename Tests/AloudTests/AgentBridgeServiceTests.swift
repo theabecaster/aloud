@@ -58,6 +58,11 @@ final class AgentBridgeServiceTests: XCTestCase {
             dismissals += 1
             dismissedAccepted.append(accepted)
         }
+        var sessionsEnded = 0
+        func endAgentSession() async {
+            sessionsEnded += 1
+            events.append("end")
+        }
         func listen(from: Date) async throws -> AgentTranscript {
             listenCount += 1
             listenFrom = from
@@ -428,6 +433,40 @@ final class AgentBridgeServiceTests: XCTestCase {
 
         let after = await service.handle(request(.listen, lease: lease), peer: peer)
         XCTAssertEqual(after.reason, .notHolder)
+    }
+
+    // The lease ending has to reach the indicator. An accepted prompt leaves
+    // the pill up on purpose — the session carries on into it — so if release
+    // only changes lease state, the pill stays on screen saying an agent holds
+    // the microphone for as long as the app runs. Found by hand: claim, answer,
+    // release, and the pill was still there.
+    func testReleaseTellsTheHostTheSessionIsOver() async {
+        let service = makeService(mode: .open)
+        let lease = (await service.handle(request(.claim), peer: peer)).lease
+        XCTAssertEqual(host.sessionsEnded, 0)
+        _ = await service.handle(request(.release, lease: lease), peer: peer)
+        XCTAssertEqual(host.sessionsEnded, 1)
+    }
+
+    // The case release cannot cover: the agent dies, or simply never calls
+    // again. Every other reap rides in on a bridge call, so the one situation
+    // that strands the pill is the one where no more calls are coming.
+    func testAnAbandonedLeaseEndsItsSessionWithoutAnotherCall() async {
+        let service = makeService(mode: .open)
+        _ = await service.handle(request(.claim), peer: peer)
+        XCTAssertEqual(host.sessionsEnded, 0)
+
+        // Not yet: a lease inside its TTL is a session, not a leak.
+        await service.sweepAndEndFinishedSessions()
+        XCTAssertEqual(host.sessionsEnded, 0)
+
+        clock.advance(LeaseConfig.default.leaseTTL + 1)
+        await service.sweepAndEndFinishedSessions()
+        XCTAssertEqual(host.sessionsEnded, 1)
+
+        // And only once — a swept session must not keep re-ending itself.
+        await service.sweepAndEndFinishedSessions()
+        XCTAssertEqual(host.sessionsEnded, 1)
     }
 
     // MARK: what comes back

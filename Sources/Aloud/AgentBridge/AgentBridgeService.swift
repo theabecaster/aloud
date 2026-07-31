@@ -40,6 +40,14 @@ protocol AgentVoiceHost: AnyObject, Sendable {
     func beginConsentCapture() async
     func dismissConsent(accepted: Bool) async
 
+    // The session is over — released, force-released, or reaped. The indicator
+    // has to be told, because nothing else will: an accepted prompt leaves the
+    // pill on screen deliberately (the session carries on into it) and every
+    // way a lease can end changes only lease state. Without this the pill sits
+    // there for the rest of the app's life, saying an agent has the microphone
+    // long after that stopped being true.
+    func endAgentSession() async
+
     // Capture and transcribe until the speaker stops. `from` is the instant
     // consent was granted: nothing captured before it is in scope, which is
     // what keeps a pre-consent buffer out of the agent's hands.
@@ -122,7 +130,7 @@ final class AgentBridgeService {
         switch request.op {
         case .status:  return status()
         case .claim:   return await claim(request, peer: peer)
-        case .release: return release(request)
+        case .release: return await release(request)
         case .speak:   return await speak(request)
         case .listen:  return await listen(request)
         }
@@ -327,12 +335,13 @@ final class AgentBridgeService {
 
     // MARK: release
 
-    private func release(_ request: BridgeRequest) -> BridgeResponse {
+    private func release(_ request: BridgeRequest) async -> BridgeResponse {
         guard let lease = request.lease else {
             return .failure(.badRequest, "release needs the lease it is releasing.")
         }
         consent.endLease(lease)
         leases.release(lease: lease, now: now())
+        await host?.endAgentSession()
         return .success()
     }
 
@@ -472,11 +481,34 @@ final class AgentBridgeService {
     // The menu bar pulling the plug. Ends the session and answers any prompt
     // still parked on it, so a waiting agent gets a refusal instead of hanging
     // until its own timeout.
+    // Reaping is lazy everywhere else — `claim`, `validate` and `release` reap
+    // on the way in — which is right for lease *state* and wrong for the pill.
+    // An agent that dies or forgets to release leaves the indicator on screen
+    // claiming it has the microphone, and with nobody calling the bridge there
+    // is nothing to trigger the reap that would take it down. The user is left
+    // looking at a session that ended minutes ago.
+    //
+    // Returns whether a holder went away, so the caller can drive the UI. Pure
+    // and clock-injected like everything else here, so the timer that normally
+    // calls it is not required to test it.
+    @discardableResult
+    func sweep(now moment: Date) -> Bool {
+        let had = leases.holder != nil
+        leases.reap(now: moment)
+        return had && leases.holder == nil
+    }
+
+    func sweepAndEndFinishedSessions() async {
+        guard sweep(now: now()) else { return }
+        await host?.endAgentSession()
+    }
+
     func forceRelease() {
         if let lease = leases.holder?.id {
             resolve(lease, .denied(preConsentAudio: .discarded))
             consent.endLease(lease)
         }
         leases.forceRelease(now: now())
+        Task { [weak self] in await self?.host?.endAgentSession() }
     }
 }
