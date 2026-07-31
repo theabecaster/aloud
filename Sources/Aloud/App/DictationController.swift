@@ -48,6 +48,9 @@ final class DictationController: ObservableObject {
     private var pendingConsentDecline: (() -> Void)?
     private var consentAudio: ConsentAudioBuffer?
     private var consentPump: Task<Void, Never>?
+    // Feeds the pill's rolling tail during a blocking agent listen. Preview
+    // only: the agent's answer is the batch transcription of the whole turn.
+    private var previewPump: Task<Void, Never>?
     // Who the current agent session belongs to, for the indicator's label.
     var agentHarnessName: String?
 
@@ -1654,6 +1657,10 @@ final class DictationController: ObservableObject {
         static let noSpeechAtAll: TimeInterval = 8       // nobody said anything
         static let hardMax: TimeInterval = 60            // a runaway session
         static let poll: TimeInterval = 0.1
+        // Long enough for the start cue to finish playing before the speech
+        // detector is pointed at the room. The cue is ~0.3s; the margin is for
+        // output-device latency, which on Bluetooth is not small.
+        static let cueGuard: TimeInterval = 0.6
     }
 
     private static let agentSpeaker: Speaker = SpeakerFactory.make()
@@ -1682,7 +1689,46 @@ final class DictationController: ObservableObject {
 
         let started = try await startAgentCapture()
         _ = started
+
+        // A preview, for the pill only. An agent session types nothing into the
+        // focused app, so this is the sole place the user can see they are being
+        // heard (§7.1d) — and the blocking listen, which is the documented
+        // default and what the installed skill tells agents to use, showed a
+        // meter and never a word. The words only ever appeared in the poll mode
+        // almost nobody takes.
+        //
+        // What comes back to the agent is still the batch transcription of the
+        // whole turn, exactly as `commitLive` settles dictation: the stream
+        // revises itself as it decodes and is not what anything decides on.
+        // An engine that cannot stream simply shows no words.
+        let preview = transcriber.makeStreamingTranscription()
+        if let preview {
+            indicator.updateTranscript("")
+            recorder.onChunk = { [weak preview] chunk in preview?.append(samples: chunk) }
+            previewPump = Task { [weak self] in
+                for await update in preview.updates {
+                    guard let self else { return }
+                    self.indicator.updateTranscript(update.full)
+                }
+            }
+        }
+        defer {
+            previewPump?.cancel()
+            previewPump = nil
+            recorder.onChunk = nil
+            if let preview { Task { await preview.cancel() } }
+        }
         playCue(.listening)
+        // The cue goes out of the speakers into an already-open microphone, and
+        // the speech detector scores it as somebody talking. That armed the
+        // silence rule instantly, so a turn ended ~1.9s in — before the user
+        // could plausibly have started — and "the room is empty" became
+        // indistinguishable from "they are still thinking". Same fault as Aloud
+        // transcribing its own prompt, one layer down: the detector hearing it.
+        //
+        // Capture is already running, so nothing the user says is lost; only
+        // the detector starts late, and it starts on a room that is ours again.
+        try? await Task.sleep(nanoseconds: UInt64(AgentListen.cueGuard * 1_000_000_000))
         startSpeechActivity()
 
         let samples = await captureUntilEndpoint()
@@ -1746,6 +1792,15 @@ final class DictationController: ObservableObject {
     // capped. Nobody is holding a key, so nothing else will stop this.
     private func captureUntilEndpoint() async -> [Float] {
         let began = Date()
+        func note(_ why: String) {
+            let elapsed = Date().timeIntervalSince(began)
+            FileHandle.standardError.write(
+                Data(String(format: "[listen] %@ after %.1fs (spoke: %@, quiet: %@)\n",
+                            why, elapsed,
+                            speechActivity.hasHeardSpeech ? "yes" : "no",
+                            speechActivity.secondsSinceSpeech
+                                .map { String(format: "%.2f", $0) } ?? "nil").utf8))
+        }
         while true {
             try? await Task.sleep(nanoseconds: UInt64(AgentListen.poll * 1_000_000_000))
             let elapsed = Date().timeIntervalSince(began)
@@ -1758,11 +1813,21 @@ final class DictationController: ObservableObject {
             let heardAnything = speechActivity.hasHeardSpeech
             if heardAnything, let quiet = speechActivity.secondsSinceSpeech,
                quiet >= AgentListen.silenceEndsTurn {
+                note("silence ended the turn")
                 break
             }
-            if !heardAnything, elapsed >= AgentListen.noSpeechAtAll { break }
-            if elapsed >= AgentListen.hardMax { break }
-            if !isAgentSession { break }   // force-released from the menu bar
+            if !heardAnything, elapsed >= AgentListen.noSpeechAtAll {
+                note("nobody spoke")
+                break
+            }
+            if elapsed >= AgentListen.hardMax {
+                note("hit the hard maximum")
+                break
+            }
+            if !isAgentSession {
+                note("force-released")
+                break                      // force-released from the menu bar
+            }
         }
         return recorder.stop()
     }
