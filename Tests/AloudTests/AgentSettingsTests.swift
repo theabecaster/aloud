@@ -1,9 +1,10 @@
 import XCTest
 @testable import Aloud
 
-// The master switch defaults to "on once at least one harness is installed",
-// which is a derived default — and derived defaults are exactly where a user's
-// explicit choice gets silently overwritten later. These pin the boundary.
+// Agent voice ships behind an experimental gate. The gate is the feature's
+// only on/off control: off means Settings shows no Agents section and every
+// agent call is refused. These pin the "off unless asked for" contract, since
+// a gate that quietly turns itself on is worse than no gate.
 final class AgentSettingsTests: XCTestCase {
     private var suiteName = ""
     private var defaults: UserDefaults!
@@ -21,53 +22,41 @@ final class AgentSettingsTests: XCTestCase {
 
     private func store() -> SettingsStore { SettingsStore(defaults: defaults) }
 
-    func testDefaultsOffWithNoHarnessInstalled() {
-        // Before any harness exists there is nothing to grant access to, so
-        // shipping this on would be a permission nobody asked for.
-        XCTAssertFalse(store().agentVoiceEnabled)
+    func testExperimentIsOffOnAFreshInstall() {
+        let s = store()
+        XCTAssertFalse(s.experimentalAgentVoice)
+        XCTAssertFalse(s.agentVoiceAvailable,
+                       "nothing may reach an agent before the user opts in")
     }
 
-    func testInstallingTheFirstHarnessTurnsItOn() {
+    func testOptingInPersists() {
         let s = store()
-        s.installedHarnesses = ["claude-code"]
-        s.noteHarnessesChanged()
-        XCTAssertTrue(s.agentVoiceEnabled)
-        XCTAssertTrue(SettingsStore(defaults: defaults).agentVoiceEnabled,
-                      "the derived default has to survive a relaunch")
+        s.experimentalAgentVoice = true
+        XCTAssertTrue(SettingsStore(defaults: defaults).experimentalAgentVoice)
+        XCTAssertTrue(SettingsStore(defaults: defaults).agentVoiceAvailable)
     }
 
-    func testRemovingTheLastHarnessTurnsItBackOff() {
+    func testTurningItOffMakesTheFeatureUnavailableAgain() {
         let s = store()
-        s.installedHarnesses = ["claude-code"]
-        s.noteHarnessesChanged()
-        s.installedHarnesses = []
-        s.noteHarnessesChanged()
-        XCTAssertFalse(s.agentVoiceEnabled)
-    }
-
-    // The one that matters: a user who deliberately turned voice off must not
-    // have it switched back on by installing another harness later.
-    func testAnExplicitChoiceIsNeverOverriddenByLaterInstalls() {
-        let s = store()
-        s.installedHarnesses = ["claude-code"]
-        s.noteHarnessesChanged()
-        XCTAssertTrue(s.agentVoiceEnabled)
-
-        s.agentVoiceEnabled = false            // the user says no
+        s.experimentalAgentVoice = true
         s.installedHarnesses = ["claude-code", "codex"]
-        s.noteHarnessesChanged()
-        XCTAssertFalse(s.agentVoiceEnabled, "installing a harness must not re-grant microphone access")
 
-        XCTAssertFalse(SettingsStore(defaults: defaults).agentVoiceEnabled,
-                       "and the refusal has to persist across a relaunch")
+        s.experimentalAgentVoice = false
+        XCTAssertFalse(s.agentVoiceAvailable,
+                       "the gate has to win regardless of what is installed underneath")
+        // Turning the experiment off is not an uninstall: the harnesses stay
+        // wired up so switching it back on doesn't mean setting them up again.
+        XCTAssertEqual(s.installedHarnesses, ["claude-code", "codex"])
     }
 
-    func testExplicitlyOnSurvivesRemovingEveryHarness() {
+    // The gate cannot be inferred from whether a harness is installed — the
+    // install UI lives on the page the gate reveals, so a harness can never
+    // exist first. Guards against reintroducing a derived default.
+    func testInstallingHarnessesNeverOpensTheGate() {
         let s = store()
-        s.agentVoiceEnabled = true
-        s.installedHarnesses = []
-        s.noteHarnessesChanged()
-        XCTAssertTrue(s.agentVoiceEnabled)
+        s.installedHarnesses = ["claude-code"]
+        XCTAssertFalse(s.experimentalAgentVoice)
+        XCTAssertFalse(SettingsStore(defaults: defaults).experimentalAgentVoice)
     }
 
     func testConsentModeDefaultsToConfirmByVoice() {
@@ -90,5 +79,11 @@ final class AgentSettingsTests: XCTestCase {
         XCTAssertFalse(s.namesHarnessWhenSpeaking)
         s.installedHarnesses = ["claude-code", "codex"]
         XCTAssertTrue(s.namesHarnessWhenSpeaking)
+    }
+
+    func testInstalledHarnessesPersist() {
+        let s = store()
+        s.installedHarnesses = ["cursor"]
+        XCTAssertEqual(SettingsStore(defaults: defaults).installedHarnesses, ["cursor"])
     }
 }
