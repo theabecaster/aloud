@@ -40,6 +40,12 @@ final class DictationController: ObservableObject {
     private var isAgentSession = false
     // The pre-consent microphone for confirm-by-voice.
     private var pendingConsentHeard: ((String) -> Void)?
+    // The same two answers the pill's buttons carry, reachable from the
+    // keyboard. Held here rather than only inside the indicator because a
+    // prompt has to be answerable without the trackpad — hands-free is the
+    // entire premise, and mode 2 has no spoken answer to fall back on.
+    private var pendingConsentAccept: (() -> Void)?
+    private var pendingConsentDecline: (() -> Void)?
     private var consentAudio: ConsentAudioBuffer?
     private var consentPump: Task<Void, Never>?
     // Who the current agent session belongs to, for the indicator's label.
@@ -432,6 +438,8 @@ final class DictationController: ObservableObject {
 
     private func handle(_ action: HotkeyAction) {
         switch action {
+        case .consentAccept: pendingConsentAccept?()
+        case .consentDecline: pendingConsentDecline?()
         case .begin: beginRecording()
         case .commit: commitRecording()
         case .cancel: cancelRecording()
@@ -1943,6 +1951,13 @@ extension DictationController: AgentVoiceHost {
         // window learns they were asked anything.
         indicatorShowConsent(prompt, onAccept: onAccept, onDecline: onDecline)
         pendingConsentHeard = onHeard
+        pendingConsentAccept = onAccept
+        pendingConsentDecline = onDecline
+        // The prompt owns the hotkey while it is up, or pressing it starts a
+        // dictation over the top of the question — a second claimant on the
+        // microphone, typing into whatever app is focused, while the agent
+        // waits on an answer the keyboard could not give.
+        hotkeyManager.consentIsPending = true
     }
 
     func beginConsentCapture() async {
@@ -2100,6 +2115,9 @@ extension DictationController: AgentVoiceHost {
 
     private func stopConsentListening() {
         pendingConsentHeard = nil
+        pendingConsentAccept = nil
+        pendingConsentDecline = nil
+        hotkeyManager.consentIsPending = false
         guard consentAudio != nil else { return }
         consentAudio = nil
         consentPump?.cancel()

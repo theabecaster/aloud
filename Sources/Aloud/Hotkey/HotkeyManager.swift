@@ -20,6 +20,14 @@ enum HotkeyAction: Equatable {
     case beginCommand   // command key went down → start a command recording
     case commitCommand  // command key released → transcribe + run the command
     case cancelCommand  // Esc or accidental tap during a command hold → discard
+    // An agent is asking to listen and the user answered with the keyboard.
+    // The pill offers both in its tooltips — "Accept — or press the Aloud
+    // hotkey", "Decline — or press Esc" — and neither did anything: the
+    // hotkey started an ordinary dictation on top of the pending question,
+    // which is two claimants on one microphone and text typed into whatever
+    // app happened to be focused. A prompt owns the keyboard while it is up.
+    case consentAccept
+    case consentDecline
     case none
 }
 
@@ -274,12 +282,78 @@ struct CommandKeyEngine {
     }
 }
 
+// What a keystroke means while an agent's consent prompt is on screen.
+//
+// A prompt owns the keyboard for as long as it is up. Without that, pressing
+// the Aloud hotkey to answer "yes" — which the pill's own tooltip tells you to
+// do — instead started an ordinary dictation on top of the pending question:
+// two claimants on one microphone, text typed into whatever app was focused,
+// and an agent waiting on an answer the keyboard had no way to give.
+//
+// Pure and separate from the tap so the rule is testable. It is a small table
+// and every row is a decision:
+//
+//   begin / lock / beginCommand → yes. Any way of starting to talk to Aloud,
+//     while Aloud is asking a yes/no question, is the answer to that question.
+//   cancel / cancelCommand      → no. Esc reads as "stop", and stopping a
+//     question is declining it.
+//   commit / commitCommand      → nothing, and swallowed. This is the release
+//     half of the press that just answered; committing a recording that never
+//     started is worse than doing nothing.
+enum ConsentKeys {
+    static func translate(_ action: HotkeyAction,
+                          consentIsPending: Bool) -> (emit: HotkeyAction?, consumed: Bool) {
+        guard consentIsPending else {
+            return (action == .none ? nil : action, false)
+        }
+        switch action {
+        case .begin, .lock, .beginCommand:
+            return (.consentAccept, true)
+        case .cancel, .cancelCommand:
+            return (.consentDecline, true)
+        case .commit, .commitCommand:
+            return (nil, true)
+        case .consentAccept, .consentDecline:
+            return (action, true)
+        case .none:
+            return (nil, false)
+        }
+    }
+}
+
 final class HotkeyManager {
     var onAction: ((HotkeyAction) -> Void)?
 
     private var engine: HotkeyEngine
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+
+    // Set while an agent's consent prompt is on screen. Written from the main
+    // actor, read on the event tap thread, so it carries a lock rather than
+    // relying on the two happening to agree.
+    private let consentLock = NSLock()
+    private var consentPending = false
+
+    var consentIsPending: Bool {
+        get { consentLock.lock(); defer { consentLock.unlock() }; return consentPending }
+        set { consentLock.lock(); consentPending = newValue; consentLock.unlock() }
+    }
+
+    // Every action leaves through here so the consent translation cannot be
+    // applied in one branch and forgotten in another — the hands-free key, the
+    // command key and the dictation key each have their own path out.
+    //
+    // Returns whether the event was consumed answering the prompt, which the
+    // caller uses to swallow it: a keystroke that just said "yes" to an agent
+    // must not also reach the app underneath.
+    @discardableResult
+    private func emit(_ action: HotkeyAction) -> Bool {
+        let outcome = ConsentKeys.translate(action, consentIsPending: consentIsPending)
+        if let emitted = outcome.emit {
+            DispatchQueue.main.async { [weak self] in self?.onAction?(emitted) }
+        }
+        return outcome.consumed
+    }
 
     init(hotkey: Hotkey, handsFree: Bool = true) {
         engine = HotkeyEngine(hotkey: hotkey, handsFreeEnabled: handsFree)
@@ -414,10 +488,15 @@ final class HotkeyManager {
             : UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let escapeDown = type == .keyDown && keyCode == UInt16(kVK_Escape)
 
+        // Esc only reaches the engines while a dictation session is held, so a
+        // pending prompt has to claim it here or the key means nothing.
+        if escapeDown, consentIsPending {
+            emit(.consentDecline)
+            return true
+        }
+
         if let action = handsFreeKeyAction(type: type, keyCode: keyCode, flags: event.flags) {
-            if action != .none {
-                DispatchQueue.main.async { [weak self] in self?.onAction?(action) }
-            }
+            if emit(action) { return true }
             return false
         }
 
@@ -428,16 +507,14 @@ final class HotkeyManager {
                 type: type, keyCode: keyCode, flags: event.flags,
                 time: time) ?? .none
             if commandAction != .none {
-                DispatchQueue.main.async { [weak self] in self?.onAction?(commandAction) }
+                if emit(commandAction) { return true }
                 return escapeDown
             }
         }
 
         let action = engine.handle(type: type, keyCode: keyCode, flags: event.flags,
                                    time: time)
-        if action != .none {
-            DispatchQueue.main.async { [weak self] in self?.onAction?(action) }
-        }
+        if emit(action) { return true }
         return escapeDown && action != .none
     }
 
