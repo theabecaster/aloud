@@ -43,8 +43,34 @@ struct AgentsSettings: View {
         let snippet: String?
     }
 
+    @State private var bridgeFailure: String?
+
     var body: some View {
         Form {
+            // The bridge is on but did not come up. Without this the failure is
+            // invisible from both ends — a .app's stderr goes nowhere a user
+            // looks, and agents are simply told the feature is off.
+            if settings.experimentalAgentVoice, let failure = bridgeFailure {
+                SwiftUI.Section {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(loc("Agents can’t reach Aloud right now."))
+                            Text(failure)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                } footer: {
+                    Text(loc("Restarting Aloud usually clears this."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             SwiftUI.Section {
                 Toggle(loc("Agent Speak"), isOn: $settings.experimentalAgentVoice)
             } header: {
@@ -188,6 +214,7 @@ struct AgentsSettings: View {
 
     private func refresh() {
         detected = installer.detect()
+        bridgeFailure = BridgeStartFailure.read(stateDir: AppPaths.stateDir)
         // What the bridge reads to decide whether the spoken prompt names the
         // caller. Kept from the same read the rows are drawn from, so the two
         // can never disagree.

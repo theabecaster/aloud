@@ -267,7 +267,7 @@
 "Setting Up Voice Recognition" = "Configuration de la reconnaissance vocale";
 "A one-time download, about 500 MB. After this, dictation works offline." = "Un téléchargement unique d’environ 500 Mo. Ensuite, la dictée fonctionne hors ligne.";
 "No internet connection" = "Aucune connexion Internet";
-"This screen continues on its own once you're back online." = "Cet écran continue tout seul dès que vous êtes de nouveau en ligne.";
+"This screen continues on its own once you’re back online." = "Cet écran continue tout seul dès que vous êtes de nouveau en ligne.";
 "Download" = "Télécharger";
 "%ld%% — you can keep using your Mac" = "%ld %% – vous pouvez continuer à utiliser votre Mac";
 "Almost ready…" = "Presque prêt…";
@@ -397,6 +397,14 @@
 "Couldn’t write %1$@ — %2$@" = "Impossible d’écrire %1$@ — %2$@";
 "Let coding agents ask you questions out loud." = "Laissez les agents vous poser des questions à voix haute.";
 "Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings." = "Permet aux agents de codage de vous poser une question à voix haute et d’entendre votre réponse. Ajoute la section « Voix des agents » aux Réglages.";
+
+/* Agent Speak — the banner when the feature is on but the bridge never
+   started. The technical reason is shown verbatim underneath, so these
+   two carry the plain-language part: what is wrong, and the one thing
+   worth trying. The apostrophe is straight because the loc() call is —
+   the key has to match the source byte for byte. */
+"Agents can’t reach Aloud right now." = "Les agents ne peuvent pas joindre Aloud pour le moment.";
+"Restarting Aloud usually clears this." = "Relancer Aloud règle généralement le problème.";
 
 /* Agent Speak — the consent modes: how an agent's request to listen
    is approved, and what each mode costs. */

@@ -243,7 +243,7 @@ struct OnboardingView: View {
                 case .modelMissing where !isOnline, .failed where !isOnline:
                     Label(loc("No internet connection"), systemImage: "wifi.slash")
                         .foregroundStyle(.secondary)
-                    Text(loc("This screen continues on its own once you're back online."))
+                    Text(loc("This screen continues on its own once you’re back online."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

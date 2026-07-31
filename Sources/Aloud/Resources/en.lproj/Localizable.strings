@@ -267,7 +267,7 @@
 "Setting Up Voice Recognition" = "Setting Up Voice Recognition";
 "A one-time download, about 500 MB. After this, dictation works offline." = "A one-time download, about 500 MB. After this, dictation works offline.";
 "No internet connection" = "No internet connection";
-"This screen continues on its own once you're back online." = "This screen continues on its own once you're back online.";
+"This screen continues on its own once you’re back online." = "This screen continues on its own once you’re back online.";
 "Download" = "Download";
 "%ld%% — you can keep using your Mac" = "%ld%% — you can keep using your Mac";
 "Almost ready…" = "Almost ready…";
@@ -397,6 +397,14 @@
 "Couldn’t write %1$@ — %2$@" = "Couldn’t write %1$@ — %2$@";
 "Let coding agents ask you questions out loud." = "Let coding agents ask you questions out loud.";
 "Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings." = "Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings.";
+
+/* Agent Speak — the banner when the feature is on but the bridge never
+   started. The technical reason is shown verbatim underneath, so these
+   two carry the plain-language part: what is wrong, and the one thing
+   worth trying. The apostrophe is straight because the loc() call is —
+   the key has to match the source byte for byte. */
+"Agents can’t reach Aloud right now." = "Agents can’t reach Aloud right now.";
+"Restarting Aloud usually clears this." = "Restarting Aloud usually clears this.";
 
 /* Agent Speak — the consent modes: how an agent's request to listen
    is approved, and what each mode costs. */

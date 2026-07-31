@@ -24,6 +24,11 @@ final class LocalizationTests: XCTestCase {
         // entry serves the toggle, the sidebar row, and the VoiceOver label.
         "Let coding agents ask you questions out loud.",
         "Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings.",
+        // The bridge-down banner. Straight apostrophe on purpose: it matches
+        // the loc() call, and a key that differs by one character resolves to
+        // English without anything looking wrong.
+        "Agents can’t reach Aloud right now.",
+        "Restarting Aloud usually clears this.",
         "Agents can ask to speak through your speakers and hear your answer. Turning this off refuses every request — anything set up below stays, so switching it back on doesn’t mean starting over.",
         "Consent",
         "The recording indicator always shows while an agent is listening, and nothing leaves this Mac.",

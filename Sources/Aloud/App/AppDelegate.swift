@@ -217,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             bridge?.stop()
             bridge = nil
             bridgeService = nil
+            BridgeStartFailure.clear()
             return
         }
         guard bridge == nil else { return }
@@ -233,9 +234,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             try server.start()
             bridgeService = service
             bridge = server
+            BridgeStartFailure.clear()
         } catch {
             // Never fatal: dictation is the app, Agent Speak is an experiment
-            // on top of it. The Agents pane is where this gets surfaced.
+            // on top of it. But it must not be silent either — recorded where
+            // the CLI can read it, so an agent is told the bridge is down
+            // rather than that the feature was switched off, and where the
+            // Agents pane can show the user something actionable.
+            BridgeStartFailure.record(error)
             FileHandle.standardError.write(
                 Data("agent bridge failed to start: \(error.localizedDescription)\n".utf8))
         }

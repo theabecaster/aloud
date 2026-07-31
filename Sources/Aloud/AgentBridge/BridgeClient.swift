@@ -31,9 +31,18 @@ enum BridgeClient {
         // an agent "try again later" about a state that will not change on its
         // own, and it would keep trying. The singleton lock file distinguishes
         // them — if the GUI holds it, the app is up and the feature is off.
-        let notRunning = appIsRunning(stateDir: socketURL.deletingLastPathComponent())
-            ? BridgeResponse.failure(.disabled, "Agent Speak is turned off in Aloud.")
-            : BridgeResponse.failure(.unavailable, "Aloud isn't running.")
+        let stateDir = socketURL.deletingLastPathComponent()
+        let notRunning: BridgeResponse
+        if let failure = BridgeStartFailure.read(stateDir: stateDir) {
+            // The gate is on and the bridge could not start. Reporting
+            // `disabled` here would tell every agent to stop asking for good
+            // over something recoverable.
+            notRunning = .failure(.unavailable, "Aloud couldn't start Agent Speak: \(failure)")
+        } else if appIsRunning(stateDir: stateDir) {
+            notRunning = .failure(.disabled, "Agent Speak is turned off in Aloud.")
+        } else {
+            notRunning = .failure(.unavailable, "Aloud isn't running.")
+        }
         let path = socketURL.path
 
         guard FileManager.default.fileExists(atPath: path),
