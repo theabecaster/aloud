@@ -25,7 +25,15 @@ enum BridgeClient {
     static func send(_ request: BridgeRequest,
                      timeout: TimeInterval,
                      socketURL: URL = BridgeSocket.url) -> BridgeResponse {
-        let notRunning = BridgeResponse.failure(.unavailable, "Aloud isn't running.")
+        // With Agent Speak switched off the app opens no socket at all, so a
+        // failed connect is ambiguous: Aloud may be running perfectly well with
+        // the feature turned off. Reporting `unavailable` for that would tell
+        // an agent "try again later" about a state that will not change on its
+        // own, and it would keep trying. The singleton lock file distinguishes
+        // them — if the GUI holds it, the app is up and the feature is off.
+        let notRunning = appIsRunning(stateDir: socketURL.deletingLastPathComponent())
+            ? BridgeResponse.failure(.disabled, "Agent Speak is turned off in Aloud.")
+            : BridgeResponse.failure(.unavailable, "Aloud isn't running.")
         let path = socketURL.path
 
         guard FileManager.default.fileExists(atPath: path),
@@ -89,4 +97,21 @@ enum BridgeClient {
             return notRunning
         }
     }
+
+    // The GUI holds an exclusive flock on this for its whole life (see
+    // main.swift). Being unable to take it is proof something is running; the
+    // probe is read-only and never creates the file, so asking the question
+    // cannot invent the answer.
+    private static func appIsRunning(stateDir: URL) -> Bool {
+        let lock = stateDir.appendingPathComponent("gui.lock").path
+        let fd = open(lock, O_RDONLY)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        if flock(fd, LOCK_EX | LOCK_NB) == 0 {
+            flock(fd, LOCK_UN)
+            return false          // nobody held it
+        }
+        return errno == EWOULDBLOCK
+    }
+
 }

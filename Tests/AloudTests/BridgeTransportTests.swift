@@ -84,6 +84,31 @@ final class BridgeTransportTests: XCTestCase {
         XCTAssertNotNil(peer.name)
     }
 
+    // With Agent Speak off the app opens no socket at all, so a failed connect
+    // is ambiguous. Calling that `unavailable` tells an agent "try again
+    // later" about a state that will not change on its own, and it keeps
+    // trying; `disabled` tells it to stop. The singleton lock is what separates
+    // "the app is up and the feature is off" from "the app is not running".
+    func testFeatureOffIsReportedAsDisabledNotUnavailable() throws {
+        let stateDir = socketURL.deletingLastPathComponent()
+        let lock = stateDir.appendingPathComponent("gui.lock")
+        FileManager.default.createFile(atPath: lock.path, contents: nil)
+
+        // Nothing holding the lock: the app really is not running.
+        var response = BridgeClient.send(request(), timeout: 1, socketURL: socketURL)
+        XCTAssertEqual(response.reason, .unavailable)
+
+        // Hold it the way the running GUI does, with no socket listening.
+        let fd = open(lock.path, O_RDONLY)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        defer { flock(fd, LOCK_UN); close(fd) }
+        XCTAssertEqual(flock(fd, LOCK_EX | LOCK_NB), 0)
+
+        response = BridgeClient.send(request(), timeout: 1, socketURL: socketURL)
+        XCTAssertEqual(response.reason, .disabled,
+                       "the app is running — the feature is simply switched off")
+    }
+
     private func request(_ op: BridgeOperation = .status) -> BridgeRequest {
         BridgeRequest(op: op, harness: "claude-code", pid: 4242)
     }
