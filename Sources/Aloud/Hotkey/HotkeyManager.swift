@@ -535,13 +535,22 @@ final class HotkeyManager {
                 handsFreeTapDirty = false
                 return HotkeyAction.none
             }
+            // While an agent is asking, this key answers the question and does
+            // nothing else. Returned before any engine state is touched: a
+            // forceLock here would leave the engine believing a hands-free
+            // session is running that nothing ever started.
+            if consentIsPending { return .consentAccept }
             // A session in any state ends; idle begins a locked one.
             if engine.isLocked || engine.isHeld {
                 engine.reset()
                 return .commit
             }
             engine.forceLock()
-            DispatchQueue.main.async { [weak self] in self?.onAction?(.begin) }
+            // Through emit, never straight to onAction. This line went direct
+            // and was the one path out of the tap that skipped the consent
+            // translation, so tapping hands-free while an agent was asking
+            // both accepted the prompt and started a dictation underneath it.
+            emit(.begin)
             return .lock
         case .interrupted:
             handsFreeTapDirty = true
