@@ -60,7 +60,10 @@ struct SettingsView: View {
             case .vocabulary: return "character.book.closed"
             case .snippets: return "text.insert"
             case .appRules: return "macwindow"
-            case .agents: return "sparkles"
+            // Two bubbles: the feature is a conversation with an agent, not a
+            // sprinkle of magic. Same glyph the onboarding screen leads with,
+            // so the row is recognizable from the one place the user met it.
+            case .agents: return "bubble.left.and.bubble.right"
             case .history: return "clock"
             case .about: return "info.circle"
             }
@@ -73,9 +76,12 @@ struct SettingsView: View {
     // gate's promise is that the feature does not exist until asked for, and a
     // greyed row advertising it would break that. The onboarding page and
     // Settings → General are the two ways in.
+    // When it is on it leads its cluster, above Vocabulary: it is the thing the
+    // user just turned on and came here to set up, so it should not be the last
+    // row in the group.
     private var clusters: [[Section]] {
         var middle: [Section] = [.vocabulary, .snippets, .appRules]
-        if settings.experimentalAgentVoice { middle.append(.agents) }
+        if settings.experimentalAgentVoice { middle.insert(.agents, at: 0) }
         return [[.general, .dictation], middle, [.history, .about]]
     }
 
@@ -526,18 +532,30 @@ struct GeneralSettings: View {
     // a bare Spacer between sections draws as an empty card.
     private var startup: some View {
         Form {
-            // The way back in for anyone who skipped the onboarding page. The
-            // Agents pane carries its own off switch, but it does not exist
-            // while the experiment is off — so without this the only route in
-            // would be a screen the user has already passed.
+            // Every experiment, in one place. They used to be split across two
+            // panes under the same header, which read as two different kinds of
+            // experimental — and left the Agent Speak switch in two places at
+            // once, one of which vanished when you used it.
             SwiftUI.Section {
+                Toggle(loc("Live typing"), isOn: $settings.liveTyping)
                 Toggle(loc("Agent Speak"), isOn: $settings.experimentalAgentVoice)
             } header: {
-                Text(loc("Experimental"))
+                HStack(spacing: 5) {
+                    Text(loc("Experimental"))
+                    InfoButton(text: loc("Experimental features work, but expect the occasional hiccup. You can turn them off any time."))
+                }
             } footer: {
-                Text(loc("Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings."))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                // One line each, in the order the switches sit in. Both say
+                // what turning it on does, not what it is.
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(settings.liveTyping
+                         ? loc("Words appear as you speak and settle as Aloud hears more.")
+                         : loc("Everything is typed at once when you release the key."))
+                    Text(loc("Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings."))
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             SwiftUI.Section {
@@ -587,8 +605,10 @@ struct GeneralSettings: View {
             // undo it, and sending them anywhere else wastes a click.
             if status == .notDetermined, let request {
                 Button(loc("Allow…"), action: request)
+                    .buttonStyle(.text)
             } else {
                 Button(loc("Open Settings"), action: openSettings)
+                    .buttonStyle(.text)
             }
         } label: {
             Label {
@@ -1168,20 +1188,9 @@ struct DictationSettings: View {
                     .foregroundStyle(.secondary)
             }
 
-            SwiftUI.Section {
-                Toggle(loc("Live typing"), isOn: $settings.liveTyping)
-            } header: {
-                HStack(spacing: 5) {
-                    Text(loc("Experimental"))
-                    InfoButton(text: loc("Experimental features work, but expect the occasional hiccup. You can turn them off any time."))
-                }
-            } footer: {
-                Text(settings.liveTyping
-                     ? loc("Words appear as you speak and settle as Aloud hears more.")
-                     : loc("Everything is typed at once when you release the key."))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            // Live typing used to sit here under its own Experimental header.
+            // It lives with the other experiments in General now — one place to
+            // look for anything that is still finding its feet.
         }
         .formStyle(.grouped)
     }
@@ -1260,6 +1269,7 @@ struct InactiveNotice: View {
                 Spacer(minLength: 8)
                 if let actionLabel, let action {
                     Button(actionLabel, action: action)
+                        .buttonStyle(.text)
                 }
             }
         }
@@ -1752,6 +1762,7 @@ struct HistorySettings: View {
                     }
                     Spacer()
                     Button(loc("Clear History")) { history.clear() }
+                        .buttonStyle(.text)
                 }
                 .padding(12)
             }
@@ -1934,10 +1945,8 @@ struct HistoryRow: View {
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
                 .fixedSize()
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color.accentColor)
+        .buttonStyle(.text)
     }
 }
 
@@ -2080,6 +2089,8 @@ struct AboutSettings: View {
                 Button(loc("Check for Updates")) {
                     NotificationCenter.default.post(name: .aloudCheckForUpdates, object: nil)
                 }
+                .buttonStyle(.text)
+                .font(.callout)
                 .padding(.top, 4)
             }
             Spacer()

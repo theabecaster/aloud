@@ -16,7 +16,7 @@ final class LocalizationTests: XCTestCase {
         // silent fallback to English is a non-English user not knowing to
         // answer at all.
         "Let an agent listen? Yes or no",
-        "Let %@ listen? Yes or no",
+        "Let %@ agent listen? Yes or no",
         // Settings → Agents and the onboarding opt-in. Agent Speak hands local
         // processes the mic and the speakers, so the screens that say so — and
         // the switch that takes it back — cannot fall back to English.
@@ -29,25 +29,24 @@ final class LocalizationTests: XCTestCase {
         // English without anything looking wrong.
         "Agents can’t reach Aloud right now.",
         "Restarting Aloud usually clears this.",
-        "Agents can ask to speak through your speakers and hear your answer. Turning this off refuses every request — anything set up below stays, so switching it back on doesn’t mean starting over.",
-        "Consent",
         "The recording indicator always shows while an agent is listening, and nothing leaves this Mac.",
-        // The consent modes. The names are what a segmented control shows, the
-        // sentences are what the mode costs — a mode nobody can read is a
-        // permission decision made blind.
-        "Open",
-        "Agents can start listening right away. The recording indicator always shows when they do.",
-        "Confirm on screen",
-        "Nothing reaches the agent until you accept on screen.",
-        "Confirm by voice",
-        "Aloud asks out loud and waits for you to say accept — no need to look at the screen.",
+        // The two switches that decide whether an agent is asked before it
+        // listens, and the sentence saying what the pair currently costs — a
+        // permission decision nobody can read is one made blind.
+        "Permission",
+        "Ask before listening",
+        "Ask out loud",
+        "Agents start listening as soon as they ask, without checking with you first.",
+        "Aloud asks through your speakers and waits for you to say yes — no need to look at the screen. You’re asked once per session.",
+        "The question appears on the recording indicator and waits for you to accept. You’re asked once per session.",
         "Agent Tools",
         "No agent tools found on this Mac.",
         "Aloud looks for the agent tools you already use. Open one, then come back.",
-        "Aloud writes a short instructions file so an agent knows it can talk to you. Remove deletes that file again.",
-        "Install",
+        "Setting one up adds a short instructions file, a line in the tool’s own instructions, and permission to run Aloud. Remove takes them back out and stops Aloud setting that tool up again. Turning Agent Speak off leaves them in place.",
+        "Set Up",
         "Already set up on this Mac",
-        "Lives in each project — paste it into %@ in the repos you want it in.",
+        "Paste it into %@ in each project you want it in.",
+        "Copy the lines to add",
         "%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand.",
         "Couldn’t write %1$@ — %2$@",
         "Let Agents Ask You Out Loud",

@@ -1,10 +1,14 @@
 import AppKit
 import SwiftUI
 
-// Settings → Agents. Only reachable while the experimental gate is on, so the
-// pane's job is the three things the user can still decide: keep it on, how an
-// agent's request to listen gets approved, and which of their agent tools know
-// Aloud exists.
+// Settings → Agent Speak. Only reachable while the experimental gate is on —
+// and the gate itself lives in General → Experimental with the other
+// experiments, not here: a pane that can switch itself out of existence is a
+// trapdoor, and the user came here to set the feature up rather than to
+// reconsider it.
+//
+// So the pane answers the two questions that are actually left: is an agent
+// asked before it listens, and which agent tools know Aloud exists.
 //
 // Deliberately not a wizard. Onboarding walks a new user through detect →
 // explain → install → rehearse; this is the place they come back to, so every
@@ -71,36 +75,26 @@ struct AgentsSettings: View {
                 }
             }
 
+            // One question, then the question it opens up. A three-way picker
+            // made the user rank modes they had no vocabulary for; a switch
+            // asks the thing they actually have an opinion about — do I get
+            // asked — and only then how the asking happens.
             SwiftUI.Section {
-                Toggle(loc("Agent Speak"), isOn: $settings.experimentalAgentVoice)
-            } header: {
-                Text(loc("Experimental"))
-            } footer: {
-                // The one thing a master switch has to promise: off is not
-                // uninstall. Otherwise nobody dares turn it off to try it.
-                Text(loc("Agents can ask to speak through your speakers and hear your answer. Turning this off refuses every request — anything set up below stays, so switching it back on doesn’t mean starting over."))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Same shape as Clean-up: a segmented choice whose consequence is
-            // spelled out underneath, because the modes only make sense next
-            // to what they cost.
-            SwiftUI.Section {
-                Picker(loc("Consent"), selection: $settings.agentConsentMode) {
-                    ForEach(AgentConsentMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
+                Toggle(loc("Ask before listening"), isOn: asksFirst)
+                if settings.agentAsksFirst {
+                    Toggle(loc("Ask out loud"), isOn: $settings.agentAsksOutLoud)
                 }
-                .pickerStyle(.segmented)
+            } header: {
+                Text(loc("Permission"))
             } footer: {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(settings.agentConsentMode.explanation)
+                    Text(permissionExplanation)
                     Text(loc("The recording indicator always shows while an agent is listening, and nothing leaves this Mac."))
                         .foregroundStyle(.tertiary)
                 }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             SwiftUI.Section {
@@ -117,17 +111,44 @@ struct AgentsSettings: View {
             } footer: {
                 Text(detected.isEmpty
                      ? loc("Aloud looks for the agent tools you already use. Open one, then come back.")
-                     : loc("Aloud writes a short instructions file so an agent knows it can talk to you. Remove deletes that file again."))
+                     : loc("Setting one up adds a short instructions file, a line in the tool’s own instructions, and permission to run Aloud. Remove takes them back out and stops Aloud setting that tool up again. Turning Agent Speak off leaves them in place."))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
+        // The second switch arrives and leaves with the first one's answer, so
+        // the card grows rather than snapping to a new height.
+        .animation(.default, value: settings.agentAsksFirst)
         .onAppear(perform: refresh)
+    }
+
+    // The switch reads and writes the stored mode through the store, so the
+    // pane never holds a second copy of the answer.
+    private var asksFirst: Binding<Bool> {
+        Binding(get: { settings.agentAsksFirst },
+                set: { settings.agentAsksFirst = $0 })
+    }
+
+    // What the current pair of switches costs, in one sentence. Written from
+    // the user's side of the microphone — what happens to them, not which mode
+    // is selected.
+    private var permissionExplanation: String {
+        guard settings.agentAsksFirst else {
+            return loc("Agents start listening as soon as they ask, without checking with you first.")
+        }
+        return settings.agentAsksOutLoud
+            ? loc("Aloud asks through your speakers and waits for you to say yes — no need to look at the screen. You’re asked once per session.")
+            : loc("The question appears on the recording indicator and waits for you to accept. You’re asked once per session.")
     }
 
     // MARK: - Rows
 
+    // One line per tool: the name, whether it is set up, and the one button
+    // that changes that. Everything else a row could say — where the file
+    // lands, what a per-project tool means — is a tooltip, because a list of
+    // eight tools is read by scanning it, not by reading it.
     @ViewBuilder
     private func harnessRow(_ entry: DetectedHarness) -> some View {
         let harness = entry.harness
@@ -137,33 +158,28 @@ struct AgentsSettings: View {
                 case .global:
                     if entry.isInstalled {
                         Button(loc("Remove")) { remove(harness) }
+                            .buttonStyle(.text)
                     } else {
-                        Button(loc("Install")) { install(harness) }
+                        Button(loc("Set Up")) { install(harness) }
+                            .buttonStyle(.text)
                     }
                 case .perProject:
-                    // Never an Install button: there is no global place to put
+                    // Never a Set Up button: there is no global place to put
                     // this, and a button that quietly does nothing is worse
-                    // than saying so.
+                    // than saying so. The tooltip carries the why.
                     copyButton(harness) { install(harness) }
+                        .help(loc("Paste it into %@ in each project you want it in.",
+                                  harness.instructionPath))
                 }
             } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 5) {
-                        Text(harness.displayName)
-                        if entry.isInstalled {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(Color.aloud)
-                                .imageScale(.small)
-                                .help(loc("Already set up on this Mac"))
-                                .accessibilityLabel(loc("Already set up on this Mac"))
-                        }
-                    }
-                    if entry.scope == .perProject {
-                        Text(loc("Lives in each project — paste it into %@ in the repos you want it in.",
-                                 harness.instructionPath))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 5) {
+                    Text(harness.displayName)
+                    if entry.isInstalled {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Color.aloud)
+                            .imageScale(.small)
+                            .help(loc("Already set up on this Mac"))
+                            .accessibilityLabel(loc("Already set up on this Mac"))
                     }
                 }
             }
@@ -174,26 +190,24 @@ struct AgentsSettings: View {
         }
     }
 
-    // What we could not do, in words, with the thing the user can paste in our
-    // place. Never a silent no-op: a settings.json we refuse to rewrite is a
-    // decision we made on their behalf, so it gets said out loud.
+    // What we could not do, in one sentence, with the thing the user can paste
+    // in our place behind the Copy button rather than dumped into the row.
+    // Never a silent no-op: a settings.json we refuse to rewrite is a decision
+    // we made on their behalf, so it gets said out loud.
     @ViewBuilder
     private func failureNotice(_ harness: AgentHarness, _ failure: InstallFailure) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Label(failure.message, systemImage: "exclamationmark.triangle.fill")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let snippet = failure.snippet {
-                Text(snippet)
-                    .font(.footnote.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Spacer()
-                    copyButton(harness) { copy(snippet, from: harness) }
-                }
+                Spacer(minLength: 4)
+                copyButton(harness) { copy(snippet, from: harness) }
+                    // Sits against footnote-sized text, so it matches it —
+                    // controlSize only ever spoke to the bezel that's gone.
+                    .font(.footnote)
+                    .help(loc("Copy the lines to add"))
             }
         }
     }
@@ -207,6 +221,9 @@ struct AgentsSettings: View {
                   systemImage: done ? "checkmark" : "doc.on.doc")
                 .contentTransition(.symbolEffect(.replace))
         }
+        // Confirmed in the app's own blue: the swap is Aloud reporting back,
+        // not another thing to click.
+        .buttonStyle(.text(done ? .aloud : .accentColor))
         .accessibilityLabel(done ? loc("Copied") : loc("Copy"))
     }
 

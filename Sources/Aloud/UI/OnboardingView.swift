@@ -51,6 +51,12 @@ struct OnboardingView: View {
 
     private let poll = Timer.publish(every: 0.8, on: .main, in: .common).autoconnect()
 
+    // Harness hook: ALOUD_ONBOARDING_HOLD=1 keeps the flow on whatever screen
+    // it's showing. The screens that wait on something advance themselves the
+    // moment it's satisfied, which on a Mac that already has the permissions
+    // and the model makes them impossible to look at.
+    private let holdsStep = ProcessInfo.processInfo.environment["ALOUD_ONBOARDING_HOLD"] == "1"
+
     var body: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 28)
@@ -105,8 +111,8 @@ struct OnboardingView: View {
             // happened in a system dialog or System Settings, and macOS
             // doesn't hand focus back to us — reclaim it so the flow visibly
             // continues instead of sitting behind whatever has focus.
-            if step == .access, Permissions.allGranted { advance(); reclaimFocus() }
-            if step == .voice, controller.transcriberState == .ready { advance() }
+            if !holdsStep, step == .access, Permissions.allGranted { advance(); reclaimFocus() }
+            if !holdsStep, step == .voice, controller.transcriberState == .ready { advance() }
             if step == .tryIt, !controller.lastTranscription.isEmpty { tryItDone = true }
         }
     }
@@ -701,16 +707,29 @@ struct OnboardingView: View {
             .buttonStyle(OnboardingButtonStyle())
     }
 
+    // The screens this run will actually show. A step whose requirement is
+    // already met is one advance() walks straight past, so counting it here
+    // promises a screen that never arrives and makes the indicator jump two
+    // places at once. The current step always counts, even the moment it
+    // becomes satisfied — the dot under you may not vanish while you're
+    // standing on it.
+    private var visibleSteps: [Step] {
+        Step.allCases.filter { $0 == step || !isSatisfied($0) }
+    }
+
     private var dots: some View {
-        HStack(spacing: 8) {
-            ForEach(Step.allCases, id: \.rawValue) { s in
+        let steps = visibleSteps
+        let position = (steps.firstIndex(of: step) ?? 0) + 1
+        return HStack(spacing: 8) {
+            ForEach(steps, id: \.rawValue) { s in
                 Circle()
                     .fill(s == step ? Color.accentColor : Color.secondary.opacity(0.3))
                     .frame(width: 7, height: 7)
             }
         }
+        .animation(.easeOut(duration: 0.22), value: steps)
         .accessibilityElement()
-        .accessibilityLabel(loc("Step %1$ld of %2$ld", step.rawValue + 1, Step.allCases.count))
+        .accessibilityLabel(loc("Step %1$ld of %2$ld", position, steps.count))
     }
 
     // Skip steps that are already satisfied, so reopening setup (or a re-grant

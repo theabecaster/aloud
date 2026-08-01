@@ -119,6 +119,10 @@ final class SystemSpeaker: NSObject, Speaker {
         return []
     }
 
+    // The system voice starts speaking as soon as it is asked, so this is
+    // simply whether it is mid-utterance.
+    var isPlaying: Bool { synthesizer.isSpeaking }
+
     func stop() {
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)

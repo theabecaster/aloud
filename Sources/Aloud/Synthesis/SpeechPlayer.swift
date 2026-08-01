@@ -20,6 +20,12 @@ final class SpeechPlayer {
     private var envelope = SpeechEnvelope(frames: [])
     private var startedAt: TimeInterval?
 
+    // Whether samples are going out of the speakers at this instant.
+    var isPlaying: Bool {
+        levelLock.lock(); defer { levelLock.unlock() }
+        return startedAt != nil
+    }
+
     // 0…1, and 0 whenever nothing is playing.
     var currentLevel: Float {
         levelLock.lock(); defer { levelLock.unlock() }
@@ -41,17 +47,42 @@ final class SpeechPlayer {
 
     // Resolves when playback finishes, or immediately if it was interrupted by
     // a newer utterance or by stop().
+    // Silence scheduled ahead of the speech, so the output device has something
+    // to swallow while it wakes up. `engine.start()` returns before the hardware
+    // is actually rendering — on a cold engine, and worse on Bluetooth — and
+    // whatever is at the front of the buffer during that gap is simply never
+    // heard. It cost the first few words of an agent's question: the user saw
+    // the pill talking and heard nothing until halfway through the sentence.
+    //
+    // A running engine is already warm, so it only needs enough to cover the
+    // node starting.
+    private static let coldLeadIn: TimeInterval = 0.45
+    private static let warmLeadIn: TimeInterval = 0.1
+
     func play(_ speech: Speech) async throws {
         guard !speech.samples.isEmpty else { return }
         guard let format = AVAudioFormat(standardFormatWithSampleRate: Double(speech.sampleRate),
-                                         channels: 1),
-              let buffer = AVAudioPCMBuffer(pcmFormat: format,
-                                            frameCapacity: AVAudioFrameCount(speech.samples.count)),
+                                         channels: 1)
+        else { throw SpeakerError.playbackFailed("couldn't build an output buffer") }
+
+        // The pad goes into the envelope as well as the buffer, so the drawing
+        // of the voice stays in step with it: silence reads as silence, and the
+        // wave swells when the speech actually arrives rather than at the
+        // moment we asked for it.
+        let leadIn = engine.isRunning ? Self.warmLeadIn : Self.coldLeadIn
+        let padded = Speech(samples: [Float](repeating: 0,
+                                             count: Int(leadIn * Double(speech.sampleRate)))
+                                + speech.samples,
+                            sampleRate: speech.sampleRate,
+                            synthesisTime: speech.synthesisTime)
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format,
+                                            frameCapacity: AVAudioFrameCount(padded.samples.count)),
               let channel = buffer.floatChannelData
         else { throw SpeakerError.playbackFailed("couldn't build an output buffer") }
 
-        buffer.frameLength = AVAudioFrameCount(speech.samples.count)
-        speech.samples.withUnsafeBufferPointer { src in
+        buffer.frameLength = AVAudioFrameCount(padded.samples.count)
+        padded.samples.withUnsafeBufferPointer { src in
             guard let base = src.baseAddress else { return }
             channel[0].update(from: base, count: src.count)
         }
@@ -81,7 +112,7 @@ final class SpeechPlayer {
         // Started here rather than at the top: everything above can still
         // throw, and a level clock running for audio that never played would
         // draw a voice nobody heard.
-        beginLevels(speech)
+        beginLevels(padded)
         defer { endLevels() }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             // AVFAudio still raises from here on format edge cases we haven't

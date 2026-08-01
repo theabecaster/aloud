@@ -258,6 +258,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             if !refreshed.isEmpty {
                 DevDiag.note("install", "refreshed: \(refreshed.map(\.id).joined(separator: ", "))")
             }
+            // …and the harnesses that were never installed at all. Refreshing
+            // only ever reached the ones somebody had already clicked Install
+            // for, which left every user who updated with the feature switched
+            // on and no agent on the machine able to find it.
+            AgentAutoInstall.runIfNeeded(settings: controller.settings)
             // Nothing else will notice an abandoned session. Every other reap
             // rides in on a bridge call, and the case that strands the pill on
             // screen is precisely the one where no more calls are coming.
@@ -797,6 +802,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let view = OnboardingView(controller: controller) { [weak self] in
             guard let self else { return }
             controller.settings.onboardingComplete = true
+            // Onboarding offers Agent Speak and the user left it on, so the
+            // harnesses on this Mac get the instructions now rather than on
+            // some later launch. Without them the switch is on and nothing can
+            // reach it — the agent has not been told the bridge exists.
+            AgentAutoInstall.runAfterOnboarding(settings: controller.settings)
             onboardingWindow?.close()
             onboardingWindow = nil
             _ = controller.startListening()

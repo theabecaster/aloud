@@ -73,16 +73,74 @@ final class AgentSettingsTests: XCTestCase {
         XCTAssertFalse(SettingsStore(defaults: defaults).experimentalAgentVoice)
     }
 
-    func testConsentModeDefaultsToConfirmByVoice() {
-        // The only mode that is both hands-free and gated, which is the point
-        // of a feature used without looking at the screen.
-        XCTAssertEqual(store().agentConsentMode, .confirmByVoice)
+    func testConsentModeDefaultsToOpen() {
+        // Agents are let in on sight: the feature is already behind an explicit
+        // opt-in, and the pill with its name badge is the disclosure. Asking
+        // every time charged the first question of every session a round of
+        // "yes" — the exact moment the feature exists to save.
+        XCTAssertEqual(store().agentConsentMode, .open)
     }
 
     func testConsentModePersists() {
         let s = store()
         s.agentConsentMode = .confirmOnScreen
         XCTAssertEqual(SettingsStore(defaults: defaults).agentConsentMode, .confirmOnScreen)
+    }
+
+    // Settings shows two switches over the three modes. The mode stays the one
+    // stored truth — these pin the mapping in both directions, since the bridge
+    // reads the mode and never the switches.
+    func testAskingSwitchesDriveTheMode() {
+        let s = store()
+        // Both switches start off, which is the shipped default.
+        XCTAssertFalse(s.agentAsksFirst)
+        XCTAssertFalse(s.agentAsksOutLoud)
+
+        s.agentAsksFirst = true
+        XCTAssertEqual(s.agentConsentMode, .confirmOnScreen)
+
+        s.agentAsksOutLoud = true
+        XCTAssertEqual(s.agentConsentMode, .confirmByVoice)
+
+        s.agentAsksOutLoud = false
+        XCTAssertEqual(s.agentConsentMode, .confirmOnScreen)
+
+        s.agentAsksFirst = false
+        XCTAssertEqual(s.agentConsentMode, .open)
+        XCTAssertFalse(s.agentAsksFirst)
+    }
+
+    // Turning asking back on has to return the prompt the user picked, not the
+    // default: a switch that quietly changes a second setting behind it is a
+    // setting the user has to re-check every time.
+    func testThePromptStyleSurvivesAskingBeingTurnedOff() {
+        let s = store()
+        s.agentAsksOutLoud = false
+        s.agentAsksFirst = false
+        XCTAssertEqual(s.agentConsentMode, .open)
+        // Still remembered while nothing is being asked, and still remembered
+        // by a store that reads it back off disk.
+        XCTAssertFalse(s.agentAsksOutLoud)
+        XCTAssertFalse(SettingsStore(defaults: defaults).agentAsksOutLoud)
+
+        s.agentAsksFirst = true
+        XCTAssertEqual(s.agentConsentMode, .confirmOnScreen)
+    }
+
+    // An install from before the two-switch pane has a mode and no switch: the
+    // switch reads itself off the mode rather than snapping to the default.
+    func testTheOutLoudSwitchIsReadBackOffAnExistingMode() {
+        defaults.set(AgentConsentMode.confirmOnScreen.rawValue, forKey: "agentConsentMode")
+        XCTAssertFalse(store().agentAsksOutLoud)
+
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set(AgentConsentMode.open.rawValue, forKey: "agentConsentMode")
+        let open = store()
+        XCTAssertFalse(open.agentAsksFirst)
+        // Open says nothing about how the question would be asked, and the
+        // spoken prompt is no longer the default — so turning asking back on
+        // gives the on-screen prompt until the user says otherwise.
+        XCTAssertFalse(open.agentAsksOutLoud)
     }
 
     // The spoken prompt names the caller only when there is real ambiguity —

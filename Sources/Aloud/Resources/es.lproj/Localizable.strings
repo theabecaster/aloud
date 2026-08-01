@@ -390,20 +390,28 @@
 /* Agent Speak — the spoken consent prompt. This is the string that
    tells someone a decision is being asked of them, so it must never
    fall back to English. */
+"Let %@ agent listen? Yes or no" = "¿Dejar escuchar al agente %@? Sí o no";
 "Let %@ listen? Yes or no" = "¿Dejar escuchar a %@? Sí o no";
 
-/* Agent Speak — Settings → Agents. The master switch, how a listen is
-   approved, and the agent tools Aloud can set itself up in. */
-"Agents can ask to speak through your speakers and hear your answer. Turning this off refuses every request — anything set up below stays, so switching it back on doesn’t mean starting over." = "Los agentes pueden pedir hablar por tus altavoces y oír tu respuesta. Si lo desactivas, se rechazan todas las peticiones; lo que hayas configurado abajo se conserva, así que volver a activarlo no significa empezar de cero.";
-"Consent" = "Consentimiento";
+/* Agent Speak — Settings → Agent Speak: whether an agent is asked
+   before it listens, how the asking happens, and the agent tools Aloud
+   can set itself up in. The on/off switch is not here — it lives in
+   General → Experimental with the other experiments. */
+"Permission" = "Permiso";
+"Ask before listening" = "Preguntar antes de escuchar";
+"Ask out loud" = "Preguntar en voz alta";
+"Agents start listening as soon as they ask, without checking with you first." = "Los agentes empiezan a escuchar en cuanto lo piden, sin consultarte antes.";
+"Aloud asks through your speakers and waits for you to say yes — no need to look at the screen. You’re asked once per session." = "Aloud pregunta por tus altavoces y espera a que digas que sí; no hace falta mirar la pantalla. Se te pregunta una vez por sesión.";
+"The question appears on the recording indicator and waits for you to accept. You’re asked once per session." = "La pregunta aparece en el indicador de grabación y espera a que aceptes. Se te pregunta una vez por sesión.";
+"Setting one up adds a short instructions file, a line in the tool’s own instructions, and permission to run Aloud. Remove takes them back out and stops Aloud setting that tool up again. Turning Agent Speak off leaves them in place." = "Configurar una herramienta añade un archivo de instrucciones breve, una línea en las instrucciones de la propia herramienta y permiso para ejecutar Aloud. Quitar los elimina y evita que Aloud vuelva a configurarla. Desactivar Agent Speak los deja donde están.";
+"Set Up" = "Configurar";
+"Paste it into %@ in each project you want it in." = "Pégalo en %@ en cada proyecto donde lo quieras.";
+"Copy the lines to add" = "Copiar las líneas que hay que añadir";
 "The recording indicator always shows while an agent is listening, and nothing leaves this Mac." = "El indicador de grabación siempre aparece mientras un agente escucha, y nada sale de este Mac.";
 "Agent Tools" = "Herramientas de agente";
 "No agent tools found on this Mac." = "No se encontraron herramientas de agente en este Mac.";
 "Aloud looks for the agent tools you already use. Open one, then come back." = "Aloud busca las herramientas de agente que ya usas. Abre una y vuelve aquí.";
-"Aloud writes a short instructions file so an agent knows it can talk to you. Remove deletes that file again." = "Aloud escribe un breve archivo de instrucciones para que un agente sepa que puede hablar contigo. «Eliminar» borra ese archivo.";
-"Install" = "Instalar";
 "Already set up on this Mac" = "Ya configurado en este Mac";
-"Lives in each project — paste it into %@ in the repos you want it in." = "Vive en cada proyecto: pégalo en %@ en los repositorios donde lo quieras.";
 "%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand." = "%@ no es JSON válido, así que Aloud no lo tocó. Añade estas líneas a mano.";
 "Couldn’t write %1$@ — %2$@" = "No se pudo escribir %1$@: %2$@";
 "Let coding agents ask you questions out loud." = "Deja que los agentes te pregunten en voz alta.";
@@ -416,15 +424,6 @@
    the key has to match the source byte for byte. */
 "Agents can’t reach Aloud right now." = "Los agentes no pueden conectar con Aloud ahora mismo.";
 "Restarting Aloud usually clears this." = "Reabrir Aloud suele solucionarlo.";
-
-/* Agent Speak — the consent modes: how an agent's request to listen
-   is approved, and what each mode costs. */
-"Open" = "Abierto";
-"Agents can start listening right away. The recording indicator always shows when they do." = "Los agentes pueden empezar a escuchar de inmediato. El indicador de grabación siempre aparece cuando lo hacen.";
-"Confirm on screen" = "Confirmar en pantalla";
-"Nothing reaches the agent until you accept on screen." = "Nada llega al agente hasta que aceptas en pantalla.";
-"Confirm by voice" = "Confirmar por voz";
-"Aloud asks out loud and waits for you to say accept — no need to look at the screen." = "Aloud pregunta en voz alta y espera a que digas aceptar; no hace falta mirar la pantalla.";
 
 /* Agent Speak — the onboarding opt-in. A consent screen: what is being
    granted, and the two answers. */
@@ -452,6 +451,18 @@
 "%@ wants to listen" = "%@ quiere escuchar";
 "Accept — or press the Aloud hotkey" = "Aceptar (o pulsa la tecla de Aloud)";
 "Decline — or press Esc" = "Rechazar (o pulsa Esc)";
+"Open the mic?" = "¿Abrir el micrófono?";
+"Sent" = "Enviado";
+"Waiting…" = "Esperando…";
+"Agent conversation" = "Conversación con el agente";
+"Agent" = "Agente";
+"The agent session using your microphone" = "La sesión del agente que usa tu micrófono";
+"Aloud is busy — answer the agent on screen" = "Aloud está ocupado: responde al agente en pantalla";
+"Finish setup to answer out loud" = "Termina la configuración para responder en voz alta";
+"Aloud couldn’t open the microphone" = "Aloud no pudo abrir el micrófono";
+"Aloud is busy — press the Aloud hotkey to accept" = "Aloud está ocupado: pulsa el atajo de Aloud para aceptar";
+"Finish setup to answer out loud — or press the Aloud hotkey" = "Termina la configuración para responder en voz alta, o pulsa el atajo de Aloud";
+"Aloud couldn’t open the microphone — press the hotkey to accept" = "Aloud no pudo abrir el micrófono: pulsa el atajo para aceptar";
 "Waiting for your answer" = "Esperando tu respuesta";
 "Listening — this goes to the agent" = "Escuchando: esto va al agente";
 "The agent is speaking" = "El agente está hablando";

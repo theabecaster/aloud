@@ -103,6 +103,10 @@ final class NeuralSpeaker: Speaker {
 
     var currentLevel: Float { player.currentLevel }
 
+    // False for the whole synthesis pass, which on this engine is the slow
+    // half of `speak`.
+    var isPlaying: Bool { player.isPlaying }
+
     // PocketTTS returns a WAV container rather than raw samples. Parsing it
     // here keeps `Speech` uniform across engines so the player and every
     // timing comparison stay engine-agnostic.

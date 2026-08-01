@@ -92,7 +92,11 @@ struct BridgeResponse: Codable {
 
     // listen
     var text: String?              // final transcript, or the partial while polling
-    var raw: String?               // before cleanup, for agents that want verbatim
+    // No verbatim transcript. It used to ride along beside `text` for agents
+    // that wanted the exact words, and it is the same utterance twice: every
+    // answer cost the harness double the tokens, on every turn, for a field
+    // that in practice was read by nobody — `cleanup` already says how much the
+    // text was tidied, which is the question `raw` was there to answer.
     var cleanup: Cleanup?
     var speaking: Bool?            // poll: is the user still talking
     var silentFor: Double?         // poll: seconds since speech stopped

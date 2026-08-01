@@ -74,6 +74,14 @@ protocol Speaker: AnyObject {
     // 0…1 loudness of what is being said at this instant, 0 when silent. For
     // anything that has to *show* the voice rather than describe it.
     var currentLevel: Float { get }
+
+    // Whether sound is actually coming out right now. `speak` covers synthesis
+    // *and* playback, and on the enhanced voice the synthesis is the slow half —
+    // so between the call and the first sample there are seconds in which
+    // nothing is audible. A drawing of the voice made during that window is
+    // showing speech that has not started: it reads as stuck, and then jumps
+    // when the audio finally begins.
+    var isPlaying: Bool { get }
 }
 
 extension Speaker {
@@ -83,4 +91,8 @@ extension Speaker {
     // without it, because "Aloud is talking" is the part that matters and
     // "how loud" is the part that is nice to have.
     var currentLevel: Float { 0 }
+
+    // Engines that can't say are assumed to be playing the whole time `speak`
+    // is in flight — the same forgiving default as the level above.
+    var isPlaying: Bool { true }
 }
