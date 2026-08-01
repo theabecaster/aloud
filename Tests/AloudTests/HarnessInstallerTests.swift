@@ -151,7 +151,8 @@ final class HarnessInstallerTests: XCTestCase {
     func testClaudeInstallWritesSkillAndAllowlist() throws {
         let result = try installer().install(.claudeCode)
         guard case .installed(let changed) = result else { return XCTFail("expected a real install") }
-        XCTAssertEqual(changed.count, 2, "the skill file and settings.json")
+        XCTAssertEqual(changed.count, 3,
+                       "the skill file, settings.json, and the note in ~/.claude/CLAUDE.md")
 
         let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
         XCTAssertTrue(skill.hasPrefix("---"), "Claude Code needs the skill frontmatter")
@@ -739,11 +740,24 @@ final class HarnessInstallerTests: XCTestCase {
     func testAddedHarnessesInstallAsGlobalSkillFiles() throws {
         for (harness, marker, path) in Self.addedHarnesses {
             try makeMarker(marker)
+            // A harness only gets a note where it already keeps its global
+            // instructions; the installer never creates that directory (the
+            // XDG rule in installGlobalNote), so a realistic install has it.
+            if let note = harness.globalNotePath {
+                try makeMarker((note as NSString).deletingLastPathComponent)
+            }
             guard case .installed(let changed) = try installer().install(harness) else {
                 return XCTFail("\(harness.id) installs globally, not as a snippet")
             }
             let skill = home.appendingPathComponent(path)
-            XCTAssertEqual(changed, [skill], "\(harness.id) wrote somewhere unexpected")
+            // The note in the harness's own global instructions rides along
+            // where the harness has such a file (globalNotePath); the ones
+            // that don't still write the skill and nothing else.
+            var expected = [skill]
+            if let note = harness.globalNotePath {
+                expected.append(home.appendingPathComponent(note))
+            }
+            XCTAssertEqual(changed, expected, "\(harness.id) wrote somewhere unexpected")
 
             let text = try XCTUnwrap(read(path))
             XCTAssertTrue(text.hasPrefix("---\n"), "skills are read from their frontmatter")

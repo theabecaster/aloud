@@ -3,8 +3,8 @@ import Foundation
 // Whether an agent may turn on the microphone, and how the user says so.
 //
 // A local process asking for the mic is the sharp end of the whole bridge
-// (docs/agent-voice-bridge.md §7.1). Three modes, chosen during onboarding and
-// changeable in Settings → Agents:
+// (docs/agent-voice-bridge.md §7.1). Three modes, set by the two switches in
+// Settings → Agent Speak (see AgentConsentMode):
 //
 //   open            — allowed immediately, no prompt.
 //   confirmOnScreen — the pill opens pending, with accept / deny controls.
@@ -286,8 +286,11 @@ final class ConsentPolicy {
     // saying "yes" transcribed as "Yes." every time. Accept and decline stay in
     // the keyword set for anyone who says them; the fix is to stop *asking* for
     // a word we cannot hear, rather than to loosen what counts as consent.
+    // The session's name is a task ("fixing tests"), so on its own the sentence
+    // reads as though the task is doing the listening. The word *agent* after it
+    // says what the name belongs to: "Let fixing tests agent listen?"
     static func promptText(sessionName: String) -> String {
-        loc("Let %@ listen? Yes or no", sessionName)
+        loc("Let %@ agent listen? Yes or no", sessionName)
     }
 
     // "claude-code" → "Claude Code". A label for the user's benefit, never

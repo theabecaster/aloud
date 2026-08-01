@@ -553,7 +553,6 @@ final class AgentBridgeService {
                 if let refusal = validate(lease) { return refusal }
                 var response = BridgeResponse.success()
                 response.text = transcript.text
-                response.raw = transcript.raw
                 response.cleanup = transcript.cleanup
                 return response
             } catch AgentListenError.nothingHeard {
@@ -613,7 +612,6 @@ final class AgentBridgeService {
                 let transcript = try await host.stopListenSession(id: session)
                 var response = BridgeResponse.success()
                 response.text = transcript.text
-                response.raw = transcript.raw
                 response.cleanup = transcript.cleanup
                 return response
             } catch {

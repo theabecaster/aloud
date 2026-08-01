@@ -1829,6 +1829,11 @@ final class DictationController: ObservableObject {
         // whole turn, exactly as `commitLive` settles dictation: the stream
         // revises itself as it decodes and is not what anything decides on.
         // An engine that cannot stream simply shows no words.
+        // The draft field opens with the microphone, empty: the user has to be
+        // able to see there is somewhere for their words to go before any of
+        // them have arrived, or the first second of a turn looks like nothing
+        // is being heard.
+        indicator.openDraft()
         let preview = transcriber.makeStreamingTranscription()
         if let preview {
             indicator.updateTranscript("")
@@ -1869,13 +1874,17 @@ final class DictationController: ObservableObject {
             throw AgentListenError.nothingHeard
         }
 
-        indicator.showTranscribing()
+        // The agent variant settles in place — the conversation stays on
+        // screen and the send button spins — rather than being replaced by the
+        // dictation pill's "Typing…", which types into nothing here.
+        indicator.settleDraft()
         phase = .transcribing
         defer { phase = .idle }
         do {
             await ensureTranscriberReady()
             let result = try await transcriber.transcribe(samples: samples)
             let raw = verbatim(result)
+            // (the send itself is below, once the cleanup tier has been applied)
             // Agents always get the best cleanup this Mac can do, at the
             // general tone — there is no focused app to infer a mode from, and
             // the caller is told which tier this Mac *can* do, because the
@@ -1894,7 +1903,12 @@ final class DictationController: ObservableObject {
                 throw AgentListenError.nothingHeard
             }
             let transcript = await agentTranscript(raw: raw)
-            indicator.hide()
+            // Not a plain hide: this is the text the agent is about to receive,
+            // so the draft is *sent* — it lands in the thread as the user's own
+            // message and the pill and panel wrap up together a beat later.
+            // Until then there is no moment at which the user can check that
+            // what left in their name is what they said.
+            indicator.sendDraft(transcript.text)
             return transcript
         } catch {
             indicator.hide()
@@ -1982,7 +1996,9 @@ final class DictationController: ObservableObject {
     // typed into the focused app, so without this the user is talking into a
     // void and has no way to tell whether they were heard.
     func indicatorShowAgentSession(harness: String) {
-        indicator.showAgentSession(harness: harness,
+        indicator.showAgentSession(session: agentSessionHolder?.name,
+                                   harness: agentSessionHolder?.harness ?? agentHarnessName ?? harness,
+                                   lease: agentSessionHolder?.id,
                                    phase: .listening,
                                    levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
                                    bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
@@ -2063,6 +2079,8 @@ final class DictationController: ObservableObject {
             throw AgentListenError.busy
         }
         recorder.onChunk = { [weak stream] chunk in stream?.append(samples: chunk) }
+        // Same as the blocking listen: the draft field opens with the mic.
+        indicator.openDraft()
         playCue(.listening)
         // The cue plays into the already-open microphone, and the detector
         // scores it as somebody talking (see the identical guard in
@@ -2109,7 +2127,7 @@ final class DictationController: ObservableObject {
         _ = recorder.stop()
         stopSpeechActivity()
         isAgentSession = false
-        indicator.showTranscribing()
+        indicator.settleDraft()
         phase = .transcribing
         defer { phase = .idle }
 
@@ -2120,7 +2138,9 @@ final class DictationController: ObservableObject {
             let result = try await session.stream.finish()
             let raw = verbatim(result)
             let transcript = await agentTranscript(raw: raw)
-            indicator.hide()
+            // Same ending as the blocking listen: the poll session's last words
+            // are sent, not simply dismissed.
+            indicator.sendDraft(transcript.text)
             return transcript
         } catch {
             indicator.hide()
@@ -2188,16 +2208,38 @@ extension DictationController: AgentVoiceHost {
         // screen at all, and the consent prompt showed a level meter — the
         // listening picture — while the microphone was still shut.
         let wasAsking = pendingConsentHeard != nil
-        indicator.showAgentSession(harness: agentSessionHolder?.name ?? agentHarnessName ?? "",
-                                   phase: .speaking,
-                                   levelProvider: { Self.agentSpeaker.currentLevel })
-        indicator.setMicIsLive(false)
+        indicator.showAgentSession(session: agentSessionHolder?.name,
+                                   harness: agentSessionHolder?.harness ?? agentHarnessName,
+                                   lease: agentSessionHolder?.id,
+                                   phase: .speaking)
+        // The wave follows the audio, and only exists while there is audio:
+        // `speak` covers synthesis as well as playback, and on the enhanced
+        // voice the synthesis is the slow half.
+        indicator.attachMeter(levelProvider: { Self.agentSpeaker.currentLevel },
+                              micIsLive: false,
+                              playingProvider: { Self.agentSpeaker.isPlaying })
+        // What it said goes into the thread as it is said. The panel is a
+        // mirror of the bridge traffic and nothing else: this is the same
+        // string that reaches the speakers.
+        //
+        // Except the consent question. Mode 3 asks by speaking, through this
+        // same call, so "Let fixing tests agent listen? Yes or no" was landing
+        // in the thread as though the agent had said it. It is Aloud asking, not
+        // the agent, and it is a decision about the conversation rather than
+        // part of it — the pill is where that question belongs and the only
+        // place it should ever appear.
+        if !wasAsking {
+            indicator.agentSaid(text, lease: agentSessionHolder?.id)
+        }
         defer {
             // A bare `speak` has nothing to say once it stops talking, so the
             // pill goes rather than sitting there in a state it is no longer
             // in. A consent prompt keeps it: the question is still on screen
             // and the microphone is about to open.
-            if !wasAsking { indicator.hide() }
+            // Not straight away: a `listen` almost always follows within a few
+            // hundred milliseconds, and tearing the pill down in between made
+            // one exchange look like two.
+            if !wasAsking { indicator.hideAfterAgentSpeech() }
         }
         agentSpeaking = true
         defer { agentSpeaking = false }
@@ -2304,13 +2346,33 @@ extension DictationController: AgentVoiceHost {
     private func startConsentListening(onHeard: @escaping (String) -> Void) async {
         // Every bail here used to be silent, which is how this shipped not
         // working at all: the microphone never opened and nothing said so.
+        // ...and a release build compiled those notes out, so on a user's Mac
+        // the same failures were silent again: the pill sat on the spoken-prompt
+        // state forever, the microphone never opened, and the request could only
+        // time out. Whatever the reason, the user is told once, in the hint pill
+        // — it is the last thing shown, so the pending prompt underneath is
+        // already unanswerable by voice, and saying nothing is worse.
         func note(_ why: String) {
             DevDiag.note("consent", why)
         }
+        // The hint replaces the pill, and the pill is where the accept and
+        // decline buttons live — so the message may not tell the user to answer
+        // on screen, because by the time they read it there is no longer
+        // anything on screen to answer. The hotkey still accepts (the prompt
+        // itself is untouched and `consentIsPending` still owns the key), so
+        // that is what the wording points at.
+        func failed(_ why: String, _ message: String) {
+            note(why)
+            indicator.showHint(message)
+        }
         guard consentAudio == nil else { return note("already listening") }
-        guard phase == .idle || phase.isError else { return note("busy: phase=\(phase)") }
+        guard phase == .idle || phase.isError else {
+            return failed("busy: phase=\(phase)",
+                          loc("Aloud is busy — press the Aloud hotkey to accept"))
+        }
         guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
-            return note("no speech model: state=\(transcriber.state)")
+            return failed("no speech model: state=\(transcriber.state)",
+                          loc("Finish setup to answer out loud — or press the Aloud hotkey"))
         }
         await ensureTranscriberReady()
         // `ensureTranscriberReady` can await for seconds on a cold model, and
@@ -2326,7 +2388,8 @@ extension DictationController: AgentVoiceHost {
             _ = try await startAgentCapture()
         } catch {
             consentAudio = nil
-            return note("microphone refused: \(error.localizedDescription)")
+            return failed("microphone refused: \(error.localizedDescription)",
+                          loc("Aloud couldn’t open the microphone — press the hotkey to accept"))
         }
         // The mic-open above suspends this reentrant actor; a decline or
         // teardown during it runs `stopConsentListening`, which nils

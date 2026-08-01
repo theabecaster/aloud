@@ -47,8 +47,18 @@ final class SettingsStore: ObservableObject {
         noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? false
         learnCorrections = defaults.object(forKey: Keys.learnCorrections) as? Bool ?? true
         installedHarnesses = defaults.object(forKey: Keys.installedHarnesses) as? [String] ?? []
-        agentConsentMode = (defaults.string(forKey: Keys.agentConsentMode))
-            .flatMap(AgentConsentMode.init) ?? .confirmByVoice
+        // Open by default: agents are let in on sight, with the pill and its
+        // name badge as the disclosure (see Migration.applyAgentConsentDefaults
+        // IfNeeded, which also brings existing installs onto it once).
+        let mode = (defaults.string(forKey: Keys.agentConsentMode))
+            .flatMap(AgentConsentMode.init) ?? .open
+        agentConsentMode = mode
+        // Never written before? Read it back off the mode, so an install that
+        // predates the two-switch pane keeps the prompt style it was using —
+        // and so a default-open install starts with the spoken prompt off
+        // rather than armed for the moment "ask me first" is switched on.
+        agentAsksOutLoud = defaults.object(forKey: Keys.agentAsksOutLoud) as? Bool
+            ?? (mode == .confirmByVoice)
         // Off unless the user has opted in. `bool(forKey:)` is false for a key
         // that was never written, which is exactly the default we want — an
         // experiment nobody asked for should not be running.
@@ -86,6 +96,7 @@ final class SettingsStore: ObservableObject {
         static let deafDevices = "noiseReductionDeafDevices"
         static let experimentalAgentVoice = "experimentalAgentVoice"
         static let agentConsentMode = "agentConsentMode"
+        static let agentAsksOutLoud = "agentAsksOutLoud"
         static let installedHarnesses = "installedHarnesses"
     }
 
@@ -206,8 +217,36 @@ final class SettingsStore: ObservableObject {
     // How an agent's request to listen is approved. Chosen on the onboarding
     // install page rather than buried here, because that is the screen where
     // the user is actually weighing it up.
+    //
+    // Still the one stored truth — the bridge reads this and nothing else — but
+    // Settings drives it through the two switches below rather than exposing
+    // three modes the user has to hold in their head at once.
     @Published var agentConsentMode: AgentConsentMode {
         didSet { defaults.set(agentConsentMode.rawValue, forKey: Keys.agentConsentMode) }
+    }
+    // Whether the question is asked out loud rather than shown on the pill.
+    // Persisted on its own key so it survives "ask me first" being switched off
+    // and back on: a user who chose the on-screen prompt should get it back,
+    // not the default. Only meaningful while `agentAsksFirst` is on, which is
+    // also the only time Settings shows it.
+    @Published var agentAsksOutLoud: Bool {
+        didSet {
+            defaults.set(agentAsksOutLoud, forKey: Keys.agentAsksOutLoud)
+            guard agentConsentMode != .open else { return }
+            agentConsentMode = agentAsksOutLoud ? .confirmByVoice : .confirmOnScreen
+        }
+    }
+    // The main switch in Settings → Agent Speak: on means an agent has to be
+    // let in, off means it is let in on sight. Computed rather than stored so
+    // the mode can never disagree with the switch that sets it.
+    var agentAsksFirst: Bool {
+        get { agentConsentMode != .open }
+        set {
+            guard newValue != agentAsksFirst else { return }
+            agentConsentMode = newValue
+                ? (agentAsksOutLoud ? .confirmByVoice : .confirmOnScreen)
+                : .open
+        }
     }
     // Harness ids the installer has wired up. Drives whether the spoken prompt
     // names the caller: with one installed "an agent wants to listen" is

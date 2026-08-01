@@ -4,21 +4,6 @@ import Foundation
 // Entry: CLI verbs do their work and exit; no args runs the menu bar app.
 let cliArgs = Array(CommandLine.arguments.dropFirst())
 
-// The indicator demo is a CLI verb that needs the app loop: it puts the real
-// pill on screen with no microphone, model, or permissions so the indicator can
-// be looked at (or screenshotted) on a machine that hasn't granted anything.
-// Development tooling, so it goes with the rest of the dev verbs (see CLI.swift).
-#if !ALOUD_PROD_CLI
-if cliArgs.first == "--indicator-demo" {
-    let code = CLI.prepareIndicatorDemo(path: cliArgs.count > 1 ? cliArgs[1] : nil)
-    if code != 0 { exit(code) }
-    let app = NSApplication.shared
-    app.setActivationPolicy(.accessory)
-    app.run()
-    exit(0)
-}
-#endif
-
 // Agent verbs are bare subcommands, not --flags: `aloud speak "…"` reads
 // naturally in the skill files we install, and it keeps the supported surface
 // visibly separate from the development tooling. They have to be matched
@@ -39,6 +24,11 @@ let isUIPreview = ProcessInfo.processInfo.environment["ALOUD_UI_PREVIEW"] == "1"
 if !isUIPreview, Bundle.main.bundleURL.pathExtension == "app" {
     Migration.runCleanSlateIfNeeded()
 }
+
+// The consent defaults, before anything reads them — SettingsStore latches its
+// values the first time `.shared` is touched, and this has to be the state it
+// finds. Runs for development builds too: they are how the defaults get tested.
+Migration.applyAgentConsentDefaultsIfNeeded()
 
 // Singleton: a second GUI launch hands off to the running one and exits.
 // flock on a file in the state dir — crash-safe (the lock dies with the pid).

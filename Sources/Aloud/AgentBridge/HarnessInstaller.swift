@@ -234,6 +234,35 @@ enum AgentHarness: String, CaseIterable, Codable {
         }
     }
 
+    // The harness's own *global* instructions file — the one it reads at the
+    // start of every session, as opposed to a skill it looks up when it judges
+    // one relevant. Home-relative, and documented by each tool rather than
+    // guessed, because a wrong path here writes a junk file into somebody's
+    // config directory.
+    //
+    // This is where the one-line nudge goes (`AgentVoiceInstructions.globalNote`).
+    // A skill file alone cannot do that job: a skill is *discovered* when the
+    // agent already suspects it wants one, and the behaviour we are trying to
+    // change — ending the turn and waiting at the keyboard — is the behaviour
+    // of an agent that never thought to look.
+    //
+    // nil means we leave it alone:
+    //   - Codex's instructions already live in ~/.codex/AGENTS.md, so the block
+    //     we install there IS the global note; a second one would duplicate it.
+    //   - Cursor's global rules are a field in its settings UI, not a file.
+    //   - OpenClaw and Hermes document skills directories but no global
+    //     instructions file, and the shared ~/.agents convention is read by
+    //     several tools at once, which is the one place we must not write.
+    //   - Copilot is per-project: there is no global anything to write to.
+    var globalNotePath: String? {
+        switch self {
+        case .claudeCode: return ".claude/CLAUDE.md"
+        case .opencode: return ".config/opencode/AGENTS.md"
+        case .pi: return ".pi/agent/AGENTS.md"
+        case .codex, .cursor, .copilot, .openclaw, .hermes: return nil
+        }
+    }
+
     // Where the instructions end up. Home-relative for the global pair,
     // repo-relative for the per-project pair.
     var instructionPath: String {
@@ -475,6 +504,14 @@ enum AgentVoiceInstructions {
         to answer without switching windows, in one or two sentences. It is a
         prompt, not a status report.
 
+        **Everything you say is on screen, word for word.** Aloud shows the
+        conversation next to its recording indicator: what you `speak` appears as
+        your message, and what the user said appears as theirs the moment it is
+        sent to you. So send the finished sentence, not your reasoning on the way
+        to it — a paragraph of preamble is a paragraph they have to read, and it
+        is tokens on every turn for both of us. One or two sentences, the
+        question last.
+
         **Honour "stop telling me every time."** If the user asks you to skip the
         preamble, stop speaking context before each listen for the rest of the
         session and just listen. Do not go back to it later in the same session.
@@ -488,9 +525,11 @@ enum AgentVoiceInstructions {
         |---|---|---|
         | `disabled` | Agent Speak is switched off in Aloud | stop asking for the rest of the session; use text |
         | `denied` | the user declined this request | use text now; asking again later is fine |
-        | `timeout` | nobody answered | use text; do not immediately ask again |
-        | `queued` | another agent holds the microphone | ask in text instead of waiting |
-        | `unavailable` | Aloud isn't running | use text |
+        | `timeout` | nobody answered, or nobody spoke | use text; do not immediately ask again |
+        | `queued` | somebody else has the microphone, or it is settling — `message` and `retryAfter` say which | if `queuedBehind` names another agent, ask in text; otherwise wait `retryAfter` seconds and try once |
+        | `notHolder` | the lease ended — released, reaped, or superseded | claim again if you still need to ask |
+        | `unavailable` | Aloud isn't running, isn't set up, or couldn't answer — read `message` | use text; this is the one refusal that also exits non-zero |
+        | `badRequest` | a flag is missing or invalid — `message` says which | fix the arguments and call again; this one is your bug, not a refusal |
 
         ## Mechanics
 
@@ -508,29 +547,54 @@ enum AgentVoiceInstructions {
         ```
 
         - Pass `--harness \#(id)` on every call.
-        - Pass `--name "<two words>"` saying what you are *doing* — "fixing
+        - `--name "<two words>"` is **required** on `claim` — a claim without it
+          is refused with `badRequest`. Say what you are *doing*: "fixing
           tests", "release notes", "code review". The user reads it on the
-          indicator, hears it in the spoken prompt ("Let fixing tests listen?"),
-          and picks from it when more than one session wants the microphone.
-          Two windows of the same tool cannot be told apart any other way. Two words at most, and re-send `--name` on any
-          later call if what you are doing has changed.
+          indicator, hears it in the spoken prompt ("Let fixing tests agent
+          listen?"), and picks from it when more than one session wants the
+          microphone — two windows of the same tool cannot be told apart any
+          other way. Two words at most, and re-send `--name` on any later call
+          if what you are doing has changed.
         - Pass `--owner-pid $PPID` on `claim`, exactly as written. It is how Aloud
           tells your session apart from another session of the same tool, so the
           two queue for the microphone instead of sharing one lease — and it lets
           Aloud release your session the moment you exit, rather than leaving the
           microphone held until the lease times out. Without it you are anonymous
           and simply wait your turn.
-        - `claim` returns immediately. If it comes back `{"ok":false,"reason":"queued"}`, ask
-          your question in text instead — do not spin on it, and do not sleep and
-          retry.
-        - `listen` blocks and ends on silence, returning the final transcript. That
-          is the mode you want almost always. `--start` / `--poll` / `--stop` exists
-          for when you need to cut in as soon as you have heard enough, and every
-          poll costs a full turn, so use it deliberately.
+        - **`claim` can block.** Depending on the user's settings it is the call
+          that asks their permission — on screen, or out loud — so it may take
+          as long as they take to answer, up to about twenty seconds. Give it a
+          generous timeout and do not race it. If it comes back
+          `{"ok":false,"reason":"queued"}` somebody else has the microphone: ask
+          your question in text instead — never spin, and never sleep and retry
+          in a loop. If you genuinely have to wait, pass `--wait <seconds>` (up
+          to 300) and `claim` blocks until the microphone is yours; that is the
+          only supported way to queue, and it costs you no turns.
+        - `listen` blocks and ends on silence, returning the final transcript.
+          That is the mode you want almost always, and it costs one turn.
+        - The streaming mode is for the one case that needs it: cutting in as
+          soon as you have heard enough. Every poll costs a full turn, so use it
+          deliberately. It carries a session id you have to pass back:
+
+          ```sh
+          \#(command) listen --start --harness \#(id) --lease L1
+          # {"session":"S1","ok":true}
+          \#(command) listen --poll  --harness \#(id) --lease L1 --session S1 --wait 5
+          # {"text":"…","speaking":true,"silentFor":0.4,"ok":true}
+          \#(command) listen --stop  --harness \#(id) --lease L1 --session S1
+          # {"text":"…","cleanup":"concise","ok":true}
+          ```
+
+          `--wait` is the long-poll ceiling in seconds (30 at most); the call
+          returns early the moment the transcript changes. `speaking` and
+          `silentFor` are what you judge "heard enough" on.
         - `release` when the conversation is over. A lease nobody releases keeps the
           microphone away from everyone else until it times out.
-        - The returned text is the best cleanup this Mac can do. `"cleanup":"basic"`
-          means it is closer to a raw transcript than a summary.
+        - `text` is the answer, and the only text you get: the best cleanup this
+          Mac can do, at the tier named by `cleanup` (`"basic"` means closer to
+          a raw transcript than a tidied sentence). There is deliberately no
+          verbatim copy alongside it — the same sentence twice is double the
+          tokens on every turn for something you would not act on differently.
         """#
     }
 
@@ -549,6 +613,43 @@ enum AgentVoiceInstructions {
     // make removal exact and a second install a no-op.
     static func markedBlock(_ inner: String) -> String {
         "\(markerStart)\n\(inner)\n\(markerEnd)\n"
+    }
+
+    // MARK: the global note
+    //
+    // Its own marker pair, because it lives in a different file from the
+    // instructions and the two are installed and removed independently: one
+    // marker for both would make a note in ~/.claude/CLAUDE.md look like a
+    // damaged instructions block in ~/.claude/skills/…/SKILL.md.
+    static let noteMarkerStart = "<!-- aloud-voice-note:start -->"
+    static let noteMarkerEnd = "<!-- aloud-voice-note:end -->"
+
+    // Three sentences at most, and they have to earn their place in a file the
+    // user wrote for themselves. So: what is available, when to reach for it,
+    // and where the detail lives — never the mechanics, which are in the skill.
+    //
+    // The point of the last sentence is the whole point of the feature. An
+    // agent's default when it needs a decision is to stop and hand the turn
+    // back, and someone who has walked away from the keyboard doesn't find out
+    // for ten minutes. This is the line that changes that default.
+    static func globalNote(command: String) -> String {
+        let command = invocation(command: command)
+        return """
+        ## Asking the user out loud (Aloud)
+
+        This Mac runs Aloud, which can speak a question through the user's \
+        speakers and hear their spoken answer — `\(command) claim` / `speak` / \
+        `listen` / `release`, described in full in the `aloud-voice` skill.
+
+        When you need a decision from the user mid-task, ask them out loud \
+        rather than ending your turn and leaving them to notice at the \
+        keyboard. Keep it to a sentence or two, and fall back to text whenever \
+        Aloud refuses.
+        """
+    }
+
+    static func markedNote(_ inner: String) -> String {
+        "\(noteMarkerStart)\n\(inner)\n\(noteMarkerEnd)\n"
     }
 }
 
@@ -596,10 +697,44 @@ struct HarnessInstaller {
     var claudePermissionEntries: [String] { permissionEntries(for: .claudeCode) }
     var cursorPermissionEntries: [String] { permissionEntries(for: .cursor) }
 
-    init(home: URL, command: String = HarnessInstaller.defaultCommand, fileManager: FileManager = .default) {
+    // Where "the user took this one away" is remembered. Injected so tests get
+    // their own suite; see `declinedHarnesses`.
+    let defaults: UserDefaults
+
+    init(home: URL,
+         command: String = HarnessInstaller.defaultCommand,
+         fileManager: FileManager = .default,
+         defaults: UserDefaults = .standard) {
         self.home = home
         self.command = command
         self.fm = fileManager
+        self.defaults = defaults
+    }
+
+    // MARK: what the user took away
+    //
+    // Installing on every update is what gets the feature to people who never
+    // opened Settings. It is also, without this list, a way to overrule someone:
+    // they removed the skill from a harness on purpose, and the next launch put
+    // it back. So a removal is recorded, and the automatic install skips it
+    // forever after. An install the user asks for clears the record — that is
+    // them changing their mind, which they are allowed to do.
+    private static let declinedKey = "agentDeclinedHarnesses"
+
+    var declinedHarnesses: Set<String> {
+        Set(defaults.stringArray(forKey: Self.declinedKey) ?? [])
+    }
+
+    func recordDeclined(_ harness: AgentHarness) {
+        var declined = declinedHarnesses
+        declined.insert(harness.id)
+        defaults.set(Array(declined).sorted(), forKey: Self.declinedKey)
+    }
+
+    func clearDeclined(_ harness: AgentHarness) {
+        var declined = declinedHarnesses
+        guard declined.remove(harness.id) != nil else { return }
+        defaults.set(Array(declined).sorted(), forKey: Self.declinedKey)
     }
 
     // MARK: detection
@@ -631,7 +766,11 @@ struct HarnessInstaller {
     // A refresh runs on every launch and every gate toggle, so it must never
     // re-grant a permission the user took away: "entry not present" is
     // indistinguishable from "revoked". Full permission entries are written
-    // exactly once, by the install the user clicked. The one thing a refresh
+    // exactly once, by an install rather than a refresh — the one the user
+    // clicked, or the automatic first install into a harness they have never
+    // removed (`installAllDetected`), which needs them for the same reason: a
+    // harness that is told to run the CLI and not allowed to stalls on the
+    // turn-one permission prompt. The one thing a refresh
     // does to the allowlist is `.migrate` — following the entries to a new
     // path when the bundle moved, carrying across only the verbs still there,
     // never adding one back. And that step is best-effort: a corrupt
@@ -682,8 +821,15 @@ struct HarnessInstaller {
 
         case .appendedBlock:
             let url = home.appendingPathComponent(harness.instructionPath)
-            let changed = try upsertBlock(block, in: url)
-            return .installed(changed: changed ? [url] : [])
+            var changed: [URL] = []
+            if try upsertBlock(block, in: url) { changed.append(url) }
+            changed.append(contentsOf: try installGlobalNote(for: harness, op: permissions))
+            // Only an install the user asked for is them changing their
+            // mind. A refresh runs on every launch and must not be read as
+            // consent — that path would quietly erase the removal record and
+            // let a later version reinstall what they took away.
+            if permissions != .migrate { clearDeclined(harness) }
+            return .installed(changed: changed)
 
         case .skillFile:
             var changed: [URL] = []
@@ -710,8 +856,77 @@ struct HarnessInstaller {
             let skill = home.appendingPathComponent(harness.instructionPath)
             let file = AgentVoiceInstructions.skillFile(harness: harness, command: command)
             if try writeIfDifferent(file, to: skill) { changed.append(skill) }
+            changed.append(contentsOf: try installGlobalNote(for: harness, op: permissions))
+            // Only an install the user asked for is them changing their
+            // mind. A refresh runs on every launch and must not be read as
+            // consent — that path would quietly erase the removal record and
+            // let a later version reinstall what they took away.
+            if permissions != .migrate { clearDeclined(harness) }
             return .installed(changed: changed)
         }
+    }
+
+    // The one-line nudge in the harness's own global instructions, for the
+    // harnesses that have such a file. Written with its own marker so it can be
+    // taken out again exactly, and treated as best-effort: a global
+    // instructions file the user has damaged our markers in must not block the
+    // skill install, which is the part that actually carries the contract.
+    private func installGlobalNote(for harness: AgentHarness, op: AllowlistOp) throws -> [URL] {
+        guard let path = harness.globalNotePath else { return [] }
+        let url = home.appendingPathComponent(path)
+        // Never conjure the directory. OpenCode's global instructions live
+        // under ~/.config/opencode, which moves with XDG_CONFIG_HOME — the very
+        // reason its *skill* goes to the plain ~/.opencode instead. On a Mac
+        // that has relocated its XDG config, creating the directory would leave
+        // a file OpenCode never reads and a folder we invented. If the harness
+        // keeps its instructions somewhere else, it has told us so by not
+        // having this directory.
+        guard exists(url.deletingLastPathComponent()) else { return [] }
+        // A refresh may update a note that is there, and may write the very
+        // first one — but it may never put back a note the user deleted.
+        //
+        // Those are the same bytes on disk, so the difference is remembered:
+        // the first time a harness gets a note, its id goes in the list below.
+        // Without that, the two halves of this feature contradict each other.
+        // Every existing user already has the skill installed, so the automatic
+        // install skips them entirely and the refresh is the only pass that
+        // ever touches their machine — if a refresh could not write a note,
+        // nobody who already had Agent Speak would ever get one. And if it
+        // wrote one unconditionally, deleting our paragraph from a curated
+        // CLAUDE.md would buy exactly one session of peace before the next
+        // launch put it back. Same rule the allowlist follows, one bit richer.
+        if op == .migrate, noteWasWritten(for: harness) {
+            guard let text = try? String(contentsOf: url, encoding: .utf8),
+                  text.contains(AgentVoiceInstructions.noteMarkerStart)
+            else { return [] }
+        }
+        let note = AgentVoiceInstructions.markedNote(
+            AgentVoiceInstructions.globalNote(command: command))
+        do {
+            let changed = try upsertBlock(note,
+                                          in: url,
+                                          start: AgentVoiceInstructions.noteMarkerStart,
+                                          end: AgentVoiceInstructions.noteMarkerEnd)
+            recordNoteWritten(for: harness)
+            return changed ? [url] : []
+        } catch {
+            return []
+        }
+    }
+
+    // Whether this harness has ever had a note written into its global
+    // instructions — the one bit that separates "we have not got to you yet"
+    // from "you took it out".
+    private static let noteWrittenKey = "agentGlobalNoteWritten"
+
+    private func noteWasWritten(for harness: AgentHarness) -> Bool {
+        (defaults.stringArray(forKey: Self.noteWrittenKey) ?? []).contains(harness.id)
+    }
+
+    private func recordNoteWritten(for harness: AgentHarness) {
+        var written = Set(defaults.stringArray(forKey: Self.noteWrittenKey) ?? [])
+        guard written.insert(harness.id).inserted else { return }
+        defaults.set(Array(written).sorted(), forKey: Self.noteWrittenKey)
     }
 
     // Delete a skill file we wrote, and the directory it sat in if that leaves
@@ -738,15 +953,37 @@ struct HarnessInstaller {
     // is the user's only record of what the file looked like before we touched
     // it, and we never reach the deletion.
     func uninstall(_ harness: AgentHarness) throws {
+        // Recorded first, and whatever the rest of this throws: the user has
+        // said no, and the automatic install on the next update must honour
+        // that even if the removal itself hit a damaged file.
+        recordDeclined(harness)
+
         switch harness.mechanism {
         case .snippet:
             return  // nothing of ours is on disk to remove
 
         case .appendedBlock:
+            try? removeGlobalNote(for: harness)
             try removeBlock(from: home.appendingPathComponent(harness.instructionPath))
 
         case .skillFile:
             try removeSkillDirectory(at: home.appendingPathComponent(harness.instructionPath))
+            // The note is taken out after the skill and never before it, and a
+            // damaged one is swallowed rather than thrown. It lives in a file
+            // the user edits by hand — one orphaned marker in CLAUDE.md used to
+            // abort the whole uninstall, leaving the skill installed and four
+            // shell permissions granted for a feature the user just removed.
+            // The note is the least important thing here; it may not be the
+            // thing that blocks removing the rest.
+            do {
+                try removeGlobalNote(for: harness)
+            } catch {
+                // Swallowed, but not unrecorded: the paragraph telling agents
+                // to use Agent Speak is still sitting in the user's own file
+                // after they removed the feature, and the only way anyone finds
+                // out is a developer reading this log.
+                DevDiag.note("install", "left the note in place: \(error.localizedDescription)")
+            }
             // The skill file goes first and unconditionally, so a harness with
             // no allowlist is finished here and the ones that have an allowlist
             // still lose their skill even if the settings step throws.
@@ -757,6 +994,44 @@ struct HarnessInstaller {
                 try write(data, to: allowlist)
             }
             removeBackup(of: allowlist)
+        }
+    }
+
+    // The note comes out the way it went in: our marker only, everything the
+    // user wrote around it untouched, and a file that held nothing but our note
+    // deleted rather than left empty.
+    private func removeGlobalNote(for harness: AgentHarness) throws {
+        guard let path = harness.globalNotePath else { return }
+        try removeBlock(from: home.appendingPathComponent(path),
+                        start: AgentVoiceInstructions.noteMarkerStart,
+                        end: AgentVoiceInstructions.noteMarkerEnd)
+    }
+
+    // MARK: - installing without being asked
+
+    // Every harness on this Mac that we can write to, has not been installed
+    // already, and the user has not taken away. Returns the ones that changed.
+    //
+    // This is what makes the feature real for someone who updates and never
+    // opens Settings: the instructions are the whole mechanism by which an
+    // agent learns the bridge exists, and an agent that was never told simply
+    // never calls it. The permission entries go in with it — an install that
+    // teaches the agent to run a command the harness will then stop and ask
+    // about is a feature that stalls on turn one.
+    //
+    // Per-project harnesses are skipped by construction: `install` hands back a
+    // snippet for those, and nothing here may write into somebody's repo.
+    @discardableResult
+    func installAllDetected() -> [AgentHarness] {
+        let declined = declinedHarnesses
+        return detect().compactMap { detected -> AgentHarness? in
+            let harness = detected.harness
+            guard harness.scope == .global,
+                  !detected.isInstalled,
+                  !declined.contains(harness.id),
+                  case .installed(let changed)? = try? install(harness)
+            else { return nil }
+            return changed.isEmpty ? nil : harness
         }
     }
 
@@ -896,16 +1171,19 @@ struct HarnessInstaller {
     // Insert our block, or replace the one already there. Returns whether the
     // file changed, so a repeat install reports honestly instead of claiming a
     // write it never made.
-    private func upsertBlock(_ block: String, in url: URL) throws -> Bool {
+    private func upsertBlock(_ block: String,
+                             in url: URL,
+                             start: String = AgentVoiceInstructions.markerStart,
+                             end: String = AgentVoiceInstructions.markerEnd) throws -> Bool {
         let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let updated: String
-        if existing.contains(AgentVoiceInstructions.markerStart) {
+        if existing.contains(start) {
             // Strip whatever we wrote before, then write one block. If the
             // strip could not run — a damaged or orphaned marker — appending
             // would stack a second block on top, and since a refresh runs
             // every launch the file would grow without bound. Refuse instead;
             // the pane surfaces it, and `refreshInstalled` skips it quietly.
-            guard let stripped = removingBlock(from: existing) else {
+            guard let stripped = removingBlock(from: existing, start: start, end: end) else {
                 throw HarnessInstallError.damagedBlock(path: url.path)
             }
             if stripped.isEmpty {
@@ -923,10 +1201,12 @@ struct HarnessInstaller {
         return try writeIfDifferent(updated, to: url)
     }
 
-    private func removeBlock(from url: URL) throws {
+    private func removeBlock(from url: URL,
+                             start: String = AgentVoiceInstructions.markerStart,
+                             end: String = AgentVoiceInstructions.markerEnd) throws {
         guard let existing = try? String(contentsOf: url, encoding: .utf8),
-              existing.contains(AgentVoiceInstructions.markerStart) else { return }
-        guard let stripped = removingBlock(from: existing) else {
+              existing.contains(start) else { return }
+        guard let stripped = removingBlock(from: existing, start: start, end: end) else {
             // Damaged markers — we cannot prove which lines are ours, so we
             // touch neither the file nor the user's pre-Aloud backup.
             throw HarnessInstallError.damagedBlock(path: url.path)
@@ -948,13 +1228,15 @@ struct HarnessInstaller {
     // whole edit — if any start marker cannot be cleanly paired with an end
     // (an orphan, or a start nested inside another block's span): a file we
     // cannot parse with certainty is not one to guess at.
-    private func removingBlock(from text: String) -> String? {
+    private func removingBlock(from text: String,
+                               start startMarker: String = AgentVoiceInstructions.markerStart,
+                               end endMarker: String = AgentVoiceInstructions.markerEnd) -> String? {
         func trimmed(_ line: String) -> String { line.trimmingCharacters(in: .whitespaces) }
         var lines = text.components(separatedBy: "\n")
-        while let start = lines.firstIndex(where: { trimmed($0) == AgentVoiceInstructions.markerStart }) {
-            guard let end = lines[start...].firstIndex(where: { trimmed($0) == AgentVoiceInstructions.markerEnd })
+        while let start = lines.firstIndex(where: { trimmed($0) == startMarker }) {
+            guard let end = lines[start...].firstIndex(where: { trimmed($0) == endMarker })
             else { return nil }
-            guard !lines[(start + 1)..<end].contains(where: { trimmed($0) == AgentVoiceInstructions.markerStart })
+            guard !lines[(start + 1)..<end].contains(where: { trimmed($0) == startMarker })
             else { return nil }
 
             lines.removeSubrange(start...end)

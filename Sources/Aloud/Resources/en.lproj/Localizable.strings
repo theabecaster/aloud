@@ -390,20 +390,28 @@
 /* Agent Speak — the spoken consent prompt. This is the string that
    tells someone a decision is being asked of them, so it must never
    fall back to English. */
+"Let %@ agent listen? Yes or no" = "Let %@ agent listen? Yes or no";
 "Let %@ listen? Yes or no" = "Let %@ listen? Yes or no";
 
-/* Agent Speak — Settings → Agents. The master switch, how a listen is
-   approved, and the agent tools Aloud can set itself up in. */
-"Agents can ask to speak through your speakers and hear your answer. Turning this off refuses every request — anything set up below stays, so switching it back on doesn’t mean starting over." = "Agents can ask to speak through your speakers and hear your answer. Turning this off refuses every request — anything set up below stays, so switching it back on doesn’t mean starting over.";
-"Consent" = "Consent";
+/* Agent Speak — Settings → Agent Speak: whether an agent is asked
+   before it listens, how the asking happens, and the agent tools Aloud
+   can set itself up in. The on/off switch is not here — it lives in
+   General → Experimental with the other experiments. */
+"Permission" = "Permission";
+"Ask before listening" = "Ask before listening";
+"Ask out loud" = "Ask out loud";
+"Agents start listening as soon as they ask, without checking with you first." = "Agents start listening as soon as they ask, without checking with you first.";
+"Aloud asks through your speakers and waits for you to say yes — no need to look at the screen. You’re asked once per session." = "Aloud asks through your speakers and waits for you to say yes — no need to look at the screen. You’re asked once per session.";
+"The question appears on the recording indicator and waits for you to accept. You’re asked once per session." = "The question appears on the recording indicator and waits for you to accept. You’re asked once per session.";
+"Setting one up adds a short instructions file, a line in the tool’s own instructions, and permission to run Aloud. Remove takes them back out and stops Aloud setting that tool up again. Turning Agent Speak off leaves them in place." = "Setting one up adds a short instructions file, a line in the tool’s own instructions, and permission to run Aloud. Remove takes them back out and stops Aloud setting that tool up again. Turning Agent Speak off leaves them in place.";
+"Set Up" = "Set Up";
+"Paste it into %@ in each project you want it in." = "Paste it into %@ in each project you want it in.";
+"Copy the lines to add" = "Copy the lines to add";
 "The recording indicator always shows while an agent is listening, and nothing leaves this Mac." = "The recording indicator always shows while an agent is listening, and nothing leaves this Mac.";
 "Agent Tools" = "Agent Tools";
 "No agent tools found on this Mac." = "No agent tools found on this Mac.";
 "Aloud looks for the agent tools you already use. Open one, then come back." = "Aloud looks for the agent tools you already use. Open one, then come back.";
-"Aloud writes a short instructions file so an agent knows it can talk to you. Remove deletes that file again." = "Aloud writes a short instructions file so an agent knows it can talk to you. Remove deletes that file again.";
-"Install" = "Install";
 "Already set up on this Mac" = "Already set up on this Mac";
-"Lives in each project — paste it into %@ in the repos you want it in." = "Lives in each project — paste it into %@ in the repos you want it in.";
 "%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand." = "%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand.";
 "Couldn’t write %1$@ — %2$@" = "Couldn’t write %1$@ — %2$@";
 "Let coding agents ask you questions out loud." = "Let coding agents ask you questions out loud.";
@@ -416,15 +424,6 @@
    the key has to match the source byte for byte. */
 "Agents can’t reach Aloud right now." = "Agents can’t reach Aloud right now.";
 "Restarting Aloud usually clears this." = "Restarting Aloud usually clears this.";
-
-/* Agent Speak — the consent modes: how an agent's request to listen
-   is approved, and what each mode costs. */
-"Open" = "Open";
-"Agents can start listening right away. The recording indicator always shows when they do." = "Agents can start listening right away. The recording indicator always shows when they do.";
-"Confirm on screen" = "Confirm on screen";
-"Nothing reaches the agent until you accept on screen." = "Nothing reaches the agent until you accept on screen.";
-"Confirm by voice" = "Confirm by voice";
-"Aloud asks out loud and waits for you to say accept — no need to look at the screen." = "Aloud asks out loud and waits for you to say accept — no need to look at the screen.";
 
 /* Agent Speak — the onboarding opt-in. A consent screen: what is being
    granted, and the two answers. */
@@ -452,6 +451,18 @@
 "%@ wants to listen" = "%@ wants to listen";
 "Accept — or press the Aloud hotkey" = "Accept — or press the Aloud hotkey";
 "Decline — or press Esc" = "Decline — or press Esc";
+"Open the mic?" = "Open the mic?";
+"Sent" = "Sent";
+"Waiting…" = "Waiting…";
+"Agent conversation" = "Agent conversation";
+"Agent" = "Agent";
+"The agent session using your microphone" = "The agent session using your microphone";
+"Aloud is busy — answer the agent on screen" = "Aloud is busy — answer the agent on screen";
+"Finish setup to answer out loud" = "Finish setup to answer out loud";
+"Aloud couldn’t open the microphone" = "Aloud couldn’t open the microphone";
+"Aloud is busy — press the Aloud hotkey to accept" = "Aloud is busy — press the Aloud hotkey to accept";
+"Finish setup to answer out loud — or press the Aloud hotkey" = "Finish setup to answer out loud — or press the Aloud hotkey";
+"Aloud couldn’t open the microphone — press the hotkey to accept" = "Aloud couldn’t open the microphone — press the hotkey to accept";
 "Waiting for your answer" = "Waiting for your answer";
 "Listening — this goes to the agent" = "Listening — this goes to the agent";
 "The agent is speaking" = "The agent is speaking";

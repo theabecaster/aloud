@@ -1,38 +1,46 @@
 import SwiftUI
 
 // The agent-session face of the recording pill (docs/agent-voice-bridge.md
-// §7.1d). Same panel, same capsule, same materials — one new accent colour and
-// two jobs the dictation pill never had to do:
+// §7.1d). Same panel, same capsule, same materials, same row — a glyph and a
+// meter — because an agent session is the same event as a dictation with a
+// different party on the other end, and the pill should look like it.
 //
-//   1. Show what was heard. A dictation types into the focused app, so its pill
-//      only needs a meter; an agent session injects nothing, so this is the only
-//      place the words appear at all. A rolling tail, not a scrollback: a line
-//      or two, fading out at the top edge. It says "it heard me", it is not a
-//      document.
-//   2. Show what the harness is doing, as one glyph in a fixed slot, so the eye
-//      learns one place to look.
+// Two things say which party that is, and neither of them is in the row:
 //
-// Layout is three fixed slots and one changing row, in that order:
+//         ╭─────────────╮
+//         │ fixing tests│                  ← the session, as a corner badge
+//   ┌─────┴─────────────┴─────┐
+//   │ (glyph)   ▁▃▅▂▃▁        │            ← phase, then voice or level
+//   └─────────────────────────┘
 //
-//   ┌──────────────────────────────────────────┐
-//   │ (glyph)  caller / question        ▁▃▅▂   │   ← fixed: phase, name, meter
-//   │ what you just said, rolling …            │   ← transcript, or accept/deny
-//   └──────────────────────────────────────────┘
+// The name sits proud of the top-left corner, the way the noise badge sits on
+// the top-right: a standing fact about the session, not a word in the row's
+// sentence. The colour is the accent below.
 //
-// The width is fixed and only the second row grows, because words arrive a few
-// at a time: a pill that re-measured itself per word would twitch continuously
-// while someone is mid-sentence, which is the opposite of a confidence signal.
+// The words are not here. What was said, and what is about to be sent, live in
+// the chat panel that opens above the pill (AgentChatPanel.swift) — a rolling
+// two-line tail inside the capsule could show that something had been heard but
+// never what was going to be sent, which is the only question a person actually
+// has while an agent is holding their microphone.
 
 extension Color {
-    /// The agent accent: teal. It has to answer one question at a glance —
-    /// *is this me or is this an agent?* — so it may not be any colour the pill
-    /// already uses for something the user did (red dictation, orange
+    /// The agent accent: a soft sea-green. It has to answer one question at a
+    /// glance — *is this me or is this an agent?* — so it may not be any colour
+    /// the pill already uses for something the user did (red dictation, orange
     /// hands-free, purple command) nor Aloud's own blue, which already means
-    /// "the app is doing something to your audio". Teal is the remaining cool
-    /// hue in the system palette: unmistakably not-red at the edge of vision,
-    /// calm rather than alarming, and it still sits in the same family as the
-    /// blue so the pill reads as the same app.
-    static let agent = Color.teal
+    /// "the app is doing something to your audio".
+    ///
+    /// It is deliberately desaturated and slightly green of teal. The first cut
+    /// used `Color.teal`, which at capsule-fill strength read as *blue* next to
+    /// Aloud's own — the pill looked like a loud version of the app's colour
+    /// rather than a different one. Muted, it stays legible at the edge of
+    /// vision without shouting, which matters for a pill that can be up for a
+    /// whole conversation.
+    static let agent = Color(red: 0.24, green: 0.72, blue: 0.63)
+
+    /// The same hue lifted for dark backgrounds — glyphs and bar meters, where
+    /// the muted fill above goes muddy against the pill's own material.
+    static let agentBright = Color(red: 0.33, green: 0.84, blue: 0.73)
 }
 
 // What the harness is doing, as far as the bridge can actually know it
@@ -70,118 +78,171 @@ enum AgentIndicatorPhase: Equatable {
 
 struct AgentIndicatorContent: View {
     @ObservedObject var model: IndicatorModel
+    // The slot on screen, which lags `slotKind` only when the new state is a
+    // wait (see `spinnerGrace`), and the counter that lets a state arriving
+    // inside that grace cancel the spinner that was queued behind it.
+    @State private var shownKind: SlotKind = .empty
+    @State private var graceGeneration = 0
 
-    // Fixed so streaming words can't jitter the pill's width. Wide enough for
-    // roughly two short lines of transcript at 12 pt, narrow enough that the
-    // thing is still a pill.
-    private static let width: CGFloat = 296
-    private static let transcriptFont: CGFloat = 12
-    // Two lines' worth. Held even for a one-line tail, so the pill grows once
-    // when the first words land and then holds still for the rest of the turn.
-    private static let transcriptHeight: CGFloat = 32
-    // Longest tail we keep. Past this the head is dropped rather than the
-    // fade being asked to hide four lines of text.
-    private static let tailLimit = 96
+    // The dictation pill's meter, to the point: same size, same slot. The voice
+    // wave takes it too, so Aloud talking and Aloud listening occupy exactly the
+    // same space and the pill never resizes between them.
+    static let meterWidth: CGFloat = 90
+    static let meterHeight: CGFloat = 18
 
     var body: some View {
-        Group {
-            if model.consent != nil { asking } else { session }
+        HStack(spacing: 10) {
+            phaseGlyph
+            voiceSlot
+            if model.consent != nil {
+                consentControls
+            }
         }
+        // Every change of what the pill is doing is a change of one slot, and
+        // they all move on the same spring: the glyph replaces itself, the slot
+        // crossfades and rescales, the controls fade. Nothing in the row is
+        // allowed to appear or vanish on a frame boundary.
         .animation(.spring(duration: 0.28), value: model.consent)
-        .animation(.spring(duration: 0.28), value: tail.isEmpty)
         .animation(.spring(duration: 0.28), value: model.agentPhase)
+        .animation(.spring(duration: 0.28), value: shownKind)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(loc("Agent Speak"))
     }
 
-    // A question and two buttons. One row, sized to its content — the session
-    // layout below is built around a transcript that this state never has, and
-    // wearing it made a yes/no question the largest thing on the screen.
+    // MARK: pieces
+
+    // What the pill is doing, in the slot the meter would otherwise fill: the
+    // helix while Aloud is talking, the level once the mic is live, the question
+    // while a decision is pending.
     //
-    // Everything in the row moves at the swap, because one changing thing was
-    // easy to miss: the glyph turns from a raised hand into a microphone at the
-    // same moment the voice becomes a meter, alongside the start cue. Aloud
-    // asking and Aloud listening should not look alike.
-    private var asking: some View {
-        HStack(spacing: 8) {
-            phaseGlyph
-            Text(headline)
+    // Nothing is held open when there is nothing to put in it. A finished turn
+    // used to keep the meter's 90 points anyway and drew a checkmark beside a
+    // gap the width of the pill, which read as something failing to load.
+    // What the slot is showing, as one value — so a change from any of these to
+    // any other is a single animated swap rather than four independent
+    // appearances racing each other.
+    private enum SlotKind: Equatable {
+        case voice, preparing, meter, settling, question, empty
+
+        // Whether this state fills the meter's slot. The spinners and the
+        // finished pill size to their contents instead.
+        var holdsFullWidth: Bool {
+            switch self {
+            case .voice, .meter, .question: return true
+            case .preparing, .settling, .empty: return false
+            }
+        }
+    }
+
+    private var slotKind: SlotKind {
+        if isSpeaking { return model.voiceIsPlaying ? .voice : .preparing }
+        if micIsOpen { return .meter }
+        if model.chatIsSettling { return .settling }
+        if model.consent != nil { return .question }
+        // Accepted, and whatever comes next — the agent speaking, or the
+        // microphone opening — has not arrived yet. Left empty, this was the
+        // ugliest moment in the whole flow: the buttons left, the question left,
+        // the pill collapsed to a lone glyph and then sprang open again a beat
+        // later for the wave. The spinner holds the slot through the handover so
+        // the pill changes once, not three times.
+        if model.agentPhase == .listening { return .preparing }
+        return .empty
+    }
+
+    // What the slot is actually showing. It follows `slotKind` immediately in
+    // every direction but one: a wait only earns a spinner if it lasts. With a
+    // warm engine the gap between accepting and hearing the voice is a couple
+    // of hundred milliseconds, and a spinner shown across it is a flash and two
+    // resizes — the pill stuttering rather than working. Optimism first: hold
+    // the state we were in, and admit to waiting only if the wait is real.
+    private static let spinnerGrace = Duration.milliseconds(380)
+
+    private var voiceSlot: some View {
+        slotContent
+            .id(shownKind)
+            // The old slot shrinks away and the new one grows in its place,
+            // both centred: the pill's width travels between the two sizes
+            // instead of jumping.
+            .transition(.scale(scale: 0.7).combined(with: .opacity))
+            // The meter, the wave and the question all hold one width, so the
+            // capsule doesn't resize as they swap. The waiting states are not in
+            // that club: a spinner in a 90-point slot is a small thing pinned to
+            // the left of a pill's worth of empty space. It gets the width it
+            // needs, and the capsule grows into the wave when the wave arrives.
+            .frame(minWidth: shownKind.holdsFullWidth ? Self.meterWidth : 0, alignment: .leading)
+            .onAppear { shownKind = slotKind }
+            .onChange(of: slotKind) { _, new in
+                graceGeneration += 1
+                let generation = graceGeneration
+                guard new == .preparing || new == .settling else {
+                    return withAnimation(.spring(duration: 0.28)) { shownKind = new }
+                }
+                Task { @MainActor in
+                    try? await Task.sleep(for: Self.spinnerGrace)
+                    guard generation == graceGeneration else { return }
+                    withAnimation(.spring(duration: 0.28)) { shownKind = new }
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var slotContent: some View {
+        switch shownKind {
+        // Only once sound is actually coming out. The enhanced voice
+        // synthesizes first, which can take a second or two, and a helix drawn
+        // through that silence is a picture of speech that has not started.
+        case .voice:
+            voice
+        case .meter:
+            meter
+        // Waiting on us: the voice being prepared, the handover after an accept,
+        // or the words being settled at the end of a turn. All three are the
+        // same thing to the user — the pill is working — so all three look the
+        // same.
+        case .preparing, .settling:
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.7)
+                .frame(width: 20, height: Self.meterHeight)
+        case .empty:
+            EmptyView()
+        case .question:
+            // The badge above already says who is asking, so the row only has
+            // to say what is being asked. "Open the mic?" is the whole of it:
+            // the decision is about the microphone, and it is a question, which
+            // the two buttons beside it then answer.
+            Text(loc("Open the mic?"))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            if isSpeaking {
-                voice
-            } else if micIsOpen {
-                meter
-            }
-            consentControls
+                .fixedSize()
         }
-        .fixedSize()
+        // Nothing at all once the turn is sent. The pill collapses around the
+        // checkmark — see `agentIsDone` in the pill's padding — because the
+        // ending should feel like the thing closing, not like a pill that has
+        // run out of things to say. A word beside the tick ("Sent") said the
+        // same thing more slowly and left the pill at full width while it did.
     }
 
-    private var session: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 8) {
-                phaseGlyph
-                Text(headline)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                Spacer(minLength: 6)
-                // The trailing slot answers "what does this want from me": the
-                // voice while Aloud is talking, the level once the mic is live.
-                // The meter appears only while the microphone is genuinely
-                // open — a resting meter would say it was on before it is.
-                if isSpeaking {
-                    voice
-                } else if micIsOpen {
-                    meter
-                }
-            }
-            // A capsule curves away from its corners: at the height of the top
-            // row the right-hand edge has crept several points inwards, and
-            // without this the meter's last bars sit on the border.
-            .padding(.trailing, 6)
-            if !tail.isEmpty {
-                transcript
-            }
-        }
-        .frame(width: Self.width, alignment: .leading)
-    }
-
-    // MARK: pieces
-
+    // The phase, as one glyph in one place. Each symbol crossfades and scales
+    // into the next rather than being swapped by SF Symbols' own replace
+    // transition: that effect was fighting the size change on the finished
+    // state and the variable-colour animation on the speaking one, and the
+    // result read as a flicker between two icons instead of one becoming the
+    // other.
     private var phaseGlyph: some View {
-        Image(systemName: model.agentPhase.symbol)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(Color.agent)
-            // One slot, one size, whichever glyph is in it.
-            .frame(width: 18, height: 18)
-            .contentTransition(.symbolEffect(.replace))
-            .symbolEffect(.variableColor.iterative, isActive: model.agentPhase == .speaking)
-            .help(model.agentPhase.help)
-    }
-
-    // The rolling tail. Bottom-aligned in a two-line box and masked so the top
-    // edge dissolves: what was said a moment ago is on its way out rather than
-    // cut off, and the newest words are the solid ones.
-    private var transcript: some View {
-        Text(tail)
-            .font(.system(size: Self.transcriptFont))
-            .foregroundStyle(.primary)
-            .lineLimit(2)
-            .truncationMode(.head)
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, minHeight: Self.transcriptHeight, alignment: .bottomLeading)
-            .mask(
-                LinearGradient(stops: [.init(color: .clear, location: 0),
-                                       .init(color: .black, location: 0.5)],
-                               startPoint: .top, endPoint: .bottom)
-            )
-            .transition(.opacity)
+        ZStack {
+            Image(systemName: model.agentPhase.symbol)
+                .font(.system(size: 13.5, weight: .medium))
+                .foregroundStyle(Color.agentBright)
+                .symbolEffect(.variableColor.iterative, isActive: model.agentPhase == .speaking)
+                .id(model.agentPhase.symbol)
+                .transition(.scale(scale: 0.55).combined(with: .opacity))
+        }
+        // One slot, one size, whichever glyph is in it.
+        .frame(width: 18, height: 18)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: model.agentPhase)
+        .help(model.agentPhase.help)
     }
 
     // Consent mode 2 lives here rather than on a surface of its own: the pill
@@ -206,17 +267,20 @@ struct AgentIndicatorContent: View {
             .help(loc("Accept — or press the Aloud hotkey"))
             .accessibilityLabel(loc("Accept — or press the Aloud hotkey"))
         }
-        .transition(.opacity)
+        // The two buttons shrink toward the slot they were attached to, so an
+        // answered question closes inward rather than leaving a hole the pill
+        // then has to collapse.
+        .transition(.scale(scale: 0.6, anchor: .leading).combined(with: .opacity))
     }
 
     private var meter: some View {
-        SpectrumMeter(bands: model.bands, tint: .agent)
-            .frame(width: 58, height: 16)
+        SpectrumMeter(bands: model.bands, tint: .agentBright)
+            .frame(width: Self.meterWidth, height: Self.meterHeight)
     }
 
     private var voice: some View {
-        VoiceWave(level: model.level, tint: .agent)
-            .frame(width: 44, height: 16)
+        VoiceWave(level: model.level, tint: .agentBright)
+            .frame(width: Self.meterWidth, height: Self.meterHeight)
     }
 
     private func consentGlyph(_ symbol: String, filled: Bool) -> some View {
@@ -230,18 +294,7 @@ struct AgentIndicatorContent: View {
             .overlay(Circle().strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
     }
 
-    // MARK: wording
-
-    // Who is asking, or who is listening. The name appears only where there is
-    // real ambiguity to resolve — with one harness installed "an agent" is the
-    // clearer thing to say (§7.1c), the same rule ConsentPrompt.text follows.
-    private var caller: String { model.agentCaller ?? loc("An agent") }
-
-    private var headline: String {
-        guard model.consent != nil else { return caller }
-        return model.agentCaller.map { loc("%@ wants to listen", $0) }
-            ?? loc("An agent wants to listen")
-    }
+    // MARK: state
 
     private var isSpeaking: Bool { model.agentPhase == .speaking }
 
@@ -250,19 +303,9 @@ struct AgentIndicatorContent: View {
     // the mic before consent exists, but not until the spoken question has
     // finished playing — inferring it from the mode drew a meter over a closed
     // microphone for those several seconds.
-    private var micIsOpen: Bool { model.micIsLive }
-
-    private var tail: String { Self.tail(model.agentTranscript, limit: Self.tailLimit) }
-
-    // The last few words, starting on a word boundary so the tail never opens
-    // mid-word. Line breaks collapse: this is one running utterance, not text
-    // with a shape.
-    static func tail(_ text: String, limit: Int) -> String {
-        let flat = text.replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard flat.count > limit else { return flat }
-        let cut = flat.suffix(limit)
-        guard let space = cut.firstIndex(of: " ") else { return String(cut) }
-        return String(cut[cut.index(after: space)...])
-    }
+    //
+    // ...and never once the turn is over, whatever the capture side has got
+    // round to: a finished exchange under a moving meter says the microphone is
+    // still open, which is the one thing this pill may never get wrong.
+    private var micIsOpen: Bool { model.micIsLive && model.agentPhase != .done }
 }

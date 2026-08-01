@@ -8,6 +8,29 @@ import Foundation
 // run fresh. A marker written afterwards guarantees this happens exactly once.
 enum Migration {
     private static let markerKey = "cleanSlateDone"
+    private static let agentConsentDefaultKey = "agentConsentOpenDefaultApplied"
+
+    // Agent Speak ships letting agents open the microphone without asking
+    // first, and without the spoken confirmation — the pill and its name badge
+    // are the disclosure, and the feature is behind an explicit opt-in already.
+    // Asking every time cost the first question of every session a round of
+    // "yes", which is the moment the feature is meant to save.
+    //
+    // Applied to existing installs as well as fresh ones, because they are
+    // carrying a default nobody chose: the old build shipped confirm-by-voice
+    // whether or not the user ever looked at the setting. Exactly once, keyed
+    // on a marker — the whole point is that anything the user picks *after*
+    // this is theirs and is never touched again.
+    //
+    // Written straight to `UserDefaults` rather than through `SettingsStore`
+    // because it has to land before the store reads them, which happens the
+    // first time anything asks for `.shared`.
+    static func applyAgentConsentDefaultsIfNeeded(_ defaults: UserDefaults = .standard) {
+        guard !defaults.bool(forKey: agentConsentDefaultKey) else { return }
+        defaults.set(AgentConsentMode.open.rawValue, forKey: "agentConsentMode")
+        defaults.set(false, forKey: "agentAsksOutLoud")
+        defaults.set(true, forKey: agentConsentDefaultKey)
+    }
 
     static func runCleanSlateIfNeeded() {
         let defaults = UserDefaults.standard

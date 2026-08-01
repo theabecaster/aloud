@@ -658,7 +658,10 @@ final class AgentBridgeServiceTests: XCTestCase {
         let lease = (await service.handle(request(.claim), peer: peer)).lease
         let response = await service.handle(request(.listen, lease: lease), peer: peer)
         XCTAssertEqual(response.cleanup, .basic)
-        XCTAssertEqual(response.raw, "uh roll it back")
+        // And nothing else. The verbatim transcript used to ride along beside
+        // the cleaned one — the same sentence twice, on every turn, in a
+        // payload the harness pays tokens for.
+        XCTAssertEqual(response.text, "roll it back")
     }
 
     // start → poll → stop. The point of the stream is that an agent can cut in

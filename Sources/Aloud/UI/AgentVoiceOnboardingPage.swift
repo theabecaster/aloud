@@ -11,7 +11,7 @@ import SwiftUI
 // than something inferred from a screen they clicked past.
 //
 // Scope is deliberately small: the decision and the explanation. Which agents
-// get wired up, and how each listen is approved, belong to Settings → Agents —
+// get wired up, and how each listen is approved, belong to Settings → Agent Speak —
 // this page just hands control back through `onEnable` / `onSkip`.
 //
 // New strings here still need entries in Sources/Aloud/Resources/*.lproj
