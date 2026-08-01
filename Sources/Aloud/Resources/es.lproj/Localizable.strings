@@ -150,6 +150,12 @@
 
 /* Settings — dictation */
 "Basic dictation in use" = "Dictado básico en uso";
+"A language you listed is only heard by basic dictation, so every dictation uses it." = "Uno de los idiomas de tu lista solo lo escucha el dictado básico, así que todos los dictados lo usan.";
+"Aloud couldn’t set up that language on this Mac, so it isn’t being heard." = "Aloud no pudo configurar ese idioma en este Mac, así que no se está escuchando.";
+"Remove the languages marked Basic below to go back to full accuracy." = "Quita los idiomas marcados como Básico para volver a la precisión completa.";
+"Basic dictation only" = "Solo dictado básico";
+"Only basic dictation hears this language, so every dictation uses it." = "Solo el dictado básico escucha este idioma, así que todos los dictados lo usan.";
+"All time" = "Total";
 "Setting up full accuracy — %ld%%" = "Configurando la precisión completa: %ld %%";
 "Dictation keeps working while this finishes; the switch is automatic." = "El dictado sigue funcionando mientras esto termina; el cambio es automático.";
 "Setting up full accuracy — almost done" = "Configurando la precisión completa: casi listo";
@@ -329,6 +335,10 @@
 "These words aren’t applied while Clean-up is %@." = "Estas palabras no se aplican mientras la Limpieza sea %@.";
 "Use Standard" = "Usar Estándar";
 "Not in use — Clean-up is set to %@." = "Sin uso: la Limpieza está en %@.";
+"These rules only change the Concise clean-up, and Clean-up is %@." = "Estas reglas solo cambian la limpieza Concisa, y la Limpieza está en %@.";
+"These rules only change the Concise clean-up, which this Mac can’t run." = "Estas reglas solo cambian la limpieza Concisa, que este Mac no puede ejecutar.";
+"Use Concise" = "Usar Conciso";
+"Not in use — this Mac can’t run the Concise clean-up." = "Sin uso: este Mac no puede ejecutar la limpieza Concisa.";
 "What Else Aloud Does" = "Qué más hace Aloud";
 "Nothing to set up now — this is just so you know it’s there." = "No hay nada que configurar ahora; esto es solo para que sepas que está ahí.";
 "Start Using Aloud" = "Empezar a usar Aloud";

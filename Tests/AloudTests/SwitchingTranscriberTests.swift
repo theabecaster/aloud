@@ -87,4 +87,66 @@ final class SwitchingTranscriberTests: XCTestCase {
         XCTAssertFalse(ok)
         XCTAssertEqual(sut.state, .modelMissing)
     }
+
+    // MARK: a language the primary can't hear
+
+    // The one case where a ready primary is the wrong engine: the user
+    // declared a language it doesn't cover, so basic dictation stays in charge
+    // instead of being handed back the moment the download lands.
+    func testDeclaredLanguageKeepsTheFallbackEvenWithAReadyPrimary() async throws {
+        let primary = FakeTranscriber(name: "primary", state: .ready)
+        let fallback = FakeTranscriber(name: "fb", state: .ready)
+        let sut = SwitchingTranscriber(primary: primary, fallback: fallback)
+        _ = await sut.activateFallback()
+
+        sut.requiresFallback = true
+        XCTAssertTrue(sut.usingFallback)
+        XCTAssertEqual(sut.state, .ready)
+        let result = try await sut.transcribe(samples: [])
+        XCTAssertEqual(result.text, "fb")
+        XCTAssertEqual(primary.transcribeCount, 0)
+    }
+
+    // Taking the language back out hands the session straight back — no
+    // reactivation, no relaunch.
+    func testDroppingTheLanguageReturnsToThePrimary() async throws {
+        let primary = FakeTranscriber(name: "primary", state: .ready)
+        let sut = SwitchingTranscriber(primary: primary,
+                                       fallback: FakeTranscriber(name: "fb", state: .ready))
+        _ = await sut.activateFallback()
+        sut.requiresFallback = true
+
+        sut.requiresFallback = false
+        XCTAssertFalse(sut.usingFallback)
+        let result = try await sut.transcribe(samples: [])
+        XCTAssertEqual(result.text, "primary")
+    }
+
+    // Asked for and unavailable — a fallback that won't come up, or no
+    // fallback engine on this Mac at all. The language can't be honoured, and
+    // reporting "setup needed" over dictation that works would be worse than
+    // transcribing it badly: the primary runs and stays ready, and Settings
+    // carries the warning about the language.
+    func testLanguageWantsAFallbackThatCannotRun() async throws {
+        let fallback = FakeTranscriber(name: "fb", state: .modelMissing)
+        fallback.prepareError = Failure()
+        let sut = SwitchingTranscriber(primary: FakeTranscriber(name: "primary", state: .ready),
+                                       fallback: fallback)
+        _ = await sut.activateFallback()
+        sut.requiresFallback = true
+        XCTAssertFalse(sut.usingFallback)
+        XCTAssertEqual(sut.state, .ready)
+        let result = try await sut.transcribe(samples: [])
+        XCTAssertEqual(result.text, "primary")
+    }
+
+    func testLanguageWithNoFallbackEngineStillDictates() async throws {
+        let sut = SwitchingTranscriber(primary: FakeTranscriber(name: "primary", state: .ready),
+                                       fallback: nil)
+        sut.requiresFallback = true
+        XCTAssertFalse(sut.usingFallback)
+        XCTAssertEqual(sut.state, .ready)
+        let result = try await sut.transcribe(samples: [])
+        XCTAssertEqual(result.text, "primary")
+    }
 }

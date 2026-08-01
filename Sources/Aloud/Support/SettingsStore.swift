@@ -35,8 +35,13 @@ final class SettingsStore: ObservableObject {
         statsDictations = defaults.object(forKey: Keys.statsDictations) as? Int ?? 0
         liveTyping = defaults.object(forKey: Keys.liveTyping) as? Bool ?? true
         let storedLanguages = defaults.object(forKey: Keys.declaredLanguages) as? [String] ?? []
+        // Opens on the system language, but only one dictation can actually
+        // hear — otherwise the list would start on an entry the picker can't
+        // offer back and no engine can act on. English is the floor because it
+        // is the one language every tier covers.
+        let systemLanguage = Locale.current.language.languageCode?.identifier ?? "en"
         declaredLanguages = storedLanguages.isEmpty
-            ? [Locale.current.language.languageCode?.identifier ?? "en"]
+            ? [DictationLanguages.isDictatable(systemLanguage) ? systemLanguage : "en"]
             : storedLanguages
         pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
         noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? false

@@ -730,12 +730,7 @@ struct IndicatorView: View {
                 // Reduced-accuracy session: same tag style as onboarding
                 // badges, present in held and hands-free pills alike.
                 if model.isBasic {
-                    Text(loc("Basic"))
-                        .font(.system(size: 9, weight: .semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1.5)
-                        .foregroundStyle(.orange)
-                        .overlay(Capsule().strokeBorder(Color.orange.opacity(0.5), lineWidth: 0.5))
+                    BasicDictationTag()
                 }
                 if let notice = model.notice {
                     Text(notice)

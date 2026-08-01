@@ -21,6 +21,12 @@ final class DictationController: ObservableObject {
     // when there's no fallback in play.
     @Published private(set) var upgradeState: TranscriberState = .modelMissing
     @Published private(set) var usingFallback = false
+    // The declared languages include one full-accuracy dictation can't hear,
+    // so basic dictation is the engine for good — not just until the download
+    // lands. Separate from `usingFallback`, which is also true during that
+    // download: the two states look identical on the pill and read completely
+    // differently in Settings, where one is finishing and the other is settled.
+    @Published private(set) var basicByLanguage = false
 
     let settings: SettingsStore
     let history: HistoryStore
@@ -321,6 +327,27 @@ final class DictationController: ObservableObject {
                 .sink { [weak self] hk in self?.hotkeyManager.commandHotkey = hk }
                 .store(in: &cancellables)
         }
+        // The declared languages decide two things, and neither of them
+        // re-reads the list on its own: which engine runs at all (a language
+        // outside full accuracy pins dictation to basic), and — because the
+        // fallback resolves a locale once at prepare and keeps it — which
+        // language basic dictation is listening for.
+        settings.$declaredLanguages
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                // @Published fires in willSet, so the new list isn't stored
+                // yet — and both jobs below read it back off the store. The
+                // hop is what makes them see the language just added.
+                Task { @MainActor in
+                    guard let self else { return }
+                    await self.applyLanguageEngine(interactive: true)
+                    if let fallback = self.switcher?.fallback as? AppleSpeechTranscriber {
+                        await fallback.relocalize()
+                    }
+                }
+            }
+            .store(in: &cancellables)
         // Switching the learning off has to take the watch down with it,
         // rather than leaving a monitor running until it happens to expire.
         settings.$learnCorrections
@@ -375,6 +402,12 @@ final class DictationController: ObservableObject {
     // the effective state stays .ready and the finished model takes over
     // silently on the next dictation).
     func prepareModel() async {
+        // Every route into "get dictation working" comes through here, so this
+        // is where a saved language outside full accuracy is honoured on
+        // launch. Quiet: a permission prompt at startup for a choice made
+        // sessions ago would come out of nowhere, and Settings re-applies it
+        // interactively the moment the user touches the list.
+        await applyLanguageEngine(interactive: false)
         // Setup that still needs the speech model is one download as far as
         // the user is concerned: the small voice models are pulled first and
         // take the first few percent of the bar, the speech model the rest.
@@ -438,10 +471,48 @@ final class DictationController: ObservableObject {
         // surface for nothing.
         guard let switcher, !switcher.modelIsDownloaded, switcher.primaryState != .ready
         else { return false }
+        return await bringUpFallback(interactive: interactive)
+    }
+
+    private func bringUpFallback(interactive: Bool) async -> Bool {
+        guard let switcher else { return false }
         if !interactive && AppleSpeechTranscriber.wouldPromptForPermission { return false }
         let ok = await switcher.activateFallback()
         refreshTranscriberState()
         return ok
+    }
+
+    // MARK: language → engine
+
+    // Full-accuracy dictation covers 25 languages; anything else this Mac can
+    // hear is heard by basic dictation. Declaring one of those pins dictation
+    // to basic for good, which is a thing the user chose in Settings and is
+    // told about there — the pill's existing "Basic" tag then reports it every
+    // session, exactly as it does during the download.
+    //
+    // `interactive` marks a change the user just made: the only context
+    // allowed to raise basic dictation's permission prompt, same rule as the
+    // onboarding skip.
+    private func applyLanguageEngine(interactive: Bool) async {
+        guard let switcher else { return }
+        // Bring basic dictation up *before* handing it the session, so a Mac
+        // that can't provide it never sits in a state claiming it is in use.
+        if languagesNeedBasic, !switcher.fallbackActive {
+            _ = await bringUpFallback(interactive: interactive)
+        }
+        // Re-read rather than reuse the answer this call started with: bringing
+        // basic dictation up can take an asset download, and a change to the
+        // list during it would otherwise be overwritten by the older verdict
+        // landing second — leaving dictation on the engine the user just
+        // stopped asking for.
+        let needsBasic = languagesNeedBasic
+        switcher.requiresFallback = needsBasic
+        basicByLanguage = needsBasic
+        refreshTranscriberState()
+    }
+
+    private var languagesNeedBasic: Bool {
+        settings.declaredLanguages.contains { !DictationLanguages.isFullQuality($0) }
     }
 
     private func refreshTranscriberState() {

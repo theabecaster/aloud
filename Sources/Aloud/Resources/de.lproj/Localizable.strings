@@ -150,6 +150,12 @@
 
 /* Settings — dictation */
 "Basic dictation in use" = "Einfaches Diktat in Verwendung";
+"A language you listed is only heard by basic dictation, so every dictation uses it." = "Eine deiner Sprachen versteht nur das einfache Diktat, deshalb nutzt jedes Diktat es.";
+"Aloud couldn’t set up that language on this Mac, so it isn’t being heard." = "Aloud konnte diese Sprache auf diesem Mac nicht einrichten, deshalb wird sie nicht verstanden.";
+"Remove the languages marked Basic below to go back to full accuracy." = "Entferne unten die mit Einfach markierten Sprachen, um zur vollen Genauigkeit zurückzukehren.";
+"Basic dictation only" = "Nur einfaches Diktat";
+"Only basic dictation hears this language, so every dictation uses it." = "Nur das einfache Diktat versteht diese Sprache, deshalb nutzt jedes Diktat es.";
+"All time" = "Insgesamt";
 "Setting up full accuracy — %ld%%" = "Volle Genauigkeit wird eingerichtet – %ld %%";
 "Dictation keeps working while this finishes; the switch is automatic." = "Das Diktieren funktioniert währenddessen weiter; der Wechsel erfolgt automatisch.";
 "Setting up full accuracy — almost done" = "Volle Genauigkeit wird eingerichtet – fast fertig";
@@ -329,6 +335,10 @@
 "These words aren’t applied while Clean-up is %@." = "Diese Wörter werden nicht angewendet, solange die Bereinigung auf %@ steht.";
 "Use Standard" = "Standard verwenden";
 "Not in use — Clean-up is set to %@." = "Nicht in Verwendung – die Bereinigung steht auf %@.";
+"These rules only change the Concise clean-up, and Clean-up is %@." = "Diese Regeln ändern nur die Bereinigung Prägnant, und die Bereinigung steht auf %@.";
+"These rules only change the Concise clean-up, which this Mac can’t run." = "Diese Regeln ändern nur die Bereinigung Prägnant, die dieser Mac nicht ausführen kann.";
+"Use Concise" = "Prägnant verwenden";
+"Not in use — this Mac can’t run the Concise clean-up." = "Nicht in Verwendung – dieser Mac kann die Bereinigung Prägnant nicht ausführen.";
 "What Else Aloud Does" = "Was Aloud sonst noch kann";
 "Nothing to set up now — this is just so you know it’s there." = "Jetzt ist nichts einzurichten – das ist nur, damit du weißt, dass es das gibt.";
 "Start Using Aloud" = "Aloud verwenden";

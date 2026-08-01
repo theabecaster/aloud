@@ -150,6 +150,12 @@
 
 /* Settings — dictation */
 "Basic dictation in use" = "Basic dictation in use";
+"A language you listed is only heard by basic dictation, so every dictation uses it." = "A language you listed is only heard by basic dictation, so every dictation uses it.";
+"Aloud couldn’t set up that language on this Mac, so it isn’t being heard." = "Aloud couldn’t set up that language on this Mac, so it isn’t being heard.";
+"Remove the languages marked Basic below to go back to full accuracy." = "Remove the languages marked Basic below to go back to full accuracy.";
+"Basic dictation only" = "Basic dictation only";
+"Only basic dictation hears this language, so every dictation uses it." = "Only basic dictation hears this language, so every dictation uses it.";
+"All time" = "All time";
 "Setting up full accuracy — %ld%%" = "Setting up full accuracy — %ld%%";
 "Dictation keeps working while this finishes; the switch is automatic." = "Dictation keeps working while this finishes; the switch is automatic.";
 "Setting up full accuracy — almost done" = "Setting up full accuracy — almost done";
@@ -329,6 +335,10 @@
 "These words aren’t applied while Clean-up is %@." = "These words aren’t applied while Clean-up is %@.";
 "Use Standard" = "Use Standard";
 "Not in use — Clean-up is set to %@." = "Not in use — Clean-up is set to %@.";
+"These rules only change the Concise clean-up, and Clean-up is %@." = "These rules only change the Concise clean-up, and Clean-up is %@.";
+"These rules only change the Concise clean-up, which this Mac can’t run." = "These rules only change the Concise clean-up, which this Mac can’t run.";
+"Use Concise" = "Use Concise";
+"Not in use — this Mac can’t run the Concise clean-up." = "Not in use — this Mac can’t run the Concise clean-up.";
 "What Else Aloud Does" = "What Else Aloud Does";
 "Nothing to set up now — this is just so you know it’s there." = "Nothing to set up now — this is just so you know it’s there.";
 "Start Using Aloud" = "Start Using Aloud";
