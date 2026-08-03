@@ -50,14 +50,53 @@ enum SpeakerFactory {
     // else gets the system voice, which is why `speak` is never broken — the
     // download is an upgrade, not a prerequisite, and nothing has to block on
     // it. Fetching those assets is the caller's business, not the factory's.
-    static func make() -> Speaker {
-        let enhanced = NeuralSpeaker()
-        return enhanced.modelIsDownloaded ? enhanced : SystemSpeaker()
+    //
+    // `option` is the user's pick from VoiceCatalog; nil means they have not
+    // made one and Aloud chooses. Either way the same rule holds: what comes
+    // back can speak this instant. A user who picks the enhanced voice before
+    // its download finishes is given a system voice for now rather than an
+    // error — the choice is remembered in Settings and takes effect the moment
+    // the assets land.
+    static func make(_ option: VoiceOption? = nil,
+                     speed: Double = VoiceSpeed.normal) -> Speaker {
+        let speaker: Speaker
+        switch option?.source {
+        case .system(let identifier):
+            speaker = SystemSpeaker(voiceIdentifier: identifier)
+        case .enhanced(let engine, let style):
+            let enhanced = NeuralSpeaker(engine: engine, style: style)
+            // Stand in with the Mac's best voice on the *same* side — falling
+            // back to "whatever this Mac speaks best" would answer a question
+            // about a male voice in a female one, which reads as the setting
+            // being ignored.
+            speaker = enhanced.modelIsDownloaded
+                ? enhanced
+                : SystemSpeaker(voiceIdentifier: standIn(for: option?.gender))
+        case nil:
+            speaker = make(VoiceCatalog.resolved(gender: nil), speed: speed)
+        }
+        speaker.speed = VoiceSpeed.clamped(speed)
+        return speaker
+    }
+
+    // The system voice that covers a side while Aloud's own is downloading.
+    // nil means "whatever this Mac speaks best", which is what SystemSpeaker
+    // does when it isn't given a voice.
+    private static func standIn(for gender: VoiceGender?) -> String? {
+        guard let gender, let option = VoiceCatalog.systemVoice(for: gender),
+              case .system(let identifier) = option.source else { return nil }
+        return identifier
     }
 }
 
 protocol Speaker: AnyObject {
     var state: SpeakerState { get }
+    // How fast this voice talks, 1 being the pace it was built to run at.
+    // Settable rather than fixed at construction because changing it must not
+    // cost a reload: on the enhanced voice that would mean unloading a CoreML
+    // chain and warming it again, which is seconds of silence for a slider the
+    // user is still dragging.
+    var speed: Double { get set }
     // True when the voice can be used with no network. Always true for the
     // system voice; asset-dependent for the enhanced one.
     var modelIsDownloaded: Bool { get }

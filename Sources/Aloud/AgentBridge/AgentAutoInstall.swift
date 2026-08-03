@@ -31,11 +31,35 @@ enum AgentAutoInstall {
     // is read once at launch before anything else has an opinion.
     private static let versionKey = "agentAutoInstallVersion"
 
+    // Only a real app writes into the user's home.
+    //
+    // These files are the user's own — `~/.claude/CLAUDE.md` is a file they
+    // wrote for themselves — and the command we write into them is the path of
+    // whatever binary is running. From `.build/debug/Aloud` that is a scratch
+    // build in a developer's checkout: every launch rewrites the note, the
+    // skill file and the permission entries across every harness on the Mac to
+    // point at a binary that will be gone at the next `swift build`, and the
+    // user finds out when their own agents start invoking it. Half a dozen
+    // files, silently, per run.
+    //
+    // A bundle is the honest test for "this is the installed app", and it is
+    // the same one `main.swift` uses to decide whether the clean-slate
+    // migration may touch anything. `ALOUD_FORCE_AGENT_INSTALL=1` opts back in,
+    // for testing the installer itself against a throwaway home.
+    //
+    // Unit tests are unaffected either way: they call `install` through an
+    // injected `HarnessInstaller` pointed at a temporary directory.
+    static var mayWriteToHome: Bool {
+        if ProcessInfo.processInfo.environment["ALOUD_FORCE_AGENT_INSTALL"] == "1" { return true }
+        return Bundle.main.bundleURL.pathExtension == "app"
+    }
+
     static func runIfNeeded(settings: SettingsStore = .shared,
                             defaults: UserDefaults = .standard,
                             version: String = Updater.currentVersion(),
                             installer: HarnessInstaller? = nil) {
         guard settings.experimentalAgentVoice else { return }
+        guard installer != nil || mayWriteToHome else { return }
         guard defaults.string(forKey: versionKey) != version else { return }
         defaults.set(version, forKey: versionKey)
         install(settings: settings, installer: installer)
@@ -50,6 +74,7 @@ enum AgentAutoInstall {
                                    version: String = Updater.currentVersion(),
                                    installer: HarnessInstaller? = nil) {
         guard settings.experimentalAgentVoice else { return }
+        guard installer != nil || mayWriteToHome else { return }
         defaults.set(version, forKey: versionKey)
         install(settings: settings, installer: installer)
     }

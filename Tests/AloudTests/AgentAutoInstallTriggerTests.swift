@@ -239,3 +239,22 @@ final class AgentAutoInstallTriggerTests: XCTestCase {
         XCTAssertTrue(SettingsStore(defaults: defaults).agentAsksOutLoud)
     }
 }
+
+// A development build must not touch the user's home.
+//
+// The command written into every one of these files is the path of the binary
+// that wrote it. From `.build/debug/Aloud` that is a scratch build in a
+// checkout: each launch rewrote the global note, the skill file and the
+// permission entries for every harness on the Mac to point at a binary that
+// the next `swift build` replaces — and the first sign of it is the user's own
+// agents invoking it. Half a dozen of the user's own files, silently, per run.
+extension AgentAutoInstallTriggerTests {
+
+    @MainActor
+    func testADevelopmentBuildIsNotAllowedToWriteIntoTheHome() {
+        // The test host is not an .app bundle, which is exactly the case this
+        // guard exists for.
+        XCTAssertFalse(AgentAutoInstall.mayWriteToHome,
+                       "a bare binary is claiming the right to rewrite the user's instruction files")
+    }
+}

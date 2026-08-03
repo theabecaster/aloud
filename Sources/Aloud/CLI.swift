@@ -70,6 +70,12 @@ enum CLI {
         // release. Absent rather than false when it is not asked for: the
         // field is new, and an old app reading it should see nothing.
         request.end = args.contains("--end") ? true : nil
+        // Clamped here as well as app-side, and for the same reason `--wait` is:
+        // `Double.init` accepts "inf" and twenty-digit typos, and an unbounded
+        // value would trap in the socket-timeout arithmetic below — a crash
+        // where the caller expected the documented refusal.
+        request.hold = value(of: "--hold", in: args).flatMap(Double.init)
+            .map { $0.isFinite ? min(max($0, 0), AgentBridgeService.maxHold) : 0 }
         if op == .listen {
             for (flag, mode) in [("--start", BridgeRequest.ListenMode.start),
                                  ("--poll", .poll), ("--stop", .stop)] where args.contains(flag) {
@@ -84,6 +90,9 @@ enum CLI {
             }
             request.text = text
         }
+        // Optional on `wait`: the question has normally already been asked, and
+        // the point of the verb is to listen without asking it again.
+        if op == .wait { request.text = firstPositional(after: 1, in: args) }
         if op == .claim, value(of: "--harness", in: args) == nil {
             usage("claim --harness <id>")
             return 64
@@ -91,8 +100,11 @@ enum CLI {
         // `ask` opens its own session when it is not handed one, so it needs
         // what `claim` needs — and needs neither when continuing a session the
         // lease already identifies.
-        if op == .ask, request.lease == nil, value(of: "--harness", in: args) == nil {
-            usage("ask --harness <id> --name \"<two words>\" <question>   (or --lease <id> to carry on)")
+        if op == .ask || op == .wait, request.lease == nil,
+           value(of: "--harness", in: args) == nil {
+            usage(op == .wait
+                  ? "wait --harness <id> --name \"<two words>\"   (or --lease <id> to carry on)"
+                  : "ask --harness <id> --name \"<two words>\" <question>   (or --lease <id> to carry on)")
             return 64
         }
         if (op == .speak || op == .listen || op == .release), request.lease == nil {
@@ -111,8 +123,20 @@ enum CLI {
         // played to the end, and then however long they take to reply. Given
         // the same 90 it would hang up mid-answer on the slow-but-ordinary
         // case, and the agent would read that as the bridge being gone.
-        let timeout = op == .ask ? max(180, (request.wait ?? 0) + 90)
-                                 : max(90, (request.wait ?? 0) + 30)
+        //
+        // A hold is added on top of both: it is time the app will deliberately
+        // spend waiting, and hanging up on our own request at minute two of a
+        // ten-minute hold would abandon a session that is still on screen with
+        // the microphone open.
+        // `wait` with no ceiling named takes the app's own, which is what the
+        // app will apply — so the socket has to allow for it or we would hang
+        // up on a wait we asked for.
+        let hold = request.hold ?? (op == .wait ? AgentBridgeService.maxHold : 0)
+        // `wait` also queues by default (see `waitQueueGrace`), so the socket
+        // has to allow for time the app will spend before the hold even starts.
+        let queued = request.wait ?? (op == .wait ? AgentBridgeService.waitQueueGrace : 0)
+        let timeout = (op == .ask || op == .wait ? max(180, queued + 90)
+                                                : max(90, queued + 30)) + hold
         let response = BridgeClient.send(request, timeout: timeout)
         emit(response)
         return response.reason == .unavailable ? 1 : 0
@@ -256,6 +280,15 @@ extension CLI {
             return await command(instruction: args[1], selection: selection)
         case "--selftest":
             return await selfTest()
+        case "--speak-preview":
+            // The Settings preview button, without Settings: resolve the voice
+            // for each gender exactly as the picker does, speak the sample
+            // line, stop, speak it again. Two rounds because the failure this
+            // was written for only appeared on the second one — silence after
+            // the first stop — and a GUI is a poor place to time anything.
+            // Optional speed argument; makes noise by design.
+            let speed = args.count > 1 ? (Double(args[1]) ?? VoiceSpeed.normal) : VoiceSpeed.normal
+            return await speakPreview(speed: speed)
         case "--speak-bench":
             // Renders one line through every available voice and prints what
             // each cost. Choosing the enhanced engine is a listening decision
@@ -264,18 +297,35 @@ extension CLI {
             // ear; --engine <name> limits the run to one.
             guard args.count >= 2 else {
                 FileHandle.standardError.write(Data(
-                    "usage: Aloud --speak-bench <text> [--engine system|kokoro|pocket] [--out <dir>]\n".utf8))
+                    "usage: Aloud --speak-bench <text> [--engine system|supertonic|kokoro|pocket] [--voice <style>] [--out <dir>]\n".utf8))
                 return 64
             }
             var out: URL?
             if let idx = args.firstIndex(of: "--out"), args.count > idx + 1 {
                 out = URL(fileURLWithPath: args[idx + 1])
             }
+            // Which preset voice, on an engine that has several ("M1", "F3").
+            // Auditioning them is the only way to choose the pair Aloud ships:
+            // "which male voice sounds least like a robot" is not a question
+            // the SDK docs answer.
+            var voice: String?
+            if let idx = args.firstIndex(of: "--voice"), args.count > idx + 1 {
+                voice = args[idx + 1]
+            }
             var only: String?
             if let idx = args.firstIndex(of: "--engine"), args.count > idx + 1 {
                 only = args[idx + 1]
             }
-            return await speakBench(text: args[1], only: only, outputDirectory: out)
+            // Pace, so the audio a given setting actually produces can be
+            // measured rather than inferred — a sentence that comes out short
+            // at one speed and whole at another is an engine problem, and
+            // nothing on screen can tell you which.
+            var speed = VoiceSpeed.normal
+            if let idx = args.firstIndex(of: "--speed"), args.count > idx + 1 {
+                speed = Double(args[idx + 1]) ?? VoiceSpeed.normal
+            }
+            return await speakBench(text: args[1], only: only, voice: voice,
+                                    speed: speed, outputDirectory: out)
         case "--transcribe":
             guard args.count >= 2 else {
                 FileHandle.standardError.write(Data("usage: Aloud --transcribe <audio-file>\n".utf8))
@@ -370,17 +420,86 @@ extension CLI {
         }
     }
 
+    // MARK: --speak-preview
+
+    static func speakPreview(speed: Double) async -> Int32 {
+        let line = "This is me, thinking out loud. How’s the pace?"
+        var failures = 0
+        for gender in VoiceGender.allCases {
+            let option = VoiceCatalog.resolved(gender: gender)
+            let speaker = SpeakerFactory.make(option, speed: speed)
+            print("\(gender.rawValue): \(option.name) at \(VoiceSpeed.label(speed))")
+            // The warm-up the picker runs when a side is chosen, on the same
+            // speaker the press will use — part of the sequence, so part of
+            // the reproduction.
+            let warmStarted = Date()
+            _ = try? await speaker.synthesize("Hello.")
+            print(String(format: "  warm: %.2fs", Date().timeIntervalSince(warmStarted)))
+            for round in 1...2 {
+                let started = Date()
+                do {
+                    try await speaker.speak(line)
+                } catch {
+                    print("  round \(round): threw — \(error.localizedDescription)")
+                    failures += 1
+                    continue
+                }
+                let elapsed = Date().timeIntervalSince(started)
+                let heard = elapsed > 0.5
+                print(String(format: "  round %d: %.2fs %@", round, elapsed,
+                             heard ? "" : "← nothing was heard"))
+                if !heard { failures += 1 }
+                // What the preview does between samples.
+                speaker.stop()
+            }
+
+            // And the case the preview hits when the speed slider moves while
+            // a sample is playing: speak over it, mid-utterance. The
+            // replacement has to run its full length — a short one here is the
+            // sample that says half its sentence and stops.
+            let interrupted = Task { try? await speaker.speak(line) }
+            try? await Task.sleep(for: .milliseconds(400))
+            let overStarted = Date()
+            do {
+                try await speaker.speak(line)
+            } catch {
+                print("  over-speak: threw — \(error.localizedDescription)")
+                failures += 1
+                _ = await interrupted.value
+                continue
+            }
+            _ = await interrupted.value
+            let over = Date().timeIntervalSince(overStarted)
+            let whole = over > 1.0
+            print(String(format: "  over-speak: %.2fs %@", over,
+                         whole ? "" : "← the replacement was cut short"))
+            if !whole { failures += 1 }
+            speaker.stop()
+        }
+        return failures == 0 ? 0 : 1
+    }
+
     // MARK: --speak-bench
 
-    static func speakBench(text: String, only: String?, outputDirectory: URL?) async -> Int32 {
-        var candidates: [(name: String, speaker: Speaker)] = [
-            ("system", SystemSpeaker()),
-        ]
+    static func speakBench(text: String, only: String?, voice: String?,
+                           speed: Double = VoiceSpeed.normal,
+                           outputDirectory: URL?) async -> Int32 {
+        let system = SystemSpeaker()
+        system.speed = speed
+        var candidates: [(name: String, speaker: Speaker)] = [("system", system)]
         for engine in NeuralEngine.allCases {
-            candidates.append((engine.rawValue, NeuralSpeaker(engine: engine)))
+            let speaker = voice.map { NeuralSpeaker(engine: engine, style: $0) }
+                ?? NeuralSpeaker(engine: engine)
+            speaker.speed = speed
+            // The voice goes in the name so a directory of samples can be
+            // sorted through by ear without keeping track of what wrote what.
+            candidates.append((voice.map { "\(engine.rawValue)-\($0)" } ?? engine.rawValue,
+                               speaker))
         }
         if let only {
-            candidates = candidates.filter { $0.name == only }
+            // Matched on the engine, not the decorated name, so `--engine
+            // supertonic --voice M3` still selects one row.
+            candidates = candidates.filter { $0.name == only || $0.name.hasPrefix("\(only)-") }
             guard !candidates.isEmpty else {
                 FileHandle.standardError.write(Data("unknown engine \(only)\n".utf8))
                 return 64
@@ -522,6 +641,13 @@ extension CLI {
                 "onboardingComplete": settings.onboardingComplete,
                 "liveTyping": settings.liveTyping,
                 "noiseReduction": settings.noiseReduction,
+                // Who an agent will be heard through, and how fast. "Why does
+                // it sound like that" is otherwise a question only the user's
+                // ears can answer, and the stored id alone doesn't say whether
+                // the voice it names is still installed.
+                "agentVoice": settings.agentVoice.name,
+                "agentVoiceIsEnhanced": settings.agentVoice.isEnhanced,
+                "agentVoiceSpeed": settings.agentVoiceSpeed,
             ],
             "paths": [
                 "stateDir": AppPaths.stateDir.path,
@@ -1305,7 +1431,88 @@ extension CLI {
             } catch {
                 expect(false, "synthesis: system voice renders audio (\(error))")
             }
+
+            // The speed slider, end to end: the same sentence has to come out
+            // measurably longer at the slow end than at the fast one. A rate
+            // that is stored, shown and then dropped on the way to the engine
+            // is a setting that does nothing, and nothing on screen would say
+            // so — the only way to know is to listen, or to time it.
+            do {
+                let slow = SystemSpeaker()
+                slow.speed = VoiceSpeed.slowest
+                let fast = SystemSpeaker()
+                fast.speed = VoiceSpeed.fastest
+                let line = "Testing, one two three."
+                let slowly = try await slow.synthesize(line)
+                let quickly = try await fast.synthesize(line)
+                expect(slowly.duration > quickly.duration * 1.2,
+                       "synthesis: speaking speed changes how long a sentence takes")
+            } catch {
+                expect(false, "synthesis: speaking speed changes how long a sentence takes (\(error))")
+            }
         }
+
+        // The voice choice: one question, and the guarantee that either answer
+        // resolves to something that can actually speak.
+        VoiceCatalog.refresh()
+        expect(!VoiceCatalog.availableGenders.isEmpty,
+               "voices: the picker always has something to offer")
+        for gender in VoiceGender.allCases {
+            expect(!VoiceCatalog.resolved(gender: gender).name.isEmpty,
+                   "voices: \(gender.rawValue) resolves to a voice rather than to silence")
+        }
+        for gender in VoiceCatalog.availableGenders {
+            expect(VoiceCatalog.resolved(gender: gender).gender == gender,
+                   "voices: an offered \(gender.rawValue) choice is honoured")
+        }
+        // Aloud's own female voice is English-only; the male one speaks 31
+        // languages. A Portuguese Mac must not be told it is waiting for a
+        // voice that will never serve it.
+        expect(VoiceCatalog.enhancedVoice(for: .female, language: "pt_BR") == nil
+                && VoiceCatalog.enhancedVoice(for: .male, language: "pt_BR") != nil,
+               "voices: Aloud's own voices are only claimed for languages they speak")
+        expect(SpeakerFactory.make(VoiceCatalog.resolved(gender: nil)).modelIsDownloaded,
+               "voices: the default choice can speak right now")
+
+        // Twice on the same speaker, which is the case that broke: the female
+        // engine's default ANE placement synthesized correctly exactly once
+        // per process and then failed forever inside `postAlbert`. On screen
+        // that is a preview that works once, and an agent whose second
+        // question of the session is silent — both of which look like the
+        // feature quietly dying rather than a bug in a model stage.
+        for gender in VoiceCatalog.availableGenders {
+            let speaker = SpeakerFactory.make(VoiceCatalog.resolved(gender: gender))
+            do {
+                _ = try await speaker.synthesize("Testing, one two three.")
+                let second = try await speaker.synthesize("Testing, one two three.")
+                expect(!second.samples.isEmpty,
+                       "voices: the \(gender.rawValue) voice speaks more than once")
+            } catch {
+                expect(false, "voices: the \(gender.rawValue) voice speaks more than once (\(error))")
+            }
+        }
+
+        // The speed slider, through the voice a user actually gets rather than
+        // through the system voice alone: whichever engine serves a side has
+        // to honour the pace, and the one that doesn't would be a slider that
+        // silently stops working when the download lands.
+        for gender in VoiceCatalog.availableGenders {
+            let option = VoiceCatalog.resolved(gender: gender)
+            do {
+                let slow = SpeakerFactory.make(option, speed: VoiceSpeed.slowest)
+                let fast = SpeakerFactory.make(option, speed: VoiceSpeed.fastest)
+                let line = "Testing, one two three."
+                let slowly = try await slow.synthesize(line)
+                let quickly = try await fast.synthesize(line)
+                expect(slowly.duration > quickly.duration * 1.2,
+                       "voices: the \(gender.rawValue) voice honours speaking speed")
+            } catch {
+                expect(false, "voices: the \(gender.rawValue) voice honours speaking speed (\(error))")
+            }
+        }
+        expect(VoiceSpeed.clamped(.nan) == VoiceSpeed.slowest
+                && VoiceSpeed.clamped(99) == VoiceSpeed.fastest,
+               "voices: a stored speed is always one an engine can use")
 
         print(failures.isEmpty ? "\nselftest passed" : "\nselftest FAILED: \(failures.joined(separator: ", "))")
         return failures.isEmpty ? 0 : 1

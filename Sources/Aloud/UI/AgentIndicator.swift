@@ -49,6 +49,7 @@ extension Color {
 // from silence — the controller sets it from the bridge's own transitions.
 enum AgentIndicatorPhase: Equatable {
     case pending    // an agent asked; the user has not answered
+    case waiting    // the question was asked out loud; the mic is open and the room is empty
     case listening  // the mic is open and the words go to the agent
     case speaking   // the agent is talking through the speakers
     case done       // the exchange finished
@@ -60,7 +61,13 @@ enum AgentIndicatorPhase: Equatable {
         case .pending:   return "hand.raised.fill"
         // The same mic the dictation pill uses — an open microphone looks the
         // same whoever opened it; the colour is what says who.
-        case .listening: return "mic.fill"
+        //
+        // Waiting shares it, deliberately. The microphone genuinely *is* open
+        // through a hold — that is the whole point, so the user can walk back
+        // in and simply talk — and a quieter glyph would be the pill
+        // understating what it is doing. What changes is the slot beside it,
+        // which says "waiting" instead of drawing a meter of an empty room.
+        case .waiting, .listening: return "mic.fill"
         case .speaking:  return "speaker.wave.2.fill"
         case .done:      return "checkmark.circle.fill"
         }
@@ -69,6 +76,7 @@ enum AgentIndicatorPhase: Equatable {
     var help: String {
         switch self {
         case .pending:   return loc("Waiting for your answer")
+        case .waiting:   return loc("Listening whenever you’re ready — just start talking")
         case .listening: return loc("Listening — this goes to the agent")
         case .speaking:  return loc("The agent is speaking")
         case .done:      return loc("Done")
@@ -122,20 +130,31 @@ struct AgentIndicatorContent: View {
     // any other is a single animated swap rather than four independent
     // appearances racing each other.
     private enum SlotKind: Equatable {
-        case voice, preparing, meter, settling, question, empty
+        case voice, preparing, meter, waiting, settling, question, empty
 
         // Whether this state fills the meter's slot. The spinners and the
         // finished pill size to their contents instead.
         var holdsFullWidth: Bool {
             switch self {
             case .voice, .meter, .question: return true
-            case .preparing, .settling, .empty: return false
+            // Sized to its own two words instead. Holding the meter's 90 points
+            // put "Waiting" at the left of a pill's worth of nothing, and this
+            // is the state the pill sits in longest — up to ten minutes, on
+            // screen, mostly being seen out of the corner of an eye. It should
+            // take the room it needs and no more. The pill grows back into the
+            // meter when somebody speaks, which is a transition worth seeing.
+            case .waiting, .preparing, .settling, .empty: return false
             }
         }
     }
 
     private var slotKind: SlotKind {
         if isSpeaking { return model.voiceIsPlaying ? .voice : .preparing }
+        // Before the meter, and while the mic is genuinely open: a hold can run
+        // for ten minutes, and a spectrum of an empty room is a flat line that
+        // reads as broken. Same width, so the pill does not resize when
+        // somebody finally speaks and the meter takes the slot back.
+        if model.agentPhase == .waiting { return .waiting }
         if micIsOpen { return .meter }
         if model.chatIsSettling { return .settling }
         if model.consent != nil { return .question }
@@ -174,13 +193,19 @@ struct AgentIndicatorContent: View {
             .onChange(of: slotKind) { _, new in
                 graceGeneration += 1
                 let generation = graceGeneration
+                // Assigned plainly: the row already declares
+                // `.animation(_, value: shownKind)`, and wrapping the same
+                // change in `withAnimation` ran it twice — two springs on one
+                // swap, which is what made the end of a turn look stuttery
+                // rather than fast.
                 guard new == .preparing || new == .settling else {
-                    return withAnimation(.spring(duration: 0.28)) { shownKind = new }
+                    shownKind = new
+                    return
                 }
                 Task { @MainActor in
                     try? await Task.sleep(for: Self.spinnerGrace)
                     guard generation == graceGeneration else { return }
-                    withAnimation(.spring(duration: 0.28)) { shownKind = new }
+                    shownKind = new
                 }
             }
     }
@@ -204,6 +229,8 @@ struct AgentIndicatorContent: View {
                 .controlSize(.small)
                 .scaleEffect(0.7)
                 .frame(width: 20, height: Self.meterHeight)
+        case .waiting:
+            waiting
         case .empty:
             EmptyView()
         case .question:
@@ -235,13 +262,23 @@ struct AgentIndicatorContent: View {
             Image(systemName: model.agentPhase.symbol)
                 .font(.system(size: 13.5, weight: .medium))
                 .foregroundStyle(Color.agentBright)
+                // Deliberately the whole `.speaking` phase, synthesis included,
+                // rather than only while samples are leaving the speakers.
+                // Gating it on `voiceIsPlaying` was tried — it is more literal,
+                // since synthesis can run 2.2s before any audio — and it made
+                // the talking animation itself unreliable, which is a far worse
+                // trade than a glyph that starts pulsing slightly early.
                 .symbolEffect(.variableColor.iterative, isActive: model.agentPhase == .speaking)
                 .id(model.agentPhase.symbol)
                 .transition(.scale(scale: 0.55).combined(with: .opacity))
         }
         // One slot, one size, whichever glyph is in it.
         .frame(width: 18, height: 18)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: model.agentPhase)
+        // No spring of its own. The row already animates on `agentPhase`, and a
+        // second curve on the same trigger meant the glyph and the slot beside
+        // it were moving to different timings — most visible at the end of a
+        // turn, where the spinner leaving and the tick arriving are one event
+        // and read as two.
         .help(model.agentPhase.help)
     }
 
@@ -278,6 +315,29 @@ struct AgentIndicatorContent: View {
             .frame(width: Self.meterWidth, height: Self.meterHeight)
     }
 
+    // The held session, in the meter's slot.
+    //
+    // The pill may sit like this for ten minutes while somebody is in another
+    // room, so it has to be legible from across that room and still be
+    // something you would not mind having on screen. One word and three dots
+    // that breathe: alive enough that it is plainly not a frozen pill, quiet
+    // enough that it is not asking for attention it does not need.
+    //
+    // Deliberately not a spinner. A spinner means Aloud is working on
+    // something; nothing is happening here except a room being listened to.
+    private var waiting: some View {
+        HStack(spacing: 6) {
+            Text(loc("Waiting"))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+            BreathingDots(tint: .agentBright)
+        }
+        .frame(height: Self.meterHeight)
+        .fixedSize()
+    }
+
     private var voice: some View {
         VoiceWave(level: model.level, tint: .agentBright)
             .frame(width: Self.meterWidth, height: Self.meterHeight)
@@ -308,4 +368,43 @@ struct AgentIndicatorContent: View {
     // round to: a finished exchange under a moving meter says the microphone is
     // still open, which is the one thing this pill may never get wrong.
     private var micIsOpen: Bool { model.micIsLive && model.agentPhase != .done }
+}
+
+// Three dots that rise and fade in turn, for a pill that may be waiting for a
+// long time.
+//
+// Written by hand rather than reached for from the system: `ProgressView` says
+// Aloud is busy, and `symbolEffect(.pulse)` on an ellipsis moves all three
+// together, which reads as a warning rather than as patience. The offset phase
+// is the whole effect — it is what makes it look like waiting instead of
+// blinking.
+//
+// One animation, started on appear and never restarted, so a pill up for ten
+// minutes is not scheduling anything per frame beyond the implicit interpolation.
+private struct BreathingDots: View {
+    let tint: Color
+    @State private var breathing = false
+
+    private static let period: TimeInterval = 1.4
+    private static let dots = 3
+
+    var body: some View {
+        HStack(spacing: 3.5) {
+            ForEach(0..<Self.dots, id: \.self) { index in
+                Circle()
+                    .fill(tint)
+                    .frame(width: 4, height: 4)
+                    .opacity(breathing ? 1 : 0.25)
+                    .animation(
+                        .easeInOut(duration: Self.period)
+                            .repeatForever(autoreverses: true)
+                            // Each dot a third of a cycle behind the last, so
+                            // the brightness travels along the row.
+                            .delay(Double(index) * Self.period / Double(Self.dots)),
+                        value: breathing)
+            }
+        }
+        .onAppear { breathing = true }
+        .accessibilityHidden(true)
+    }
 }

@@ -93,6 +93,19 @@ final class CLIArgumentTests: XCTestCase {
         }
     }
 
+    // `--hold` is the documented long-wait form, and it sits between two
+    // switches in the line the instructions teach — which is exactly the
+    // arrangement that broke `--end`.
+    func testTheDocumentedHoldLineParsesEveryPartOfItself() {
+        let args = ["ask", "--harness", "claude-code", "--owner-pid", "9021",
+                    "--name", "fixing tests", "--hold", "600", "--end",
+                    "Roll the migration back, or fix it forward?"]
+        XCTAssertEqual(CLI.value(of: "--hold", in: args), "600")
+        XCTAssertEqual(CLI.value(of: "--name", in: args), "fixing tests")
+        XCTAssertEqual(CLI.firstPositional(after: 1, in: args),
+                       "Roll the migration back, or fix it forward?")
+    }
+
     // `--owner-pid` is how Aloud tells two windows of the same tool apart and
     // reaps a lease the moment its owner exits. A value it cannot parse has to
     // fall back to anonymous rather than to a pid that means something else.

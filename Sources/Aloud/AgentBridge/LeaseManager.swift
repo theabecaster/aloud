@@ -254,6 +254,25 @@ final class LeaseManager {
         holder?.lastUsed = now
     }
 
+    // Keep a lease alive without first asking whether it has expired.
+    //
+    // `validate` reaps on the way in, which is right for a caller asking "may I
+    // act" and exactly wrong for the one call that *is* the activity. A
+    // heartbeat inside a long-held listen would reap the very lease it exists
+    // to preserve, the moment the clock had moved further than the TTL since
+    // the last tick — which is not hypothetical: the Mac sleeping mid-hold
+    // jumps it by however long the lid was shut, and the first tick after
+    // waking would end a session whose microphone is still open.
+    //
+    // Refreshing does not need to know about expiry. It is the evidence that
+    // expiry has not happened.
+    @discardableResult
+    func refresh(lease id: String, now: Date) -> Bool {
+        guard enabled, holder?.id == id else { return false }
+        touch(now: now)
+        return true
+    }
+
     // Returns the caller's 1-based place in line. Joining is idempotent: agents
     // re-claim to discover whether their turn has come, and each of those calls
     // must return the same position rather than append a duplicate.

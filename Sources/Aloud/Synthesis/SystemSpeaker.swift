@@ -17,22 +17,33 @@ final class SystemSpeaker: NSObject, Speaker {
     // access is already serialized — there is no second writer to race.
     nonisolated(unsafe) private let synthesizer = AVSpeechSynthesizer()
     nonisolated(unsafe) private var finishHandler: (() -> Void)?
+    // The voice the user picked, if they picked one of this engine's. nil means
+    // "whatever this Mac says best", which is also what a picked voice degrades
+    // to once it stops being installed.
+    private let voiceIdentifier: String?
+    nonisolated(unsafe) var speed: Double = VoiceSpeed.normal
 
     var state: SpeakerState { .ready }
     var modelIsDownloaded: Bool { true }
 
     func prepare() async throws {}
 
-    override init() {
+    init(voiceIdentifier: String? = nil) {
+        self.voiceIdentifier = voiceIdentifier
         super.init()
         synthesizer.delegate = self
     }
 
-    // Best voice for the user's language. macOS ships a compact voice for
-    // every locale and downloads better ones on demand (System Settings →
-    // Accessibility → Spoken Content), so prefer the highest quality present
-    // rather than naming a voice we can't guarantee exists.
+    // The picked voice, or the best one for the user's language. macOS ships a
+    // compact voice for every locale and downloads better ones on demand
+    // (System Settings → Accessibility → Spoken Content), so the fallback
+    // prefers the highest quality present rather than naming a voice we can't
+    // guarantee exists — and a picked voice that has since been deleted falls
+    // back to it rather than going silent.
     private func voice() -> AVSpeechSynthesisVoice? {
+        if let voiceIdentifier, let picked = AVSpeechSynthesisVoice(identifier: voiceIdentifier) {
+            return picked
+        }
         let language = Locale.current.identifier.replacingOccurrences(of: "_", with: "-")
         let candidates = AVSpeechSynthesisVoice.speechVoices().filter {
             $0.language == language || $0.language.hasPrefix(String(language.prefix(2)))
@@ -53,7 +64,20 @@ final class SystemSpeaker: NSObject, Speaker {
     private func utterance(for text: String) -> AVSpeechUtterance {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = voice()
+        utterance.rate = Self.rate(for: speed)
         return utterance
+    }
+
+    // AVSpeechUtterance's rate is not a multiplier — it is a 0…1 dial whose
+    // midpoint (`AVSpeechUtteranceDefaultSpeechRate`, 0.5) is the voice's
+    // natural pace. Scaling that midpoint keeps our own 1× meaning the same
+    // thing here as it does on the enhanced voice, and the clamp keeps a
+    // slider that runs past either end from producing a voice nobody can
+    // follow.
+    private static func rate(for speed: Double) -> Float {
+        let scaled = AVSpeechUtteranceDefaultSpeechRate * Float(VoiceSpeed.clamped(speed))
+        return min(max(scaled, AVSpeechUtteranceMinimumSpeechRate),
+                   AVSpeechUtteranceMaximumSpeechRate)
     }
 
     func speak(_ text: String) async throws {

@@ -9,6 +9,11 @@ import SwiftUI
 final class RecordingIndicatorPanel {
     private var panel: NSPanel?
     private let model = IndicatorModel()
+
+    // What the pill is showing right now. Read-only, and only so tests can
+    // assert on the phase — which is where a completed turn's tick lives, and
+    // which nothing could see from outside when it was being silently wiped.
+    var agentPhaseForTesting: AgentIndicatorPhase { model.agentPhase }
     private var levelTimer: Timer?
     // Bumped by present() and hide() so a pending or in-flight hide can tell
     // whether a show snuck in behind it (hands-free is a cancel immediately
@@ -34,6 +39,18 @@ final class RecordingIndicatorPanel {
     // invisible. Defined once because it is set in two places, and when those
     // two drifted apart the reposition quietly squashed the badge flat.
     static let panelSize = NSSize(width: 280, height: 80)
+    // The same window with room above for the "an agent wants to speak" bubble.
+    // Its 80 points leave about twenty above a centred pill — enough for the
+    // noise badge sitting proud of a corner, and not nearly enough for two
+    // lines of text, which the window edge simply cut in half. The pill stays
+    // centred, so the extra height costs nothing when the bubble is absent
+    // because the window is only ever the space the pill floats in.
+    static let panelSizeWithAgentWaiting = NSSize(width: 280, height: 210)
+    // How far above the pill the bubble sits. Its own height plus a gap the
+    // size of the chat panel's, so the two read as the same kind of thing
+    // opening out of the same pill — and so the alert ring has somewhere to
+    // travel that is not on top of the indicator the user is busy with.
+    static let agentWaitingGap: CGFloat = 46
     // The agent variant's pill is the same size as the dictation one, but the
     // chat panel opens upward out of it (AgentChatPanel) and has to have
     // somewhere to open into. Same reasoning as above — the window is only the
@@ -70,6 +87,12 @@ final class RecordingIndicatorPanel {
         get { model.onStop }
         set { model.onStop = newValue }
     }
+
+    // Fires as a hands-free or command pill leaves the screen — however it
+    // ended: committed, cancelled, stopped from the pill, or reaped. The pill
+    // vanishing is the whole of the "it's over" signal for a session the user
+    // isn't holding a key for, so the controller sounds it.
+    var onHandsFreeEnd: (() -> Void)?
 
     // The noise-filtering badge on the pill: its state, and what a click does.
     var noiseReduction: Bool {
@@ -121,14 +144,19 @@ final class RecordingIndicatorPanel {
 
     // `command: true` marks a command hold — same live meter, purple styling,
     // so "talking to the app" never looks like "typing into the document".
+    // `warming: true` is the pill going up on the key down, before the engine
+    // has opened the microphone; the same call without it, from the start
+    // callback, is what says the mic is live.
     func show(levelProvider: @escaping () -> Float,
               bandsProvider: (() -> [Float])? = nil,
-              command: Bool = false) {
+              command: Bool = false,
+              warming: Bool = false) {
         announceTask?.cancel()
         model.mode = .recording
         model.hint = nil
         model.isLocked = false
         model.isCommand = command
+        model.isWarming = warming
         model.stillListening = false
         model.notice = nil   // never carry a previous session's note into this one
         model.level = 0
@@ -228,7 +256,14 @@ final class RecordingIndicatorPanel {
         // pill quietly swapping its caption may never be seen at all. One
         // gentle sound at the moment it latches; the latch itself keeps it
         // from repeating until speech resets it.
-        if model.stillListening, !wasShowing { onStillListening?() }
+        // The sound is for the user who is away from the screen; the wobble is
+        // for the one who is at it but looking somewhere else on it. A caption
+        // swapping in place is easy to miss in peripheral vision — movement
+        // isn't, which is the whole of what peripheral vision is good at.
+        if model.stillListening, !wasShowing {
+            onStillListening?()
+            model.nudge += 1
+        }
     }
 
     // Fires once each time the still-listening reminder appears.
@@ -312,9 +347,51 @@ final class RecordingIndicatorPanel {
         model.mode = .transcribing
         applyPanelSize()
         model.isCommand = command
+        model.isWarming = false
         model.transcribingLabel = label
         present()
         panel?.ignoresMouseEvents = true
+    }
+
+    // MARK: an agent waiting on the user's own dictation
+    //
+    // Kept alive rather than switched on: the service calls this repeatedly for
+    // as long as it is waiting, and the badge takes itself down shortly after
+    // the calls stop. An agent that crashes mid-wait therefore cannot leave a
+    // notice on the user's pill for the rest of the session, which a plain
+    // on/off flag would depend on somebody remembering to clear.
+    private var agentWaitingGeneration = 0
+    private static let agentWaitingLinger: TimeInterval = 4
+
+    // Whether the notice is already up, so the caller can sound its cue once
+    // for a wait rather than on every keep-alive tick.
+    var isShowingAgentWaiting: Bool { model.agentWaiting }
+
+    func noteAgentWaiting() {
+        if !model.agentWaiting {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) {
+                model.agentWaiting = true
+            }
+            // The window has to grow before the bubble is drawn into it, or the
+            // edge cuts the text in half — which is exactly how this shipped
+            // the first time.
+            applyPanelSize()
+        }
+        agentWaitingGeneration += 1
+        let generation = agentWaitingGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.agentWaitingLinger) { [weak self] in
+            guard let self, self.agentWaitingGeneration == generation else { return }
+            self.clearAgentWaiting()
+        }
+    }
+
+    func clearAgentWaiting() {
+        agentWaitingGeneration += 1
+        guard model.agentWaiting else { return }
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) {
+            model.agentWaiting = false
+        }
+        applyPanelSize()
     }
 
     func showHint(_ text: String) {
@@ -419,10 +496,42 @@ final class RecordingIndicatorPanel {
         // — one conversation, played as two.
         cancelPendingDismiss()
         adoptThread(lease: lease)
-        withAnimation(.spring(response: 0.36, dampingFraction: 0.8)) {
-            model.appendChatMessage(author: .agent, text: trimmed)
-            model.chatIsOpen = true
+        // One thing at a time when the session is brand new.
+        //
+        // The pill and the panel arriving together read as a single slab
+        // landing on the screen, which is the opposite of what the panel's own
+        // reveal is drawn to do — it wipes open out of the pill, and that only
+        // means anything if the pill is already there to open out of. So on a
+        // session that has just appeared, the words wait a beat for the pill to
+        // settle; mid-conversation there is nothing to wait for and the message
+        // goes up immediately.
+        let justAppeared = ProcessInfo.processInfo.systemUptime - shownAt < Self.pillSettle
+        guard justAppeared, !model.chatIsOpen else {
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.8)) {
+                model.appendChatMessage(author: .agent, text: trimmed)
+                model.chatIsOpen = true
+            }
+            return
         }
+        let generation = sendGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pillSettle) { [weak self] in
+            guard let self, self.sendGeneration == generation, self.model.mode == .agent else { return }
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.8)) {
+                self.model.appendChatMessage(author: .agent, text: trimmed)
+                self.model.chatIsOpen = true
+            }
+        }
+    }
+
+    // How long the pill is given to arrive before the panel opens out of it.
+    // Short enough to read as one gesture in two parts rather than as a wait.
+    private static let pillSettle: TimeInterval = 0.26
+
+    // Whether the pill arrived just now, for callers that should let it land
+    // before doing the next thing — the agent starting to talk over its own
+    // indicator still fading in reads as the app tripping over itself.
+    var pillJustAppeared: Bool {
+        ProcessInfo.processInfo.systemUptime - shownAt < Self.pillSettle
     }
 
     // Whatever this session had queued up to close itself with, it isn't
@@ -471,6 +580,84 @@ final class RecordingIndicatorPanel {
         withAnimation(.easeOut(duration: 0.2)) { model.chatIsSettling = true }
     }
 
+    // MARK: showing the rewrite happen
+    //
+    // What the user said, then what is actually being sent, then how much
+    // shorter that made it.
+    //
+    // The rewrite was previously invisible: the spinner resolved straight into
+    // a bubble holding text the user had not watched appear, so the one thing
+    // Aloud does between hearing them and answering — condense it — happened
+    // where nobody could see it. Showing the verbatim line first and letting it
+    // become the concise one makes the work legible, and the count that flies
+    // off says what it bought.
+    private var savingGeneration = 0
+
+    // Roughly four characters to a token. Deliberately approximate: this is a
+    // flourish, and a number that looked precise would be claiming an accuracy
+    // no character count has.
+    static func estimatedTokens(_ text: String) -> Int {
+        Int((Double(text.count) / 4).rounded())
+    }
+
+    static func tokensSaved(from raw: String, to concise: String) -> Int {
+        max(0, estimatedTokens(raw) - estimatedTokens(concise))
+    }
+
+    // How long the verbatim line is left up before it condenses. Long enough to
+    // register as words, short enough that it is not a wait.
+    private static let verbatimBeat = Duration.milliseconds(540)
+    // How long the condensed line stands before it is sent. Longer when there
+    // is a count climbing off it: the send takes the composer with it, and a
+    // number cut off mid-flight is one the user saw but could not read — which
+    // was the first version's whole problem.
+    private static let settleBeat = Duration.milliseconds(460)
+    private static let settleBeatWithCoin = Duration.milliseconds(1250)
+    // Comfortably past the rise-and-fade in `TokenSavingCoin`, so the view is
+    // never torn out from under its own animation.
+    private static let coinFlight = Duration.milliseconds(1900)
+
+    func revealConcise(raw: String, concise: String) async {
+        let verbatim = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let final = concise.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !final.isEmpty else { return }
+
+        // Out of the spinner and into the words, whichever way this goes.
+        withAnimation(.easeOut(duration: 0.22)) {
+            model.chatIsSettling = false
+            model.chatDraftIsVisible = true
+            model.chatDraft = verbatim.isEmpty ? final : verbatim
+        }
+        // Nothing was rewritten — this Mac has no Concise tier, or the sentence
+        // was already as short as it gets. There is no transformation to show
+        // and no saving to claim, so the draft simply stands as it is.
+        guard !verbatim.isEmpty, verbatim != final else { return }
+
+        try? await Task.sleep(for: Self.verbatimBeat)
+        withAnimation(.spring(response: 0.44, dampingFraction: 0.82)) {
+            model.chatDraft = final
+        }
+
+        // Only when the rewrite actually bought something. A "0 tokens" badge
+        // is a claim of value where there was none, and a negative one — the
+        // rewrite came out longer, which happens — would be advertising a loss.
+        let saved = Self.tokensSaved(from: verbatim, to: final)
+        if saved > 0 {
+            savingGeneration += 1
+            let generation = savingGeneration
+            model.tokenSaving = IndicatorModel.TokenSaving(
+                id: generation,
+                tokens: saved,
+                drift: CGFloat.random(in: -26...26))
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: Self.coinFlight)
+                guard let self, self.model.tokenSaving?.id == generation else { return }
+                self.model.tokenSaving = nil
+            }
+        }
+        try? await Task.sleep(for: saved > 0 ? Self.settleBeatWithCoin : Self.settleBeat)
+    }
+
     // The turn ended and this is the text the agent actually receives. The draft
     // is sent: the field flies up, the message lands in the thread as the user's
     // own bubble on the right, and after a beat the whole thing — panel and pill
@@ -494,9 +681,13 @@ final class RecordingIndicatorPanel {
             model.chatDraft = ""
             model.chatDraftIsVisible = false
             model.chatIsSettling = false
+            // Inside the same update as the rest of the send. Set after it, the
+            // settling spinner had already been taken down while the phase was
+            // still `.listening`, and the pill rendered one frame of the
+            // closed-microphone spinner on the way to the tick.
+            model.agentPhase = .done
+            model.micIsLive = false
         }
-        model.agentPhase = .done
-        model.micIsLive = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self, self.sendGeneration == generation else { return }
             self.model.chatIsSending = false
@@ -574,10 +765,18 @@ final class RecordingIndicatorPanel {
     // The question resolved — by a click, a spoken answer or the deadline.
     // Only the controls go; the pill stays for whatever happens next.
     func dismissConsent(phase: AgentIndicatorPhase = .listening) {
+        let hadPrompt = model.consent != nil
         model.consent = nil
         model.onAcceptConsent = nil
         model.onDeclineConsent = nil
-        model.agentPhase = phase
+        // Only when a question was actually on screen. This runs on every
+        // teardown, not just after a prompt — `endAgentSession` calls it before
+        // it has even decided whether anything of ours is up — and an
+        // unconditional `.listening` overwrote the tick `sendDraft` had set one
+        // line earlier. The pill then fell through to the "listening with a
+        // closed microphone" spinner and faded out still spinning, so every
+        // completed turn ended by looking like one that had hung.
+        if hadPrompt { model.agentPhase = phase }
     }
 
     // Switching into the agent variant. A session already in it keeps
@@ -622,6 +821,7 @@ final class RecordingIndicatorPanel {
         model.notice = nil
         model.isLocked = false
         model.isCommand = false
+        model.isWarming = false
         model.stillListening = false
         model.level = 0
         model.bands = SpectrumAnalyzer.silent
@@ -654,7 +854,8 @@ final class RecordingIndicatorPanel {
     }
 
     private var currentPanelSize: NSSize {
-        model.mode == .agent ? Self.agentPanelSize : Self.panelSize
+        if model.mode == .agent { return Self.agentPanelSize }
+        return model.agentWaiting ? Self.panelSizeWithAgentWaiting : Self.panelSize
     }
 
     func hide() {
@@ -673,6 +874,16 @@ final class RecordingIndicatorPanel {
         model.chatDraftIsVisible = false
         guard let panel, isShowing else { return }
         isShowing = false
+        // Read before the fade, and only on the transition out of `isShowing`,
+        // so a second `hide()` on an already-hidden pill can't sound it twice.
+        // Cleared here as well as at session start: a hint pill can go up on
+        // its own (a hotkey pressed before setup is finished) and hide itself
+        // 2.2 s later, and a lock left standing from the session before would
+        // have that unrelated pill sound the end of a session already over.
+        if model.isLocked || model.isCommand { onHandsFreeEnd?() }
+        model.isLocked = false
+        model.isCommand = false
+        model.isWarming = false
         panel.ignoresMouseEvents = true
         hideGeneration += 1
         let generation = hideGeneration
@@ -854,9 +1065,23 @@ final class IndicatorModel: ObservableObject {
     @Published var level: Float = 0
     // Per-band levels (0…1), low frequency first — what the meter draws.
     @Published var bands: [Float] = SpectrumAnalyzer.silent
+    // An agent asked for the microphone while the user was using it. Shown on
+    // the dictation pill — every variant of it — because the alternative is
+    // that the agent's request is invisible: it is refused somewhere in a
+    // terminal the user is not looking at, and the reason they never heard
+    // from it is a thing only the agent knows.
+    @Published var agentWaiting = false
+
     @Published var hint: String?
     @Published var isLocked = false
     @Published var stillListening = false
+    // The pill is up but the microphone isn't open yet — the engine start is
+    // still running. Cleared at the same moment the start cue plays.
+    @Published var isWarming = false
+    // Bumped each time the still-listening reminder latches. A counter rather
+    // than a flag: the pill's wobble is an event, and `stillListening` going
+    // true is a state the view may already have been in.
+    @Published var nudge = 0
     @Published var isBasic = false
     @Published var isCommand = false
     @Published var notice: String?
@@ -887,6 +1112,19 @@ final class IndicatorModel: ObservableObject {
     @Published var chatMessages: [AgentChatMessage] = []
     @Published var chatDraft = ""
     @Published var chatDraftIsVisible = false
+    // The savings badge that flies off the composer when the rewrite lands.
+    // Nil whenever there is nothing to celebrate, which is most of the time.
+    @Published var tokenSaving: TokenSaving?
+
+    struct TokenSaving: Equatable, Identifiable {
+        let id: Int
+        let tokens: Int
+        // Which way it drifts as it rises. Randomised per badge so two in a
+        // row are not the same gesture twice — the whole charm of the thing it
+        // is borrowed from is that the coins never quite repeat.
+        let drift: CGFloat
+    }
+
     @Published var chatIsSending = false
     // The turn is over and the words are being transcribed and cleaned up: the
     // microphone is shut, nothing is being added, and the send has not happened
@@ -969,11 +1207,69 @@ private struct ChatHeightKey: PreferenceKey {
     }
 }
 
+// The still-listening wobble: two passes left and right, each smaller than the
+// last, over half a second. Sideways only and a few points wide — the pill is
+// not reporting a fault, it is clearing its throat — and damped to nothing by
+// the end so it settles exactly where the user parked it.
+//
+// `progress` counts wobbles rather than running 0→1, and the effect reads its
+// fractional part. Driving it 0→1 and resetting to 0 for the next one looks
+// identical on paper and moves exactly once in practice: the reset and the
+// animation land in the same update, SwiftUI keeps the last write, and every
+// wobble after the first animates 1→1. Counting up, each one is a real change.
+private struct StillListeningNudge: GeometryEffect {
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        // Whole values are the rest position — sin(0) is 0 — so the pill sits
+        // still between wobbles no matter how many it has done.
+        let t = progress - progress.rounded(.down)
+        let travel = sin(t * .pi * 4) * 6 * (1 - t)
+        return ProjectionTransform(CGAffineTransform(translationX: travel, y: 0))
+    }
+}
+
 struct IndicatorView: View {
+    // Pulled out of the row's switch: inline, the nested optional-and-ternary
+    // was enough on its own to put the whole body past what the type-checker
+    // will attempt in reasonable time.
+    private var transcribingText: String {
+        if let label = model.transcribingLabel { return label }
+        return model.isCommand ? loc("Working…") : loc("Typing…")
+    }
+
+    // The mic is grey until the microphone is genuinely open, and takes its
+    // session colour at the same instant the start cue plays.
+    //
+    // The pill goes up on the key down — a hotkey that appears to do nothing
+    // reads as broken — but the engine behind it can take the better part of a
+    // second (voice processing, a Bluetooth device negotiating its profile).
+    // Drawn live from the first frame, the pill was making a promise the
+    // microphone hadn't kept: it looked ready, the cue arrived later, and the
+    // sound read as lagging the pill rather than as the moment it was for.
+    // Grey first, colour with the cue, and the two agree.
+    //
+    // Also keeps the switch out of the row: the mic's tint inline was one of
+    // the ternaries that pushed this body past what the type-checker will
+    // attempt in reasonable time.
+    private var micTint: Color {
+        if model.isWarming { return .secondary }
+        if model.isCommand { return .purple }
+        return model.isLocked ? .orange : .red
+    }
+
     @ObservedObject var model: IndicatorModel
     // The pointer is over the pill. Everything optional on it appears on this,
     // so the resting state stays a mic and a meter.
     @State private var hovering = false
+    // 0 → 1 over one wobble. Driven, not toggled, so the effect below can read
+    // a single number and the animation can be replayed from the top.
+    @State private var nudgeProgress: CGFloat = 0
     // 0 → 1: how far the border, and separately the tint, have spread out
     // from the badge. Two values because the outline should arrive first and
     // the colour fill in behind it — a line drawn, then the wash. Driven
@@ -996,68 +1292,142 @@ struct IndicatorView: View {
     // its own height and sit on top of the pill.
     @State private var chatHeight: CGFloat = 0
 
+    // The row itself, lifted out of `body`.
+    //
+    // Not a matter of taste: with the overlays the pill now carries, the
+    // switch inline pushed the whole body past what the type-checker will
+    // attempt, and the compiler's answer is to refuse the file rather than
+    // to be slow. Each case is unchanged.
+    @ViewBuilder
+    private var row: some View {
+        switch model.mode {
+        case .recording:
+            // Leaves downward, and is gone before the agent row arrives.
+            // The handover is a sequence, not a cross-fade: this drops away,
+            // then the agent pill takes its place, then the chat opens out of
+            // that, then the voice starts. Two pills dissolving through each
+            // other read as one indicator glitching rather than as one
+            // finishing and another beginning.
+            recordingRow
+                .transition(.asymmetric(
+                    insertion: .opacity,
+                    removal: .move(edge: .bottom).combined(with: .opacity)
+                        .animation(.easeIn(duration: 0.18))))
+        case .transcribing:
+            ProgressView()
+                .controlSize(.small)
+            Text(transcribingText)
+                .foregroundStyle(.secondary)
+        case .agent:
+            // A whole variant rather than a row of its own: it stacks two
+            // rows inside the same capsule (AgentIndicator.swift).
+            //
+            // It arrives *after* whatever it is replacing has gone, rather than
+            // fading up through it. Cross-fading two pills means a moment where
+            // both are half-present and the agent row appears to be drawn
+            // inside the dictation one — read as a glitch rather than as a
+            // handover. The delay is only on the way in; leaving stays prompt,
+            // so the sequence is "that finished, then this began".
+            AgentIndicatorContent(model: model)
+                .transition(.asymmetric(
+                    insertion: .opacity.animation(.easeOut(duration: 0.22).delay(0.22)),
+                    removal: .opacity.animation(.easeIn(duration: 0.14))))
+        case .hint:
+            Image(systemName: "info.circle")
+                .foregroundStyle(.secondary)
+            Text(model.hint ?? "")
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+    }
+
+    // The capsule behind the row, lifted out for the same reason `row` was:
+    // inline it was enough, on its own, to put the body past what the
+    // type-checker will attempt. Unchanged otherwise.
+    @ViewBuilder
+    private var pillBackground: some View {
+        ZStack {
+            Capsule().fill(.ultraThinMaterial)
+            if model.mode == .agent {
+                // The agent variant wears its accent for the whole session
+                // — the one thing on screen that says this microphone was
+                // opened by something other than the user. It takes the
+                // capsule's colour outright rather than sharing it with the
+                // filtering tint, which means the same "Aloud is doing
+                // something to your audio" blue and would only muddy it.
+                // Light on both: a session can be up for a whole
+                // conversation, and the first cut — a heavy fill under a
+                // 1.5 pt border — was a lit-up pill sitting over someone's
+                // work for minutes at a time. Enough colour to say "not
+                // you", not enough to demand anything.
+                Capsule().fill(Color.agent.opacity(0.10))
+                Capsule().strokeBorder(Color.agent.opacity(0.5), lineWidth: 1)
+            } else {
+                // Filtering on: the pill takes Aloud's own blue, as a tint
+                // through the material and a border around it. Both are
+                // revealed by a circle opening out from the badge, so the
+                // colour arrives from the thing that was just pressed and
+                // meets itself at the far end.
+                Capsule().fill(Color.aloud.opacity(0.22))
+                    .mask { revealMask(tintReveal) }
+                Capsule().strokeBorder(Color.aloud.opacity(0.85), lineWidth: 1.5)
+                    .mask { revealMask(borderReveal) }
+            }
+        }
+    }
+
+    // The dictation row, lifted out so it can carry a transition of its own
+    // — and so the switch it came from stays inside what the type-checker
+    // will attempt.
+    @ViewBuilder
+    private var recordingRow: some View {
+        // Hands-free trades the red mic for an orange one plus a lock —
+        // a quiet "still listening" that users can discover on their own.
+        // A command hold gets a purple mic: Aloud is listening for an
+        // instruction, not taking dictation.
+        Image(systemName: "mic.fill")
+            .foregroundStyle(micTint)
+            .animation(.easeOut(duration: 0.18), value: model.isWarming)
+            .symbolEffect(.pulse, isActive: model.stillListening)
+        // Reduced-accuracy session: same tag style as onboarding
+        // badges, present in held and hands-free pills alike.
+        if model.isBasic {
+            BasicDictationTag()
+        }
+        if let notice = model.notice {
+            Text(notice)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                // The pill is a fixed width; a long note shrinks a
+                // little rather than being cut off mid-word.
+                .minimumScaleFactor(0.8)
+        } else if model.stillListening {
+            StillListeningCaption()
+                .frame(width: 90)
+        } else {
+            SpectrumMeter(bands: model.bands, tint: meterTint)
+                .frame(width: 90, height: 18)
+        }
+        if model.isLocked {
+            // No padlock: the close button is the thing that says this
+            // session is running on its own and has to be ended, and
+            // saying it twice in a row that narrow just crowds it.
+            Button {
+                model.onStop?()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(loc("Stop — or press Esc"))
+        }
+    }
+
     var body: some View {
         HStack(spacing: 10) {
-            switch model.mode {
-            case .recording:
-                // Hands-free trades the red mic for an orange one plus a lock —
-                // a quiet "still listening" that users can discover on their own.
-                // A command hold gets a purple mic: Aloud is listening for an
-                // instruction, not taking dictation.
-                Image(systemName: "mic.fill")
-                    .foregroundStyle(model.isCommand ? Color.purple
-                                     : model.isLocked ? Color.orange : Color.red)
-                    .symbolEffect(.pulse, isActive: model.stillListening)
-                // Reduced-accuracy session: same tag style as onboarding
-                // badges, present in held and hands-free pills alike.
-                if model.isBasic {
-                    BasicDictationTag()
-                }
-                if let notice = model.notice {
-                    Text(notice)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        // The pill is a fixed width; a long note shrinks a
-                        // little rather than being cut off mid-word.
-                        .minimumScaleFactor(0.8)
-                } else if model.stillListening {
-                    StillListeningCaption()
-                        .frame(width: 90)
-                } else {
-                    SpectrumMeter(bands: model.bands, tint: meterTint)
-                        .frame(width: 90, height: 18)
-                }
-                if model.isLocked {
-                    // No padlock: the close button is the thing that says this
-                    // session is running on its own and has to be ended, and
-                    // saying it twice in a row that narrow just crowds it.
-                    Button {
-                        model.onStop?()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help(loc("Stop — or press Esc"))
-                }
-            case .transcribing:
-                ProgressView()
-                    .controlSize(.small)
-                Text(model.transcribingLabel ?? (model.isCommand ? loc("Working…") : loc("Typing…")))
-                    .foregroundStyle(.secondary)
-            case .agent:
-                // A whole variant rather than a row of its own: it stacks two
-                // rows inside the same capsule (AgentIndicator.swift).
-                AgentIndicatorContent(model: model)
-            case .hint:
-                Image(systemName: "info.circle")
-                    .foregroundStyle(.secondary)
-                Text(model.hint ?? "")
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
+            row
         }
         .font(.system(size: 13, weight: .medium))
         // A sent turn draws the capsule in around its checkmark, so the pill
@@ -1066,36 +1436,7 @@ struct IndicatorView: View {
         // it is the same object shrinking rather than a new one appearing.
         .padding(.horizontal, model.agentIsDone ? 11 : 16)
         .padding(.vertical, 10)
-        .background {
-            ZStack {
-                Capsule().fill(.ultraThinMaterial)
-                if model.mode == .agent {
-                    // The agent variant wears its accent for the whole session
-                    // — the one thing on screen that says this microphone was
-                    // opened by something other than the user. It takes the
-                    // capsule's colour outright rather than sharing it with the
-                    // filtering tint, which means the same "Aloud is doing
-                    // something to your audio" blue and would only muddy it.
-                    // Light on both: a session can be up for a whole
-                    // conversation, and the first cut — a heavy fill under a
-                    // 1.5 pt border — was a lit-up pill sitting over someone's
-                    // work for minutes at a time. Enough colour to say "not
-                    // you", not enough to demand anything.
-                    Capsule().fill(Color.agent.opacity(0.10))
-                    Capsule().strokeBorder(Color.agent.opacity(0.5), lineWidth: 1)
-                } else {
-                    // Filtering on: the pill takes Aloud's own blue, as a tint
-                    // through the material and a border around it. Both are
-                    // revealed by a circle opening out from the badge, so the
-                    // colour arrives from the thing that was just pressed and
-                    // meets itself at the far end.
-                    Capsule().fill(Color.aloud.opacity(0.22))
-                        .mask { revealMask(tintReveal) }
-                    Capsule().strokeBorder(Color.aloud.opacity(0.85), lineWidth: 1.5)
-                        .mask { revealMask(borderReveal) }
-                }
-            }
-        }
+        .background { pillBackground }
         .overlay(Capsule().strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
         // The menu belongs to the pill, not to the badge sitting on its
         // corner: attached out here it covers the badge too, and every click
@@ -1115,14 +1456,39 @@ struct IndicatorView: View {
             Task { @MainActor in chatHeight = height }
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: model.chatIsOpen)
-        // The collapse onto the checkmark: one spring for the capsule, the
-        // badge, and the row inside it, so they arrive together.
-        .animation(.spring(response: 0.32, dampingFraction: 0.75), value: model.agentIsDone)
         // The session's name, on the opposite corner from the noise badge and
         // in the same idiom: something true of the whole session, sitting proud
         // of the pill rather than taking a place in its row.
         .overlay(alignment: .topLeading) { agentNameBadge.offset(x: -8, y: -8) }
+        // Above the pill rather than beside it: the pill's row is already
+        // spoken for by the user's own dictation, and this is about something
+        // else entirely.
+        .overlay(alignment: .top) { agentWaitingBubble.offset(y: -RecordingIndicatorPanel.agentWaitingGap) }
+        // The collapse onto the checkmark: one spring for the capsule, the
+        // badge, and the row inside it, so they arrive together.
+        //
+        // Below the overlay, not above it. A modifier only reaches the view it
+        // is attached to, and an overlay added afterwards is not that view — so
+        // with the animation higher up the capsule collapsed on a spring while
+        // the badge, which has a removal transition of its own, had no
+        // transaction to run in and simply blinked out.
+        .animation(.spring(response: 0.32, dampingFraction: 0.75), value: model.agentIsDone)
+        // Below every overlay so the badges travel with the pill: a capsule
+        // sliding out from under its own noise badge would read as a glitch,
+        // not as one object being nudged.
+        .modifier(StillListeningNudge(progress: nudgeProgress))
+        .onChange(of: model.nudge) { _, count in
+            // Linear, so the two passes are evenly paced — the damping in the
+            // effect is what makes it settle, and an eased curve on top of it
+            // read as a stumble rather than a wobble.
+            withAnimation(.linear(duration: 0.45)) { nudgeProgress = CGFloat(count) }
+        }
         .onAppear {
+            // Catch up to the model's count without moving. The counter lives
+            // on the model and outlives this view; starting at zero against a
+            // model at three would animate three whole wobbles in a row the
+            // next time the reminder latched.
+            nudgeProgress = CGFloat(model.nudge)
             // A pill that opens with filtering already on shows it, rather
             // than animating something the user didn't just do.
             let on: CGFloat = model.noiseReduction ? 1 : 0
@@ -1304,16 +1670,62 @@ struct IndicatorView: View {
     // A session with no name of its own says "Agent", which is all the pill can
     // honestly claim: the name is whatever the harness called the session
     // ("fixing tests"), and an unnamed one is still an agent.
+    // "An agent is waiting for you to finish."
+    //
+    // The situation it exists for: somebody is dictating, an agent asks for the
+    // microphone, and it is quite correctly refused — the user is mid-sentence
+    // and taking the hotkey would swallow it. Without this, that exchange
+    // happens entirely out of sight: the agent is told to try later in a window
+    // the user is not looking at, the user finishes and never learns anything
+    // wanted them, and the feature simply appears not to work.
+    //
+    // Two lines because it has two things to say, and the second is the useful
+    // one: what is happening, and what to do about it. Shown on every dictation
+    // variant — push-to-talk, hands-free, command — since an agent can arrive
+    // during any of them.
+    @ViewBuilder
+    private var agentWaitingBubble: some View {
+        if model.agentWaiting, model.mode == .recording {
+            AgentWaitingBubble()
+                // Rises out of the pill, the way the chat panel does, so it
+                // reads as belonging to it rather than floating over it.
+                .transition(.scale(scale: 0.6, anchor: .bottom).combined(with: .opacity))
+        }
+    }
+
     @ViewBuilder
     private var agentNameBadge: some View {
         // Gone the moment the turn is sent: the closing pill is a tick and
         // nothing else, and a name badge riding on a shrinking capsule is the
         // one thing that would make it read as still going.
         if model.mode == .agent, !model.agentIsDone {
-            Text(Self.badgeName(model.agentCaller ?? model.agentHarness))
-                .font(.system(size: 10, weight: .semibold))
+            // A glyph, then the name. The name alone is whatever the harness
+            // called the session — "fixing tests", "release notes" — and read
+            // cold on a pill it is not obviously an agent at all; it looks like
+            // a label somebody typed. Saying so in words is what does not fit:
+            // the badge caps at 22 characters to stay narrower than the pill,
+            // and "Claude Code · fixing tests" is 26 before the task name has
+            // even had its say. The glyph costs no characters and answers the
+            // question the words were there to answer.
+            // A terminal, not sparkles. What is holding the microphone is a
+            // command-line coding tool, and that is a concrete thing with a
+            // conventional glyph — where sparkles is the decoration every
+            // product now puts on anything with a model behind it, and says
+            // nothing about who this session is or what it wants.
+            HStack(spacing: 3.5) {
+                // Outline, not `.fill`. Filled, a terminal at this size is a
+                // solid white block — the prompt inside it is finer than one
+                // point and disappears, so the glyph that was supposed to say
+                // "a command-line tool" said "a square". The outline keeps the
+                // window edge and the prompt legible, which is the entire
+                // content of the symbol.
+                Image(systemName: "terminal")
+                    .font(.system(size: 10, weight: .bold))
+                Text(Self.badgeName(model.agentCaller ?? model.agentHarness))
+                    .font(.system(size: 10, weight: .semibold))
+                    .lineLimit(1)
+            }
                 .foregroundStyle(.white)
-                .lineLimit(1)
                 // Hugs its text. A maxWidth here doesn't cap a wide badge, it
                 // *makes* one: the frame takes whatever the pill underneath
                 // proposes, so "Agent" sat in a badge sized for a sentence.
@@ -1324,7 +1736,22 @@ struct IndicatorView: View {
                 .background(Capsule().fill(Color.agent))
                 .overlay(Capsule().strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
                 .help(loc("The agent session using your microphone"))
-                .transition(.scale(scale: 0.4))
+                // Tucks into the pill rather than shrinking into its own
+                // middle, and fades as it goes. Scaling about the badge's
+                // centre left it hanging above the capsule getting smaller,
+                // which is the shape of something failing rather than
+                // something finishing.
+                // Arrives on the same beat as the row it belongs to. The row's
+                // insertion waits for the outgoing dictation content to clear,
+                // and without the same delay here the badge appeared *before*
+                // the pill it is supposed to be pinned to — a name label
+                // hanging in space over an indicator that had not arrived yet.
+                .transition(.asymmetric(
+                    insertion: .scale(scale: 0.4, anchor: .bottomTrailing)
+                        .combined(with: .opacity)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.8).delay(0.22)),
+                    removal: .scale(scale: 0.4, anchor: .bottomTrailing)
+                        .combined(with: .opacity)))
         }
     }
 
@@ -1526,5 +1953,57 @@ struct SpectrumMeter: View {
         .frame(maxWidth: .infinity, maxHeight: maxHeight, alignment: .bottom)
         // Interpolates between audio frames, which land slower than the display.
         .animation(.linear(duration: 0.05), value: bands)
+    }
+}
+
+// "An agent wants to speak", over a live dictation.
+//
+// Quiet on purpose. Filled with the agent accent it was the loudest thing on
+// screen while somebody was mid-sentence — shouting over the very activity it
+// is asking to interrupt. The pill's own material with an accent-tinted first
+// line says the same thing at the volume the situation deserves.
+//
+// It does signal, though. Sitting perfectly still it reads as a label that has
+// always been there, and the one thing it has to convey is that something is
+// waiting on the user *now* — so a ring travels out of it, once a beat, into
+// the empty space above the pill.
+private struct AgentWaitingBubble: View {
+    @State private var pinging = false
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text(loc("An agent wants to speak"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.agentBright)
+            Text(loc("Finish to let it through"))
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+        }
+        .fixedSize()
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(.regularMaterial))
+        .overlay(Capsule().strokeBorder(Color.agent.opacity(0.4), lineWidth: 0.5))
+        // A ring that grows out of the bubble and fades, over and over.
+        //
+        // Scaling the bubble itself was the first attempt and it was wrong
+        // twice over: it grew into the pill below — the one thing on screen it
+        // must not cover, since the user is actively using it — and a shape
+        // that swells and shrinks reads as breathing rather than as alerting.
+        // A ring leaves the bubble still, travels outward into empty space,
+        // and is unmistakably a signal. The visual half of an alarm, with the
+        // half that makes noise deliberately left out.
+        .overlay {
+            Capsule()
+                .strokeBorder(Color.agent, lineWidth: 1.5)
+                .scaleEffect(pinging ? 1.2 : 1)
+                .opacity(pinging ? 0 : 0.85)
+                .animation(.easeOut(duration: 1.3).repeatForever(autoreverses: false),
+                           value: pinging)
+                .allowsHitTesting(false)
+        }
+        .onAppear { pinging = true }
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
     }
 }

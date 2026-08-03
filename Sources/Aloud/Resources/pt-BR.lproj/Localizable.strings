@@ -489,3 +489,40 @@
 "Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain." = "Os agentes que você configurar podem perguntar em voz alta por conta própria. Dizer isto uma vez no início da sessão garante.";
 "Copy this to paste into an agent" = "Copiar para colar em um agente";
 "Agent tools on this Mac are set up automatically. To be sure, tell your agent:" = "As ferramentas de agente neste Mac são configuradas automaticamente. Para garantir, diga ao seu agente:";
+
+/* Agent Speak — the pill while it holds the microphone for somebody who
+   walked away from the question. */
+"Waiting" = "Aguardando";
+"Listening whenever you’re ready — just start talking" = "Ouvindo quando você quiser — é só começar a falar";
+
+/* Agent Speak — picking the voice agents speak with. The gender labels group
+   the menu; the rest describes the choice and its one-time download. */
+"Voice" = "Voz";
+"Speed" = "Velocidade";
+"Speaking speed" = "Velocidade da fala";
+"Female" = "Feminina";
+"Male" = "Masculina";
+"Hear this voice" = "Ouvir esta voz";
+"Stop" = "Parar";
+
+/* Agent Speak — the voice choice: which side it speaks from, and the
+   upgrade to Aloud's own voice when that side can carry it. */
+"Voice gender" = "Gênero da voz";
+
+/* Agent Speak — what the voice control says while Aloud's own voice
+   is still on its way down. */
+"Agents ask their questions in this voice." = "Os agentes fazem as perguntas com esta voz.";
+"Using a basic voice for now — Aloud’s own is still downloading." = "Por enquanto com uma voz básica — a do Aloud ainda está baixando.";
+"Getting the voice ready" = "Preparando a voz";
+
+"This is me, thinking out loud. How’s the pace?" = "É assim que eu penso em voz alta. Que tal o ritmo?";
+
+/* Agent Speak — the savings badge thrown off the composer when the Concise
+   rewrite shortened what the user said. */
+"tokens" = "tokens";
+"Saved about %d tokens" = "Cerca de %d tokens economizados";
+
+/* Dictation pill — an agent asked for the microphone while the user was
+   using it, and is waiting for them to finish. */
+"An agent wants to speak" = "Um agente quer falar";
+"Finish to let it through" = "Termine para deixá-lo falar";

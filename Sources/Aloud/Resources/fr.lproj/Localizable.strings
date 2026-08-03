@@ -489,3 +489,40 @@
 "Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain." = "Les agents que vous configurez peuvent vous poser une question à voix haute d’eux-mêmes. Le dire une fois en début de session le garantit.";
 "Copy this to paste into an agent" = "Copier pour le coller dans un agent";
 "Agent tools on this Mac are set up automatically. To be sure, tell your agent:" = "Les outils d’agent de ce Mac sont configurés automatiquement. Pour en être sûr, dites à votre agent :";
+
+/* Agent Speak — the pill while it holds the microphone for somebody who
+   walked away from the question. */
+"Waiting" = "En attente";
+"Listening whenever you’re ready — just start talking" = "À votre écoute quand vous voulez — parlez simplement";
+
+/* Agent Speak — picking the voice agents speak with. The gender labels group
+   the menu; the rest describes the choice and its one-time download. */
+"Voice" = "Voix";
+"Speed" = "Vitesse";
+"Speaking speed" = "Vitesse d’élocution";
+"Female" = "Féminine";
+"Male" = "Masculine";
+"Hear this voice" = "Écouter cette voix";
+"Stop" = "Arrêter";
+
+/* Agent Speak — the voice choice: which side it speaks from, and the
+   upgrade to Aloud's own voice when that side can carry it. */
+"Voice gender" = "Genre de la voix";
+
+/* Agent Speak — what the voice control says while Aloud's own voice
+   is still on its way down. */
+"Agents ask their questions in this voice." = "Les agents posent leurs questions avec cette voix.";
+"Using a basic voice for now — Aloud’s own is still downloading." = "Voix basique pour l’instant — celle d’Aloud est encore en téléchargement.";
+"Getting the voice ready" = "Préparation de la voix";
+
+"This is me, thinking out loud. How’s the pace?" = "Voilà ma voix, à haute voix. Le rythme vous convient ?";
+
+/* Agent Speak — the savings badge thrown off the composer when the Concise
+   rewrite shortened what the user said. */
+"tokens" = "tokens";
+"Saved about %d tokens" = "Environ %d tokens économisés";
+
+/* Dictation pill — an agent asked for the microphone while the user was
+   using it, and is waiting for them to finish. */
+"An agent wants to speak" = "Un agent veut parler";
+"Finish to let it through" = "Terminez pour le laisser passer";

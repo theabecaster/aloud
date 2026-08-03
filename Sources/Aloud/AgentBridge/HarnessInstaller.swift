@@ -388,7 +388,7 @@ enum AgentVoiceInstructions {
     // The verbs a distributed build exposes (CLI.swift). Also the verbs Claude
     // Code's allowlist has to cover, which is why they live next to the text
     // that teaches them rather than in the installer.
-    static let verbs = ["ask", "claim", "listen", "speak", "release"]
+    static let verbs = ["ask", "wait", "claim", "listen", "speak", "release"]
 
     // What every Aloud before `ask` put in front of a user. A machine whose
     // allowlist we have written but whose *offered* set we never recorded was
@@ -531,7 +531,7 @@ enum AgentVoiceInstructions {
         ```sh
         \#(command) ask --harness \#(id) --owner-pid $PPID --name "fixing tests" --end \
           "The migration test is failing. Roll it back, or fix it forward?"
-        # {"text":"fix it forward","cleanup":"concise","ok":true}
+        # {"cleanup":"concise","ok":true,"text":"fix it forward","v":1}
         ```
 
         That is the whole thing. `--end` speaks, listens and hangs up in one
@@ -539,21 +539,55 @@ enum AgentVoiceInstructions {
 
         ```sh
         \#(command) ask --lease L1 "Same for the staging migration?"   # no second prompt
+        # {"cleanup":"concise","lease":"L1","ok":true,"text":"yes","v":1}
         \#(command) release --lease L1                                 # when you are done
         ```
 
-        - `--harness \#(id)` and `--name "<two words>"` open a session and are
-          both required to; a claim without a name is refused. The name says
-          what you are *doing* — "fixing tests", "release notes" — because the
-          user reads it on the indicator, hears it in the spoken prompt, and
-          picks from it when two windows of the same tool both want the
-          microphone. Neither is needed once you hold a lease; re-send
-          `--name` if the job has moved on.
+        - `--harness \#(id)` and `--name` open a session and are both required
+          to; a claim without a name is refused. The name says what you are
+          *doing* — "fixing tests", "release notes" — because the user reads it
+          on the indicator, hears it in the spoken prompt, and picks from it
+          when two windows of the same tool both want the microphone.
+          **At most 2 words and 28 characters**, or the call comes back
+          `badRequest` — it has to fit in a spoken sentence and on a button.
+          Neither flag is needed once you hold a lease; re-send `--name` if the
+          job has moved on.
         - `--owner-pid $PPID`, exactly as written, whenever you open a session.
           It tells your window apart from another window of the same tool, and
           frees the microphone the moment you exit rather than at the timeout.
         - **`ask` blocks** — on the user's consent, then on their answer. Give
           it a generous timeout and do not race it.
+
+        ## `--hold`: when they may not be at the desk
+
+        `ask` gives up after a few seconds of silence. `--hold <seconds>` (600
+        max) keeps the same session open that long instead: it listens normally
+        first, and only if nobody answers does the indicator change to say it is
+        still waiting. It returns the moment anyone speaks, with `waited` saying
+        how long it sat there.
+
+        ```sh
+        \#(command) ask --harness \#(id) --owner-pid $PPID --name "fixing tests" \
+          --hold 600 --end "Roll the migration back, or fix it forward?"
+        # {"cleanup":"concise","ok":true,"text":"fix it forward","v":1,"waited":252}
+        ```
+
+        **Run it in a background shell and end your turn.** It costs one turn to
+        start and one when it returns, nothing in between, and you are woken
+        with the answer. If your harness has no background shell, run it in the
+        foreground with a `--hold` comfortably inside your own command timeout —
+        shorter, but it still waits.
+
+        A large `waited` means real time has passed. Check your plan still holds
+        before acting on the answer.
+
+        `wait` is the same thing without saying anything, for when the question
+        has already been asked and the answer has not come: `\#(command) wait
+        --lease L1 --end`. It differs from `ask` in two ways, both because it
+        has already been told nobody is there — it holds for the full 600
+        seconds unless `--hold` says otherwise, and if the microphone is busy it
+        queues for it instead of coming straight back `queued`. Opening a
+        session with it takes the same `--harness` and `--name` as `ask`.
 
         ## How to behave
 
@@ -577,7 +611,7 @@ enum AgentVoiceInstructions {
         | `disabled` | switched off in Aloud | stop asking for the rest of the session |
         | `denied` | the user declined this request | text now; later is fine |
         | `timeout` | nobody answered, or nobody spoke | text; do not immediately re-ask |
-        | `queued` | somebody else has the microphone, or it is settling | if `queuedBehind` names another agent, use text; else wait `retryAfter` seconds and try once |
+        | `queued` | somebody else has the microphone, it is settling, or the user is dictating | if `queuedBehind` names another agent, use text; if `message` says the user is dictating, they are right there and about to be free, so retry once after `retryAfter` — or pass `--wait 30` and it rides their dictation out for you; otherwise wait `retryAfter` and try once |
         | `notHolder` | the lease ended — released, reaped, superseded | open a new session if you still need to ask |
         | `unavailable` | Aloud isn't running or couldn't answer — read `message` | text; the one refusal that also exits non-zero |
         | `badRequest` | a flag is missing or invalid — `message` says which | fix it and call again; your bug, not a refusal |
@@ -596,21 +630,35 @@ enum AgentVoiceInstructions {
 
         ```sh
         \#(command) claim  --harness \#(id) --owner-pid $PPID --name "code review"
-        # {"lease":"L1","ok":true}
+        # {"lease":"L1","ok":true,"v":1}
         \#(command) speak  --lease L1 "Which of the two should I take first?"
-        \#(command) listen --start --lease L1                        # {"session":"S1"}
+        \#(command) listen --start --lease L1        # {"ok":true,"session":"S1","v":1}
         \#(command) listen --poll  --lease L1 --session S1 --wait 5
-        # {"text":"…","speaking":true,"silentFor":0.4,"ok":true}
+        # {"ok":true,"silentFor":0.4,"speaking":true,"text":"…","v":1}
         \#(command) listen --stop  --lease L1 --session S1
         ```
 
         `listen` with no mode blocks and ends on silence. `--wait` is the
-        long-poll ceiling in seconds (30 at most) and returns early the moment
-        the transcript changes; `speaking` and `silentFor` are what you judge
-        "heard enough" on. `claim --wait <seconds>` (300 at most) blocks until
-        the microphone is free — the only supported way to queue, and it costs
-        no turns. Always `release`: a lease nobody releases keeps the
-        microphone from everyone else until it times out.
+        long-poll ceiling in seconds (5 by default, 30 at most) and returns
+        early the moment the transcript changes; `speaking` and `silentFor` are
+        what you judge "heard enough" on. `claim --wait <seconds>` (300 at most)
+        blocks until the microphone is free — the only supported way to queue,
+        and it costs no turns. Always `release`: a lease nobody releases keeps
+        the microphone from everyone else until it times out.
+
+        `status` is the seventh and last verb. It never opens the microphone and
+        answers exactly two things — whether the feature is switched on, and who
+        holds the microphone if anyone does:
+
+        ```sh
+        \#(command) status      # {"enabled":true,"holder":"codex","ok":true,"v":1}
+        ```
+
+        You should rarely need it: every verb already refuses with `disabled`
+        when the feature is off, which is the same news a turn earlier. There is
+        nothing else to ask Aloud about — which voice speaks and how fast are
+        the user's settings, not yours, and nothing on this socket will tell you
+        or let you change them.
         """#
     }
 
@@ -672,7 +720,7 @@ enum AgentVoiceInstructions {
 
         ```sh
         \(command) ask --harness \(id) --owner-pid $PPID --name "<two words>" --end "<your question>"
-        # {"text":"their answer","ok":true}
+        # {"cleanup":"concise","ok":true,"text":"their answer","v":1}
         ```
 
         One command: it speaks, listens, and returns what they said. Keep the \

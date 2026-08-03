@@ -59,7 +59,50 @@ final class SpeechPlayer {
     private static let coldLeadIn: TimeInterval = 0.45
     private static let warmLeadIn: TimeInterval = 0.1
 
-    func play(_ speech: Speech) async throws {
+    // MARK: the silence on the end
+    //
+    // Synthesizers pad their output. Measured on this Mac for one sentence:
+    // kokoro 0.43s of trailing silence, supertonic 0.36s, pocket 0.12s, the
+    // system voice 0.04s.
+    //
+    // Playback completes on `.dataPlayedBack`, which means the whole buffer —
+    // so for the best part of half a second after the voice has audibly
+    // stopped, `isPlaying` is still true, `play` has not returned, and every
+    // caller downstream is still waiting. The pill goes on drawing the talking
+    // animation at somebody who can hear that nothing is being said, and the
+    // microphone opens later than it needed to. Reported as "the agent
+    // animation hung again for a while after the agent stopped talking".
+    //
+    // Trimming it is better than shortening the *timer*, because it is not a
+    // timing problem: the silence is real audio being dutifully played, and
+    // once it is gone every consumer of "is it still speaking" becomes correct
+    // at once.
+    private static let silenceFloor: Float = 0.01   // of peak; below this is inaudible
+    // Kept so a final consonant or a natural decay is not clipped. Generous
+    // next to what is being removed, and cheap to be wrong about in this
+    // direction — a clipped word is a defect, a little extra silence is not.
+    private static let keptTail: TimeInterval = 0.06
+
+    static func trimmingTrailingSilence(_ speech: Speech) -> Speech {
+        guard !speech.samples.isEmpty else { return speech }
+        var peak: Float = 0
+        for sample in speech.samples { peak = max(peak, abs(sample)) }
+        // Digital silence throughout: nothing to trim, and nothing to play
+        // either. Leave it exactly as it came.
+        guard peak > 0 else { return speech }
+        let floor = peak * silenceFloor
+        guard let lastAudible = speech.samples.lastIndex(where: { abs($0) > floor })
+        else { return speech }
+        let end = min(speech.samples.count - 1,
+                      lastAudible + Int(keptTail * Double(speech.sampleRate)))
+        guard end < speech.samples.count - 1 else { return speech }
+        return Speech(samples: Array(speech.samples[...end]),
+                      sampleRate: speech.sampleRate,
+                      synthesisTime: speech.synthesisTime)
+    }
+
+    func play(_ unpadded: Speech) async throws {
+        let speech = Self.trimmingTrailingSilence(unpadded)
         guard !speech.samples.isEmpty else { return }
         guard let format = AVAudioFormat(standardFormatWithSampleRate: Double(speech.sampleRate),
                                          channels: 1)
@@ -108,6 +151,14 @@ final class SpeechPlayer {
         // .dataPlayedBack, not the default .dataConsumed: the latter fires as
         // soon as the buffer has been handed to the render thread, which is
         // well before the user has heard it.
+        // `.interrupts` only when there is something to interrupt. Scheduling
+        // it onto a node that was just stopped races that stop: the buffer
+        // goes into the queue and the stop still unwinding behind it flushes
+        // part of what was queued, so the utterance comes out cut short — a
+        // sample that says half its sentence and stops. Nothing to interrupt
+        // means nothing to flush.
+        let options: AVAudioPlayerNodeBufferOptions = node.isPlaying ? .interrupts : []
+
         var scheduleFailure: String?
         // Started here rather than at the top: everything above can still
         // throw, and a level clock running for audio that never played would
@@ -118,7 +169,7 @@ final class SpeechPlayer {
             // AVFAudio still raises from here on format edge cases we haven't
             // hit; a failed utterance must degrade, never abort the process.
             if let raised = AloudCatchException({
-                node.scheduleBuffer(buffer, at: nil, options: .interrupts,
+                node.scheduleBuffer(buffer, at: nil, options: options,
                                     completionCallbackType: .dataPlayedBack) { _ in
                     continuation.resume()
                 }

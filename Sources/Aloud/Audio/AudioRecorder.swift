@@ -638,6 +638,39 @@ final class AudioRecorder {
         _ = stop()
     }
 
+    // Throw away what has been captured so far, keeping only the last few
+    // seconds.
+    //
+    // Every other caller records for as long as somebody holds a key, so the
+    // buffer growing for the whole session is exactly right. An agent waiting
+    // for a user who has walked away is the one case that is not: the
+    // microphone is open for minutes with nobody in the room, and all of it
+    // would be kept and then handed to the transcriber. Ten minutes is ~38 M
+    // samples — 150 MB of silence to decode in order to read one sentence.
+    //
+    // The tail is what makes it safe to discard at all: capture cannot start
+    // the instant somebody speaks, because "somebody spoke" is only known a
+    // fraction of a second afterwards. Keeping a little of the recent past
+    // means the first word survives the decision to start listening to it.
+    // A copy of what has been captured so far, leaving the session running.
+    //
+    // For anything that starts consuming audio partway through a capture: a
+    // live preview attached at the moment somebody starts speaking hears only
+    // what arrives *after* it, so the first second — already sitting in this
+    // buffer — would never reach it, and the user watches an empty field
+    // through the start of their own sentence.
+    var bufferedSamples: [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return samples
+    }
+
+    func discardBuffered(keepingLast seconds: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        let keep = max(0, Int(seconds * Self.targetSampleRate))
+        guard samples.count > keep else { return }
+        samples.removeFirst(samples.count - keep)
+    }
+
     // Whether the audio hardware has actually been let go: engine idle and
     // voice processing torn down. Queues behind any in-flight teardown, so a
     // caller right after stop() reads the settled truth rather than a race.

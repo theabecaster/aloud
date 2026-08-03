@@ -65,11 +65,20 @@ struct OnboardingView: View {
                 .padding(.horizontal, 40)
                 .id(step)
                 .transition(.opacity)
-            Spacer()
+            // Never less than this: Back is an overlay pinned to the bottom
+            // corner, so a screen tall enough to reach it would put its own
+            // buttons underneath one that isn't part of its layout. The reserve
+            // is what keeps the two apart no matter how long a translation runs.
+            Spacer(minLength: 30)
             dots
                 .padding(.bottom, 28)
         }
-        .frame(width: 560, height: 520)
+        // 660 rather than 520: the Agent Speak screen carries the two grants,
+        // the voice controls and the phrase to say, and the translations of all
+        // of that run longer than the English. Every other screen is centred
+        // between two Spacers, so the extra height reads as breathing room
+        // rather than as a gap.
+        .frame(width: 560, height: 660)
         .background(.background)
         .overlay(alignment: .bottomLeading) {
             if step != .welcome {

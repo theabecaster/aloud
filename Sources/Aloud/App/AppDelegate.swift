@@ -163,9 +163,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         // Harness hook: ALOUD_OPEN_SETTINGS=1 opens the Settings window at
-        // launch, so a pane can be inspected without driving the menu.
-        if ProcessInfo.processInfo.environment["ALOUD_OPEN_SETTINGS"] == "1" {
-            openSettings()
+        // launch, so a pane can be inspected without driving the menu. A
+        // section's own name ("Agent Speak") opens straight onto that pane —
+        // clicking the sidebar from a script needs the window focused, which
+        // is not something a screenshot harness can rely on.
+        if let open = ProcessInfo.processInfo.environment["ALOUD_OPEN_SETTINGS"], !open.isEmpty {
+            showSettings(SettingsView.Section(rawValue: open) ?? .general)
         }
         // Companion harness for visual QA of the custom status popover. Wait
         // one run-loop turn so AppKit has attached the status button to the
@@ -234,6 +237,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         guard bridge == nil else { return }
 
+        // Turning the feature on is the moment its voices become worth having.
+        // Quiet and unattended — the Mac's own voices cover until they land,
+        // and the user is never shown a download they did not ask about. The
+        // chosen side is loaded as well as fetched, so the first question an
+        // agent asks is not the one that waits for a CoreML chain.
+        EnhancedVoices.shared.ensureAll()
+        EnhancedVoices.shared.warm(controller.settings.agentVoiceGender)
+
         let service = AgentBridgeService(settings: controller.settings, host: controller)
         service.onHolderChanged = { [weak self] sessions in
             self?.controller.agentSessionsChanged(to: sessions)
@@ -254,9 +265,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             // installed before it running the old text — still marked
             // "Installed", still looking fine, and telling agents to call the
             // CLI in a form that has moved on. Writes only what differs.
-            let refreshed = HarnessInstaller(home: HarnessInstaller.userHome).refreshInstalled()
-            if !refreshed.isEmpty {
-                DevDiag.note("install", "refreshed: \(refreshed.map(\.id).joined(separator: ", "))")
+            // The same rule the auto-installer follows: a development build
+            // writes nothing into the user's home. This runs on every bridge
+            // start, so without it a `swift build` binary rewrites the note,
+            // the skill files and the permission entries of every harness on
+            // the Mac — pointing them all at a scratch binary — every launch.
+            if AgentAutoInstall.mayWriteToHome {
+                let refreshed = HarnessInstaller(home: HarnessInstaller.userHome).refreshInstalled()
+                if !refreshed.isEmpty {
+                    DevDiag.note("install", "refreshed: \(refreshed.map(\.id).joined(separator: ", "))")
+                }
             }
             // …and the harnesses that were never installed at all. Refreshing
             // only ever reached the ones somebody had already clicked Install

@@ -63,6 +63,13 @@ final class SettingsStore: ObservableObject {
         // that was never written, which is exactly the default we want — an
         // experiment nobody asked for should not be running.
         experimentalAgentVoice = defaults.bool(forKey: Keys.experimentalAgentVoice)
+        // Which voice serves this gender is worked out at the moment it is
+        // needed rather than frozen here: macOS voices are downloaded and
+        // removed while Aloud is running.
+        agentVoiceGender = (defaults.string(forKey: Keys.agentVoiceGender))
+            .flatMap(VoiceGender.init) ?? VoiceCatalog.defaultGender
+        agentVoiceSpeed = VoiceSpeed.clamped(
+            defaults.object(forKey: Keys.agentVoiceSpeed) as? Double ?? VoiceSpeed.normal)
     }
 
     private static func resolveDefaults() -> UserDefaults {
@@ -98,6 +105,8 @@ final class SettingsStore: ObservableObject {
         static let agentConsentMode = "agentConsentMode"
         static let agentAsksOutLoud = "agentAsksOutLoud"
         static let installedHarnesses = "installedHarnesses"
+        static let agentVoiceGender = "agentVoiceGender"
+        static let agentVoiceSpeed = "agentVoiceSpeed"
     }
 
     @Published var hotkey: Hotkey {
@@ -255,6 +264,28 @@ final class SettingsStore: ObservableObject {
     @Published var installedHarnesses: [String] {
         didSet { defaults.set(installedHarnesses, forKey: Keys.installedHarnesses) }
     }
+
+    // Which side agents speak from. The whole of the user's voice choice: not
+    // a named voice, because Aloud picks the best one it has on that side and
+    // that answer changes as macOS voices come and go. Stored as the gender so
+    // it can never name a voice that has since been uninstalled.
+    @Published var agentVoiceGender: VoiceGender {
+        didSet { defaults.set(agentVoiceGender.rawValue, forKey: Keys.agentVoiceGender) }
+    }
+
+    // How fast that voice talks, 1 being its natural pace. Clamped on write as
+    // well as on read: the slider can't leave the range, but a defaults key
+    // edited by hand can.
+    @Published var agentVoiceSpeed: Double {
+        didSet {
+            let clamped = VoiceSpeed.clamped(agentVoiceSpeed)
+            guard clamped == agentVoiceSpeed else { agentVoiceSpeed = clamped; return }
+            defaults.set(agentVoiceSpeed, forKey: Keys.agentVoiceSpeed)
+        }
+    }
+
+    /// The voice an agent will actually speak with, right now.
+    var agentVoice: VoiceOption { VoiceCatalog.resolved(gender: agentVoiceGender) }
 
     var namesHarnessWhenSpeaking: Bool { installedHarnesses.count > 1 }
 

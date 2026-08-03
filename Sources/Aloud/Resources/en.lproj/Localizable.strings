@@ -489,3 +489,40 @@
 "Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain." = "Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain.";
 "Copy this to paste into an agent" = "Copy this to paste into an agent";
 "Agent tools on this Mac are set up automatically. To be sure, tell your agent:" = "Agent tools on this Mac are set up automatically. To be sure, tell your agent:";
+
+/* Agent Speak — the pill while it holds the microphone for somebody who
+   walked away from the question. */
+"Waiting" = "Waiting";
+"Listening whenever you’re ready — just start talking" = "Listening whenever you’re ready — just start talking";
+
+/* Agent Speak — picking the voice agents speak with. The gender labels group
+   the menu; the rest describes the choice and its one-time download. */
+"Voice" = "Voice";
+"Speed" = "Speed";
+"Speaking speed" = "Speaking speed";
+"Female" = "Female";
+"Male" = "Male";
+"Hear this voice" = "Hear this voice";
+"Stop" = "Stop";
+
+/* Agent Speak — the voice choice: which side it speaks from, and the
+   upgrade to Aloud's own voice when that side can carry it. */
+"Voice gender" = "Voice gender";
+
+/* Agent Speak — what the voice control says while Aloud's own voice
+   is still on its way down. */
+"Agents ask their questions in this voice." = "Agents ask their questions in this voice.";
+"Using a basic voice for now — Aloud’s own is still downloading." = "Using a basic voice for now — Aloud’s own is still downloading.";
+"Getting the voice ready" = "Getting the voice ready";
+
+"This is me, thinking out loud. How’s the pace?" = "This is me, thinking out loud. How’s the pace?";
+
+/* Agent Speak — the savings badge thrown off the composer when the Concise
+   rewrite shortened what the user said. */
+"tokens" = "tokens";
+"Saved about %d tokens" = "Saved about %d tokens";
+
+/* Dictation pill — an agent asked for the microphone while the user was
+   using it, and is waiting for them to finish. */
+"An agent wants to speak" = "An agent wants to speak";
+"Finish to let it through" = "Finish to let it through";

@@ -22,6 +22,12 @@ final class AgentBridgeServiceTests: XCTestCase {
         var listenError: Error?
         // Drives the service's "don't prompt over a live dictation" guard.
         var userDictationInProgress = false
+        // How many times the pill was told somebody is waiting, and whether the
+        // notice was taken down again.
+        var agentWaitingNotices = 0
+        var agentWaitingCleared = 0
+        func noteAgentWaiting() { agentWaitingNotices += 1 }
+        func clearAgentWaiting() { agentWaitingCleared += 1 }
 
         // Ordered log of everything the host was asked to do, so a test can
         // assert the microphone opens AFTER the prompt has been spoken.
@@ -72,9 +78,27 @@ final class AgentBridgeServiceTests: XCTestCase {
             sessionsEnded += 1
             events.append("end")
         }
-        func listen(from: Date) async throws -> AgentTranscript {
+        // What the last listen was asked to wait, so a test can prove the hold
+        // reached the host rather than being clamped away or dropped in the
+        // service.
+        var heldFor: [TimeInterval] = []
+        // Seconds to spend inside `listen` before answering, so a test can put
+        // a real await in the middle of a hold and watch what the rest of the
+        // service does around it.
+        var listenDelay: TimeInterval = 0
+        // Fires inside the listen, which is where a hold's time actually
+        // passes. Advancing the clock from `duringSpeak` looks equivalent and
+        // is not: the service starts counting the wait after the question has
+        // been spoken.
+        var duringListen: (@MainActor @Sendable () -> Void)?
+        func listen(from: Date, holdingFor: TimeInterval) async throws -> AgentTranscript {
             listenCount += 1
             listenFrom = from
+            heldFor.append(holdingFor)
+            await duringListen?()
+            if listenDelay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(listenDelay * 1_000_000_000))
+            }
             if let listenError { throw listenError }
             return transcript
         }
@@ -161,8 +185,9 @@ final class AgentBridgeServiceTests: XCTestCase {
     }
 
     private func request(_ op: BridgeOperation, lease: String? = nil,
-                         text: String? = nil, name: String = "fixing tests") -> BridgeRequest {
-        var request = BridgeRequest(op: op, harness: "claude-code", pid: 4242,
+                         text: String? = nil, name: String = "fixing tests",
+                         pid: pid_t = 4242) -> BridgeRequest {
+        var request = BridgeRequest(op: op, harness: "claude-code", pid: pid,
                                     lease: lease, text: text)
         request.name = name
         return request
@@ -867,6 +892,282 @@ final class AgentBridgeServiceTests: XCTestCase {
 
     // Same rule `claim` enforces, reached through the other door: a session
     // the user cannot see the name of is one they cannot make a decision about.
+    // MARK: an agent arriving mid-dictation
+    //
+    // The user is talking; their session owns the microphone and the hotkey.
+    // Refusing is right — but refusing *silently* meant the whole exchange
+    // happened where the user could not see it, and they finished their
+    // sentence never knowing anything had wanted them.
+
+    func testAnAgentArrivingMidDictationIsRefusedAndTheUserIsTold() async {
+        let service = makeService(mode: .open)
+        host.userDictationInProgress = true
+
+        let response = await service.handle(request(.claim), peer: peer)
+
+        XCTAssertEqual(response.reason, .queued)
+        XCTAssertNil(service.holderHarnessForTesting, "the user keeps their microphone")
+        XCTAssertGreaterThan(host.agentWaitingNotices, 0,
+                             "the pill has to say somebody is waiting; nothing else can")
+    }
+
+    // A caller that said it could wait rides the dictation out instead of
+    // giving up. Somebody dictating is somebody who is *there* and about to be
+    // free, which makes waiting almost always the right answer.
+    func testACallerThatCanWaitRidesOutTheDictation() async {
+        let service = makeService(mode: .open)
+        host.userDictationInProgress = true
+        var request = self.request(.claim)
+        request.wait = 30
+
+        let claim = Task { await service.handle(request, peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertNil(service.holderHarnessForTesting, "still the user's microphone")
+        host.userDictationInProgress = false
+
+        let response = await claim.value
+        XCTAssertTrue(response.ok, "the moment they stopped, the agent was let in")
+        XCTAssertEqual(service.holderHarnessForTesting, "claude-code")
+        XCTAssertGreaterThan(host.agentWaitingCleared, 0, "and the notice came down")
+    }
+
+    // The gate going off mid-wait ends it, rather than stranding the caller
+    // until its own ceiling.
+    func testTurningAgentSpeakOffEndsAWaitOnTheUsersDictation() async {
+        let settings = SettingsStore(defaults: defaults)
+        settings.experimentalAgentVoice = true
+        settings.installedHarnesses = ["claude-code"]
+        settings.agentConsentMode = .open
+        let clock = self.clock!
+        let service = AgentBridgeService(leases: LeaseManager(isAlive: { _ in true }),
+                                         consent: ConsentPolicy(mode: .open),
+                                         settings: settings,
+                                         host: host,
+                                         now: { clock.current })
+        host.userDictationInProgress = true
+        var request = self.request(.claim)
+        request.wait = 30
+
+        let claim = Task { await service.handle(request, peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        settings.experimentalAgentVoice = false
+
+        let response = await claim.value
+        XCTAssertEqual(response.reason, .disabled)
+    }
+
+    // MARK: --hold
+    //
+    // Holding the microphone for somebody who is not in the room yet. The
+    // policy here is small — clamp it, pass it down, keep the lease awake — and
+    // each of those three is a silent failure if it is wrong: a hold that does
+    // not reach the host is an eight-second wait wearing a ten-minute flag.
+
+    private func heldAsk(_ hold: Double, lease: String? = nil) -> BridgeRequest {
+        var request = askRequest(lease: lease)
+        request.hold = hold
+        return request
+    }
+
+    func testTheHoldReachesTheHost() async {
+        let service = makeService(mode: .open)
+        _ = await service.handle(heldAsk(120), peer: peer)
+        XCTAssertEqual(host.heldFor, [120])
+    }
+
+    // An agent that asks for an hour does not get one. The ceiling is the
+    // user's microphone being reserved, not a number the caller chooses.
+    func testAHoldIsClampedToTheCeiling() async {
+        let service = makeService(mode: .open)
+        _ = await service.handle(heldAsk(99_999), peer: peer)
+        XCTAssertEqual(host.heldFor, [AgentBridgeService.maxHold])
+    }
+
+    func testANegativeOrAbsentHoldIsNoHoldAtAll() async {
+        let service = makeService(mode: .open)
+        _ = await service.handle(heldAsk(-5), peer: peer)
+        _ = await service.handle(askRequest(), peer: peer)
+        XCTAssertEqual(host.heldFor, [0, 0])
+    }
+
+    // `waited` is what tells an agent whether real time has passed while it was
+    // parked — the difference between acting on the answer straight away and
+    // checking its plan first. It may not appear on calls that did not wait,
+    // where it would be bytes on every response for nothing.
+    func testWaitedIsReportedOnlyWhenItActuallyWaited() async {
+        let service = makeService(mode: .open)
+        let clock = self.clock!
+        // The heartbeat has to be running for this: the lease check *after* the
+        // listen reaps on the same clock the wait moved, so without a tick in
+        // between a five-minute answer comes back as `notHolder`. That is the
+        // production arrangement too — 30s ticks under a 120s TTL — just at a
+        // speed a test can observe.
+        service.leaseHeartbeat = 0.05
+        host.duringListen = { clock.advance(300) }
+        host.listenDelay = 0.2
+
+        let held = await service.handle(heldAsk(600), peer: peer)
+        XCTAssertTrue(held.ok, "the session survived its own wait")
+        XCTAssertEqual(held.waited, 300)
+
+        host.duringListen = nil
+        host.listenDelay = 0
+        let plain = await service.handle(askRequest(), peer: peer)
+        XCTAssertNil(plain.waited, "an ordinary ask waited for nothing and says nothing")
+    }
+
+    // The bug a hold walks straight into. Using the lease is normally its own
+    // heartbeat, and a hold is one call that can outlive the TTL several times
+    // over — so the sweep would reap the holder mid-wait and hand the user's
+    // answer back as `notHolder`.
+    func testAHeldSessionIsNotReapedWhileItIsStillWaiting() async {
+        let service = makeService(mode: .open)
+        service.leaseHeartbeat = 0.05
+        let clock = self.clock!
+        host.listenDelay = 0.5
+
+        let asking = Task { await service.handle(self.heldAsk(600), peer: self.peer) }
+        // Far past the 120s TTL, while the call is still in flight.
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        clock.advance(400)
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        service.sweep(now: clock.current)
+        XCTAssertEqual(service.holderHarnessForTesting, "claude-code",
+                       "the session is still in its call and must not be reaped out from under it")
+
+        let response = await asking.value
+        XCTAssertTrue(response.ok)
+    }
+
+    // …and the heartbeat may not keep a session alive that the user has ended.
+    // A hold reserves the microphone for up to ten minutes; "End all" has to
+    // beat it, or the control does not mean what it says.
+    func testTheHeartbeatDoesNotOutliveTheUserTakingTheMicrophoneBack() async {
+        let service = makeService(mode: .open)
+        service.leaseHeartbeat = 0.05
+        host.listenDelay = 0.4
+
+        let asking = Task { await service.handle(self.heldAsk(600), peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        service.forceRelease()
+        _ = await asking.value
+
+        XCTAssertNil(service.holderHarnessForTesting)
+        clock.advance(400)
+        service.sweep(now: clock.current)
+        XCTAssertNil(service.holderHarnessForTesting)
+    }
+
+    // MARK: wait
+    //
+    // The verb for the second half of the sequence agents actually run: ask,
+    // get `timeout` because nobody was at the desk, and now the question has
+    // already been spoken and must not be spoken again.
+
+    private func waitRequest(hold: Double? = nil, text: String? = nil,
+                             lease: String? = nil) -> BridgeRequest {
+        var request = self.request(.wait, lease: lease, text: text)
+        request.hold = hold
+        request.end = true
+        return request
+    }
+
+    func testWaitSaysNothingAndParksTheMicrophone() async {
+        let service = makeService(mode: .open)
+        let response = await service.handle(waitRequest(), peer: peer)
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.text, "roll it back")
+        XCTAssertTrue(host.spoken.isEmpty,
+                      "the question was already asked; asking it again is worse than silence")
+        // Waiting is the entire purpose of the verb, so it does not have to be
+        // requested — a caller that named no ceiling gets the longest allowed.
+        XCTAssertEqual(host.heldFor, [AgentBridgeService.maxHold])
+    }
+
+    // The whole sequence this verb was built for, end to end — and the one that
+    // failed the first time it was run against the real app.
+    //
+    // `ask --end` releases, releasing starts the settling cooldown, and the
+    // `wait` a beat later was refused with "the microphone is settling". The
+    // feature's own previous call was the thing standing in its way, so `wait`
+    // queues by default rather than treating a two-second cooldown as a no.
+    func testWaitQueuesThroughTheCooldownLeftByTheAskBeforeIt() async {
+        let service = makeService(mode: .open)
+        let asked = await service.handle(askRequest(end: true), peer: peer)
+        XCTAssertTrue(asked.ok)
+        XCTAssertNil(service.holderHarnessForTesting, "released, and now settling")
+
+        // The queue loop sleeps in real time and re-claims against the logical
+        // clock, so the cooldown only elapses when the test moves it.
+        let parked = Task { await service.handle(self.waitRequest(), peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        clock.advance(30)
+        let response = await parked.value
+
+        XCTAssertTrue(response.ok, "wait must ride out the cooldown its own ask created")
+        XCTAssertNotEqual(response.reason, .queued)
+        XCTAssertEqual(host.listenCount, 2)
+    }
+
+    // …but an `ask` in the same position still answers straight away rather
+    // than sitting on a microphone somebody else has. The two verbs differ
+    // precisely here, and it is the difference that keeps `ask` the fast path.
+    func testAskDoesNotQueueByDefault() async {
+        let service = makeService(mode: .open)
+        // A genuinely different session: same harness, different owner pid, so
+        // it is another window of the same tool rather than this one asking
+        // twice — which would simply be handed back its own lease.
+        _ = await service.handle(request(.claim, name: "someone else", pid: 77), peer: peer)
+        XCTAssertEqual(service.holderHarnessForTesting, "claude-code")
+
+        let response = await service.handle(askRequest(), peer: peer)
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.reason, .queued, "ask reports a busy microphone rather than waiting on it")
+    }
+
+    func testWaitTakesAnExplicitCeiling() async {
+        let service = makeService(mode: .open)
+        _ = await service.handle(waitRequest(hold: 90), peer: peer)
+        XCTAssertEqual(host.heldFor, [90])
+    }
+
+    // For the caller that does want it asked again — somebody returning after
+    // ten minutes may reasonably have forgotten what they were asked.
+    func testWaitRepeatsTheQuestionWhenGivenOne() async {
+        let service = makeService(mode: .open)
+        _ = await service.handle(waitRequest(text: "Still there? Roll back or fix forward?"),
+                                 peer: peer)
+        XCTAssertEqual(host.spoken, ["Still there? Roll back or fix forward?"])
+    }
+
+    // Same session rules as everything else that can open one: the user has to
+    // be able to see whose microphone this is.
+    func testWaitWithoutANameIsRefusedLikeAClaim() async {
+        let service = makeService(mode: .open)
+        var request = waitRequest()
+        request.name = nil
+        let response = await service.handle(request, peer: peer)
+        XCTAssertEqual(response.reason, .badRequest)
+        XCTAssertEqual(host.listenCount, 0)
+    }
+
+    // A `wait` continuing a session the caller still holds must not re-consent
+    // or re-claim — it is the same conversation, moments later.
+    func testWaitCarriesOnAnExistingSession() async {
+        let service = makeService(mode: .confirmOnScreen)
+        let first = Task { await service.handle(self.askRequest(), peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        host.acceptFromPill?()
+        let opened = await first.value
+        let lease = try? XCTUnwrap(opened.lease)
+
+        let parked = await service.handle(waitRequest(lease: lease), peer: peer)
+        XCTAssertTrue(parked.ok)
+        XCTAssertEqual(host.prompts.count, 1, "the session was already consented to")
+        XCTAssertEqual(host.spoken.count, 1, "and nothing new was said")
+    }
+
     func testAskWithoutANameIsRefusedLikeAClaim() async {
         let service = makeService(mode: .open)
         var request = askRequest()

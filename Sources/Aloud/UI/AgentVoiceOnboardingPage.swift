@@ -31,8 +31,14 @@ struct AgentVoiceOnboardingPage: View {
         screen(symbol: "bubble.left.and.bubble.right",
                title: loc("Let Agents Ask You Out Loud"),
                message: loc("A coding agent can ask you a question out loud and hear your answer, so you can keep working instead of switching to its window.")) {
-            VStack(spacing: 14) {
+            VStack(spacing: 12) {
                 grants
+                // Straight after the grant that says agents will speak through
+                // your speakers, because "what will that sound like" is the
+                // question that grant leaves behind — and answering it here,
+                // with a voice you can play, turns an abstract permission into
+                // something the user has already heard.
+                VoiceChooser(settings: settings, style: .card)
                 howToStart
                 Text(loc("This is experimental. You can turn it on or off any time in Settings."))
                     .font(.footnote)

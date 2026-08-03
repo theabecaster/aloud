@@ -28,6 +28,7 @@ enum BridgeSocket {
 // driven from it instead of each keeping a copy.
 enum BridgeOperation: String, Codable, CaseIterable {
     case ask        // claim if needed, say it, hear the answer — all in one call
+    case wait       // `ask` that says nothing: park the mic until they come back
     case claim      // take the lease, or join the queue
     case release    // give it up; starts the cooldown
     case speak      // say something out loud
@@ -63,6 +64,11 @@ struct BridgeRequest: Codable {
     // before it and no release after it — which is the shape most agent
     // questions actually have.
     var end: Bool?
+    // Seconds to keep the microphone open for somebody who is not in the room
+    // yet, instead of giving up after the ordinary few seconds of silence.
+    // The case it exists for: the user hears the question from the kitchen and
+    // the session is long over by the time they get back. Clamped app-side.
+    var hold: Double?
 
     enum ListenMode: String, Codable {
         case blocking   // default: capture until the speaker stops, return the final
@@ -110,13 +116,20 @@ struct BridgeResponse: Codable {
     var speaking: Bool?            // poll: is the user still talking
     var silentFor: Double?         // poll: seconds since speech stopped
     var session: String?           // listen --start
+    // How long a held listen waited before anybody spoke. Present only when it
+    // actually waited, and it earns the bytes: it is the difference between
+    // "they answered immediately" and "they were away for six minutes", which
+    // is exactly what an agent needs to decide whether its own state is still
+    // current before acting on the answer.
+    var waited: Double?
 
-    // status
+    // status — the two things a caller can act on, and nothing else. `voice`
+    // (which tier is speaking) and `harnesses` (what is installed on this Mac)
+    // used to ride along here: nothing read either, no instruction we install
+    // mentions them, and both describe the user's setup rather than what the
+    // caller may do. A local socket should hand out permission, not inventory.
     var enabled: Bool?
-    var voice: Voice?
     var holder: String?
-    var harnesses: [String]?       // installed, so `speak` can decide whether to
-                                   // name itself (§7.1c: only when >1)
 
     // The final text is the best cleanup this Mac can do, not always Concise:
     // the rewrite needs Apple Intelligence and Aloud targets macOS 14+. Saying
@@ -126,11 +139,6 @@ struct BridgeResponse: Codable {
         case concise    // on-device rewrite
         case basic      // deterministic polish only
         case none
-    }
-
-    enum Voice: String, Codable {
-        case enhanced
-        case system
     }
 
     static func failure(_ reason: BridgeRefusal, _ message: String) -> BridgeResponse {

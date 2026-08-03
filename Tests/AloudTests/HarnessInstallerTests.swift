@@ -288,7 +288,8 @@ final class HarnessInstallerTests: XCTestCase {
         // the point of the test and is still honoured.
         XCTAssertFalse(after.contains { $0.contains("speak") }, "the revoked verb is not resurrected by the move")
         XCTAssertTrue(after.contains { $0.contains(" ask:") }, "a newly shipped verb is granted, not withheld")
-        XCTAssertEqual(after.count, 4, "three migrated verbs plus the new one — never the deleted one")
+        XCTAssertEqual(after.count, AgentVoiceInstructions.verbs.count - 1,
+                       "everything this build ships except the one they deleted")
         XCTAssertTrue(after.allSatisfy { $0.contains(new) }, "everything ends up at the new path")
     }
 

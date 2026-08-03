@@ -99,25 +99,12 @@ struct AgentsSettings: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
 
-            SwiftUI.Section {
-                if detected.isEmpty {
-                    Text(loc("No agent tools found on this Mac."))
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(detected, id: \.harness.id) { entry in
-                        harnessRow(entry)
-                    }
-                }
-            } header: {
-                Text(loc("Agent Tools"))
-            } footer: {
-                Text(detected.isEmpty
-                     ? loc("Aloud looks for the agent tools you already use. Open one, then come back.")
-                     : loc("Setting one up adds a short instructions file, a line in the tool’s own instructions, and permission to run Aloud. Remove takes them back out and stops Aloud setting that tool up again. Turning Agent Speak off leaves them in place."))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            // Who the user hears. Directly under Permission because the two
+            // answer the same question from opposite ends — that one decides
+            // whether an agent may speak to you, this one decides what it
+            // sounds like when it does — and both are about the conversation
+            // rather than about which tools are wired up.
+            VoiceChooser(settings: settings)
 
             // Setting a tool up teaches its agent that Aloud exists; whether
             // the agent then *reaches* for it on any given turn is a judgement
@@ -126,6 +113,10 @@ struct AgentsSettings: View {
             // moment the user wants it is the moment they notice an agent went
             // quiet. Shown only once something is actually set up — offered
             // before that, it is a phrase that would do nothing.
+            //
+            // Above the tool list rather than below it: the list is long, and
+            // this is the one thing on the pane a user comes back to *use*
+            // rather than to configure once.
             if detected.contains(where: \.isInstalled) {
                 SwiftUI.Section {
                     HStack(alignment: .top, spacing: 12) {
@@ -147,6 +138,26 @@ struct AgentsSettings: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+
+            SwiftUI.Section {
+                if detected.isEmpty {
+                    Text(loc("No agent tools found on this Mac."))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(detected, id: \.harness.id) { entry in
+                        harnessRow(entry)
+                    }
+                }
+            } header: {
+                Text(loc("Agent Tools"))
+            } footer: {
+                Text(detected.isEmpty
+                     ? loc("Aloud looks for the agent tools you already use. Open one, then come back.")
+                     : loc("Setting one up adds a short instructions file, a line in the tool’s own instructions, and permission to run Aloud. Remove takes them back out and stops Aloud setting that tool up again. Turning Agent Speak off leaves them in place."))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)

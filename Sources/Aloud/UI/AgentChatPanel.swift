@@ -161,6 +161,27 @@ struct AgentChatPanel: View {
         .opacity(model.chatMessages.isEmpty ? 0 : 1)
     }
 
+    // A bubble squared off on the corner nearest its own side.
+    //
+    // Every corner rounded is a rounded rectangle, not a bubble: with the
+    // author already signalled by side and colour, the shape was the one part
+    // saying nothing, and two stacked messages read as a list of boxes. The
+    // squared corner is the tail — it points at the edge the message came from,
+    // which is why it is bottom-trailing for the user and bottom-leading for
+    // the agent rather than the same corner on both.
+    private static func bubbleShape(isUser: Bool) -> UnevenRoundedRectangle {
+        let round: CGFloat = 12
+        // Not zero: a hard right angle next to three 12-point curves reads as a
+        // rendering fault rather than a tail. Small enough to be a corner,
+        // large enough to belong to the same shape.
+        let tail: CGFloat = 4
+        return UnevenRoundedRectangle(
+            topLeadingRadius: round,
+            bottomLeadingRadius: isUser ? round : tail,
+            bottomTrailingRadius: isUser ? tail : round,
+            topTrailingRadius: round)
+    }
+
     private func bubble(_ message: AgentChatMessage) -> some View {
         let isUser = message.author == .user
         return HStack(spacing: 0) {
@@ -173,10 +194,10 @@ struct AgentChatPanel: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .background {
-                    RoundedRectangle(cornerRadius: 12)
+                    Self.bubbleShape(isUser: isUser)
                         .fill(isUser ? AnyShapeStyle(Color.agent) : AnyShapeStyle(.regularMaterial))
                 }
-                .overlay(RoundedRectangle(cornerRadius: 12)
+                .overlay(Self.bubbleShape(isUser: isUser)
                     .strokeBorder(.separator.opacity(isUser ? 0 : 0.5), lineWidth: 0.5))
                 // The message that just left the composer carries the composer's
                 // identity, so it flies up from the field instead of appearing
@@ -206,6 +227,15 @@ struct AgentChatPanel: View {
         }
         .overlay(RoundedRectangle(cornerRadius: 14)
             .strokeBorder(Color.agent.opacity(model.chatDraft.isEmpty ? 0.2 : 0.45), lineWidth: 1))
+        // The count rides above the composer, out of the layout, so a badge
+        // arriving cannot shove the words it is describing.
+        .overlay(alignment: .topTrailing) {
+            if let saving = model.tokenSaving {
+                TokenSavingCoin(saving: saving)
+                    .id(saving.id)
+                    .offset(x: -6, y: -4)
+            }
+        }
         .matchedGeometryEffect(id: Self.sendID, in: sendNamespace)
         // It rises into place under the conversation when the microphone opens,
         // and leaves upward at the moment of the send, into the space the new
@@ -288,5 +318,56 @@ struct AgentChatPanel: View {
                 .position(x: geo.size.width / 2,
                           y: opensDownward ? -Self.gap : geo.size.height + Self.gap)
         }
+    }
+}
+
+// The tokens the rewrite saved, thrown off the composer and gone.
+//
+// Borrowed on purpose from the coin that pops out of a block in a platformer:
+// it rises, drifts, fades, and is never interactive or dismissible. That shape
+// is right for what this is — an aside about something that already happened,
+// not a status the user has to deal with. Anything more permanent would be a
+// number sitting on screen asking to be believed.
+//
+// It exists only when the rewrite genuinely shortened the sentence; a badge
+// claiming zero is worse than no badge at all.
+private struct TokenSavingCoin: View {
+    let saving: IndicatorModel.TokenSaving
+    @State private var risen = false
+    @State private var faded = false
+
+    var body: some View {
+        HStack(spacing: 3) {
+            // Straight down, and nothing cleverer. The glyph has one job — say
+            // that the number is a reduction rather than a total — and it has
+            // about nine points to do it in. A compression mark reads as a
+            // smudge at this size, the same way the filled terminal did on the
+            // name badge; an arrow survives being small.
+            Image(systemName: "arrow.down")
+                .font(.system(size: 9, weight: .bold))
+            Text(verbatim: "\(saving.tokens)")
+                .font(.system(size: 11, weight: .bold).monospacedDigit())
+            Text(loc("tokens"))
+                .font(.system(size: 10, weight: .semibold))
+        }
+        // Bare text. A capsule made it a badge — a thing on the interface,
+        // sitting there to be dealt with — where what it should be is a number
+        // leaving. The shadow is only so it survives whatever it passes over
+        // on the way up.
+        .foregroundStyle(Color.agentBright)
+        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+        // Slow, then gone. The first version rose and faded on one spring and
+        // was over in half a second — long enough to notice, not long enough
+        // to read, which is the worst of both. So it climbs gently while fully
+        // legible, and only lets go near the top.
+        .offset(x: risen ? saving.drift : 0, y: risen ? -42 : 0)
+        .opacity(faded ? 0 : 1)
+        .scaleEffect(risen ? 1 : 0.8)
+        .onAppear {
+            withAnimation(.easeOut(duration: 1.35)) { risen = true }
+            withAnimation(.easeIn(duration: 0.45).delay(1.0)) { faded = true }
+        }
+        .allowsHitTesting(false)
+        .accessibilityLabel(loc("Saved about %d tokens", saving.tokens))
     }
 }

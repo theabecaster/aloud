@@ -23,6 +23,12 @@ protocol AgentVoiceHost: AnyObject, Sendable {
     // commit. The service checks this before it asks.
     @MainActor var userDictationInProgress: Bool { get }
 
+    // Tell the user somebody is waiting on them. Called repeatedly for as long
+    // as the wait lasts rather than once, so the notice expires by itself if
+    // the agent goes away — see `noteAgentWaiting` on the panel.
+    @MainActor func noteAgentWaiting()
+    @MainActor func clearAgentWaiting()
+
     // Say something out loud. Returns when playback has finished — the
     // half-duplex gate depends on that being true, not approximately true.
     func speak(_ text: String) async throws
@@ -57,7 +63,12 @@ protocol AgentVoiceHost: AnyObject, Sendable {
     // Capture and transcribe until the speaker stops. `from` is the instant
     // consent was granted: nothing captured before it is in scope, which is
     // what keeps a pre-consent buffer out of the agent's hands.
-    func listen(from: Date) async throws -> AgentTranscript
+    //
+    // `holdingFor` is how long to keep the microphone open before concluding
+    // that nobody is there — zero means the ordinary few seconds. Anything
+    // larger is a session waiting for somebody who walked away, which is the
+    // one case where silence is not an answer.
+    func listen(from: Date, holdingFor: TimeInterval) async throws -> AgentTranscript
 
     // The streaming variant: open a session, ask it what it has heard so far,
     // end it. `poll` returns the moment the transcript changes so an agent
@@ -102,6 +113,34 @@ final class AgentBridgeService {
     // caller that has already gone.
     nonisolated static let maxQueueWait: TimeInterval = 300
     static let queuePoll: TimeInterval = 0.25
+
+    // The longest `ask --hold` may keep the microphone reserved for somebody
+    // who has not come back yet. Long enough to leave the room and return;
+    // short enough that a session nobody ever answers gives the hardware back
+    // within a coffee break rather than holding it until the app quits.
+    nonisolated static let maxHold: TimeInterval = 600
+
+    // How long `wait` queues for the microphone before giving up on getting it
+    // at all.
+    //
+    // It has to queue for *something*, and the reason is the exact sequence
+    // this verb exists to serve: `ask --end` releases the lease, releasing
+    // starts the settling cooldown, and the `wait` that follows a beat later
+    // was refused with "the microphone is settling". The one flow the feature
+    // was built for failed on its own previous call.
+    //
+    // Generous enough to ride out a cooldown or a short session someone else is
+    // holding, and bounded so a genuinely busy microphone is still reported
+    // rather than waited on forever. A caller that wants different can pass
+    // `--wait`.
+    nonisolated static let waitQueueGrace: TimeInterval = 60
+
+    // Comfortably inside the lease TTL, so a missed tick is late rather than
+    // fatal. A `var` because it is real sleeping time while `now()` is the
+    // injectable logical clock, and a test that drives one cannot wait out the
+    // other — the same mismatch the queue poll in `claim` had to be written
+    // around.
+    var leaseHeartbeat: TimeInterval = 30
 
     init(leases: LeaseManager = LeaseManager(),
          consent: ConsentPolicy = ConsentPolicy(),
@@ -148,7 +187,7 @@ final class AgentBridgeService {
         defer { publishHolder() }
         switch request.op {
         case .status:  return status()
-        case .ask:     return await converse(request, peer: peer)
+        case .ask, .wait: return await converse(request, peer: peer)
         case .claim:   return await claim(request, peer: peer)
         case .release: return await release(request)
         case .speak:   return await speak(request)
@@ -172,8 +211,15 @@ final class AgentBridgeService {
     // and for anyone already built against them.
     private func converse(_ request: BridgeRequest,
                           peer: BridgeServer.PeerIdentity) async -> BridgeResponse {
-        guard let text = request.text,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        // `wait` is the same call with the speaking left out and the waiting
+        // turned on. It exists because of the sequence agents actually run: ask
+        // — get nothing, because the user is not at the desk — and now the
+        // question has already been asked out loud and must not be asked again.
+        // Saying it twice to somebody walking back into the room is worse than
+        // saying nothing, and the pill has been showing it the whole time.
+        let isWait = request.op == .wait
+        let said = request.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard isWait || !said.isEmpty else {
             return .failure(.badRequest, "ask needs a question to put to the user.")
         }
 
@@ -187,10 +233,24 @@ final class AgentBridgeService {
             lease = existing
             opened = false
         } else {
-            let claimed = await claim(request, peer: peer)
+            var opening = request
+            // `wait` queues by default; `ask` does not. The difference is what
+            // each is for — `ask` is the fast path and should say so rather
+            // than sit on a busy microphone, while `wait` has already been told
+            // the user is not there and has nothing to be quick about.
+            if isWait, opening.wait == nil { opening.wait = Self.waitQueueGrace }
+            let claimed = await claim(opening, peer: peer)
             guard claimed.ok, let granted = claimed.lease else { return claimed }
             lease = granted
             opened = true
+            // The menu bar and the indicator learn who holds the microphone
+            // from `publishHolder`, and `handle` only runs it on the way out —
+            // which was fine when `claim` was its own round trip and the
+            // session was published before `listen` ever started. Collapsing
+            // the two into one call means nothing is published until the call
+            // is over, so the pill spends the entire conversation not knowing
+            // whose it is and falls back to calling every session "agent".
+            publishHolder()
         }
 
         // A lease this call opened is this call's to clean up. Every refusal
@@ -204,17 +264,27 @@ final class AgentBridgeService {
             return response
         }
 
-        var saying = request
-        saying.op = .speak
-        saying.lease = lease
-        let said = await speak(saying)
-        guard said.ok else { return await hangUpIfOurs(said) }
+        // A `wait` with nothing to say goes straight to the microphone; one
+        // given text re-asks, for the caller that wants to.
+        if !said.isEmpty {
+            var saying = request
+            saying.op = .speak
+            saying.lease = lease
+            saying.text = said
+            let spoke = await speak(saying)
+            guard spoke.ok else { return await hangUpIfOurs(spoke) }
+        }
 
         var hearing = request
         hearing.op = .listen
         hearing.lease = lease
         hearing.text = nil
         hearing.mode = .blocking
+        // Waiting is the whole point of `wait`, so it does not have to be asked
+        // for — a caller that named no ceiling gets the longest one allowed.
+        // `ask` is the opposite: it is the fast path, and holds only when the
+        // caller explicitly says so.
+        if isWait, request.hold == nil { hearing.hold = Self.maxHold }
         var answer = await listen(hearing)
         guard answer.ok else { return await hangUpIfOurs(answer) }
 
@@ -239,12 +309,16 @@ final class AgentBridgeService {
 
     // MARK: status — never opens the microphone
 
+    // Two answers, and deliberately only two: may I ask at all, and is the
+    // microphone free. Everything else about how the feature is set up — which
+    // voice speaks, how fast, which tools are installed — is the user's
+    // business and none of a caller's. It never changed what an agent should
+    // do, and a local socket that will hand any process an inventory of the
+    // user's setup is a worse trade than the one field it saved.
     private func status() -> BridgeResponse {
         var response = BridgeResponse.success()
         response.enabled = settings.agentVoiceAvailable
-        response.harnesses = settings.installedHarnesses
         response.holder = leases.holder?.harness
-        response.voice = NeuralSpeaker().modelIsDownloaded ? .enhanced : .system
         if !settings.agentVoiceAvailable {
             response.ok = false
             response.reason = .disabled
@@ -310,6 +384,42 @@ final class AgentBridgeService {
         // held still — which is exactly what a test does, and what hung one.
         let requested = min(max(request.wait ?? 0, 0), Self.maxQueueWait)
         let pollsRemaining = Int(requested / Self.queuePoll)
+
+        // The user is dictating right now.
+        //
+        // Their session owns the microphone and the hotkey, so an agent cannot
+        // have either without cutting them off mid-sentence — and until now
+        // that was settled silently: the request was refused in a window
+        // nobody was looking at, and the user finished talking never knowing
+        // anything had wanted them. So the pill says so, and a caller that can
+        // wait waits, which is almost always the right answer — somebody
+        // dictating is somebody who is *there*, and about to be free.
+        if host?.userDictationInProgress == true {
+            host?.noteAgentWaiting()
+            var polls = 0
+            while host?.userDictationInProgress == true, polls < pollsRemaining {
+                polls += 1
+                try? await Task.sleep(nanoseconds: UInt64(Self.queuePoll * 1_000_000_000))
+                guard settings.agentVoiceAvailable else {
+                    host?.clearAgentWaiting()
+                    return .failure(.disabled, "Agent Speak is turned off in Aloud.")
+                }
+                // Kept alive while we are genuinely still here, so the notice
+                // outlives neither this wait nor this process.
+                host?.noteAgentWaiting()
+            }
+            if host?.userDictationInProgress == true {
+                // Still talking, and we are out of patience. The notice is left
+                // standing for its own few seconds rather than cleared here —
+                // the user has not seen it yet if they are mid-sentence, and it
+                // is the only trace that anything asked.
+                var response = BridgeResponse.failure(.queued,
+                    "The user is dictating — try again when they've finished.")
+                response.retryAfter = 5
+                return response
+            }
+            host?.clearAgentWaiting()
+        }
 
         // The queue knows callers by the same key, and it is how a dismissal
         // finds its way back to the caller it was aimed at: a waiter the user
@@ -625,10 +735,23 @@ final class AgentBridgeService {
         switch request.mode ?? .blocking {
         case .blocking:
             do {
+                let hold = min(max(request.hold ?? 0, 0), Self.maxHold)
+                let began = now()
                 // The grant carries the boundary: nothing captured before
                 // consent is in scope, which is what keeps a pre-consent
                 // buffer out of the agent's hands.
-                let transcript = try await host.listen(from: grant.streamStartsAt)
+                //
+                // A hold can outlive the lease TTL several times over, and the
+                // sweep reaps on `lastUsed` — which nothing refreshes, because
+                // the whole wait happens inside this one call. Left alone, a
+                // session waiting eight minutes for somebody would be reaped
+                // at two and hand them a `notHolder` for an answer they had
+                // just given. So the lease is held awake for as long as we are
+                // genuinely still in the call.
+                let heartbeat = hold > 0 ? keepingLeaseAlive(lease) : nil
+                defer { heartbeat?.cancel() }
+                let transcript = try await host.listen(from: grant.streamStartsAt,
+                                                       holdingFor: hold)
                 // The user may have taken the microphone back — End all, the
                 // per-row end, or the gate switched off — while the capture
                 // was already running. The host stops recording, but the
@@ -640,6 +763,10 @@ final class AgentBridgeService {
                 var response = BridgeResponse.success()
                 response.text = transcript.text
                 response.cleanup = transcript.cleanup
+                // Only when it actually waited. On the ordinary path this is a
+                // field worth no tokens, and every response carries it.
+                let waited = now().timeIntervalSince(began)
+                if hold > 0, waited >= 1 { response.waited = waited.rounded() }
                 return response
             } catch AgentListenError.nothingHeard {
                 // Not a malfunction, and specifically not `unavailable` — that
@@ -707,6 +834,39 @@ final class AgentBridgeService {
     }
 
     // MARK: lease checks
+
+    // Keep a lease from being reaped while we are still inside the call that
+    // holds it.
+    //
+    // Using the lease is normally its own heartbeat — every accepted call
+    // refreshes the TTL — and that is exactly the assumption a hold breaks: one
+    // call, ten minutes, no second call to refresh anything. The sweep would
+    // reap the holder at two minutes and take the pill down while the user was
+    // still walking back to it.
+    //
+    // Deliberately tied to the lifetime of the call rather than to a flag on
+    // the lease. A flag would have to be cleared, and the paths that fail to
+    // clear it are precisely the ones where an agent has crashed — which is the
+    // situation the TTL exists for. A cancelled task cannot forget.
+    private func keepingLeaseAlive(_ lease: String) -> Task<Void, Never> {
+        // Read once, on the actor, rather than per tick inside the task.
+        let interval = leaseHeartbeat
+        return Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard !Task.isCancelled, let self else { return }
+                // `refresh` rather than `validate`: validate reaps before it
+                // touches, so a tick arriving after the clock had jumped past
+                // the TTL — the Mac having slept mid-hold — would reap the
+                // lease it came to keep alive.
+                //
+                // It still stops the moment the lease is no longer ours, so a
+                // session the user ended from the menu bar is not propped up by
+                // its own heartbeat.
+                guard self.leases.refresh(lease: lease, now: self.now()) else { return }
+            }
+        }
+    }
 
     private func validate(_ lease: String) -> BridgeResponse? {
         switch leases.validate(lease: lease, now: now()) {

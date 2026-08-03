@@ -63,6 +63,23 @@ final class LocalizationTests: XCTestCase {
         "Turn Off",
         "Not Now",
         "Turn On",
+        // Picking the voice agents speak with — on the onboarding card and in
+        // Settings. The gender words are the choice itself, so an untranslated
+        // one is the control's only label left in English, and the stand-in
+        // line is the only thing that explains why the voice sounds ordinary
+        // on the first run.
+        "Voice",
+        "Voice gender",
+        "Speed",
+        "Speaking speed",
+        "Female",
+        "Male",
+        "Hear this voice",
+        "Agents ask their questions in this voice.",
+        "Using a basic voice for now — Aloud’s own is still downloading.",
+        "Getting the voice ready",
+        // Heard, not read: the sample the play button speaks.
+        "This is me, thinking out loud. How’s the pace?",
         // The pill while an agent has the mic: who is asking, the two answers,
         // and what each phase means. Heard through VoiceOver as often as it is
         // read, and it is the only surface up while the mic is open.

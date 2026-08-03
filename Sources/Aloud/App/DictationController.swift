@@ -244,6 +244,14 @@ final class DictationController: ObservableObject {
         indicator.onStillListening = { [weak self] in
             self?.playCue(.stillListening)
         }
+        // A held session ends when the key comes up — the release is the
+        // answer. A hands-free or command session has no such moment: the pill
+        // going away is the only sign it's over, and it's on screen precisely
+        // because nobody is watching the screen. So close the loop the way it
+        // opened, with the start bloom running backwards.
+        indicator.onHandsFreeEnd = { [weak self] in
+            self?.playCue(.stopped)
+        }
         indicator.settings = settings
         indicator.noiseReduction = settings.noiseReduction && noiseReductionAvailable
         indicator.noiseReductionAvailable = noiseReductionAvailable
@@ -430,6 +438,24 @@ final class DictationController: ObservableObject {
         }
         refreshTranscriberState()
         if !firstSetup { catchUpVoiceModels() }
+        catchUpAgentVoices()
+    }
+
+    // Aloud's own speaking voices, fetched the same way and for the same
+    // reason as everything else here: quietly, after the thing the user is
+    // waiting on. Only when Agent Speak is actually on — nobody else will ever
+    // hear them, and they are the largest download Aloud makes for a feature
+    // that ships off by default. Until they land the Mac's own voices stand
+    // in, which is the degraded tier `speak` was built around.
+    private func catchUpAgentVoices() {
+        guard settings.agentVoiceAvailable else { return }
+        EnhancedVoices.shared.ensureAll()
+        // And load the side that will actually speak. Not vanity: these
+        // engines take seconds to load and compile — one of them nineteen on a
+        // cold machine — and paying that inside the first `speak` means an
+        // agent asks its question into that much silence. Only the chosen
+        // side, so one voice is resident rather than two.
+        EnhancedVoices.shared.warm(settings.agentVoiceGender)
     }
 
     private func reportSetup(progress: Double) {
@@ -773,6 +799,13 @@ final class DictationController: ObservableObject {
         case noiseOn = "cue-noise-on"               // filtering engaged — glides up with the reveal
         case noiseOff = "cue-noise-off"             // filtering off — the same glide back down
         case stillListening = "cue-still-listening" // hands-free reminder — two soft taps
+        case stopped = "cue-stopped"                // hands-free ended — the start bloom, backwards
+        // An agent asked for the microphone while the user was using it. Two
+        // soft notes a fifth apart, the second inside the first's decay: rising,
+        // because it is asking rather than reporting, and quiet, because it
+        // arrives over somebody who is mid-sentence and must not startle them
+        // into losing it.
+        case agentWaiting = "cue-agent-waiting"
     }
     private var cueSounds: [SoundCue: NSSound] = [:]
 
@@ -854,9 +887,17 @@ final class DictationController: ObservableObject {
         // slow (a Bluetooth microphone negotiating its profile can take over
         // a second). The engine starts off the main thread; the cue plays
         // only when the microphone is actually listening.
+        //
+        // So it appears *warming*: the mic glyph grey rather than red until
+        // that cue. The sound is the go signal — the one thing that reaches
+        // someone whose eyes are elsewhere — and it cannot be brought forward
+        // without inviting people to talk into a microphone that isn't open
+        // yet. What can change is the pill, which was drawing itself live from
+        // the first frame and making the honest cue look late.
         phase = .recording
         indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
-                       bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent })
+                       bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent },
+                       warming: true)
         let startGeneration = sessionGeneration
         armStartGrace(generation: startGeneration)
         recorder.startAsync(deviceUID: settings.microphoneUID,
@@ -1577,9 +1618,11 @@ final class DictationController: ObservableObject {
         // window when a start is genuinely slow.
         phase = .recording
         isCommandSession = true
+        // Same warming state as dictation: the purple mic arrives with the cue.
         indicator.show(levelProvider: { [weak self] in self?.recorder.currentLevel ?? 0 },
                        bandsProvider: { [weak self] in self?.recorder.currentBands ?? SpectrumAnalyzer.silent },
-                       command: true)
+                       command: true,
+                       warming: true)
         let startGeneration = sessionGeneration
         armStartGrace(generation: startGeneration)
         recorder.startAsync(deviceUID: settings.microphoneUID,
@@ -1777,22 +1820,58 @@ final class DictationController: ObservableObject {
         // detector is pointed at the room. The cue is ~0.3s; the margin is for
         // output-device latency, which on Bluetooth is not small.
         static let cueGuard: TimeInterval = 0.6
+
+        // MARK: holding the microphone for somebody who walked away
+        //
+        // `noSpeechAtAll` is the right answer to "the room is empty" when the
+        // agent asked a question the user was there to hear. It is the wrong
+        // answer to the case this feature exists for: they heard it from the
+        // kitchen, and by the time they are back the session has been over for
+        // minutes. `--hold` replaces those 8 seconds with a window they can
+        // walk back into.
+
+        /// The longest an agent may keep the microphone reserved waiting for an
+        /// answer. Long enough to leave the room, short enough that a session
+        /// somebody forgot about frees the hardware within a coffee break.
+        static let maxHold: TimeInterval = 600
+
+        /// How much of the recent past survives each discard. Speech is only
+        /// known to have started a moment after it did — the detector needs a
+        /// frame or two — so without a tail the answer would always be missing
+        /// its first syllable.
+        static let holdPreRoll: TimeInterval = 1.5
+
+        /// How often the waiting buffer is trimmed back to the pre-roll. Often
+        /// enough that memory is flat, rarely enough to be free.
+        static let holdTrim: TimeInterval = 2.0
     }
 
-    private static let agentSpeaker: Speaker = SpeakerFactory.make()
+    // Shared with the voice preview in Settings (see SpeakerPool), so the
+    // model is loaded once for both: warming it there means the first question
+    // an agent asks is not the one that pays for the load. Kept rather than
+    // rebuilt per call for the same reason — the enhanced voices hold a loaded
+    // CoreML chain, and throwing it away between two questions would put
+    // seconds of silence in front of the second one.
+    var agentSpeaker: Speaker {
+        SpeakerPool.speaker(for: settings.agentVoice, speed: settings.agentVoiceSpeed)
+    }
 
     // Say something out loud for an agent. Half-duplex by construction: this
     // does not return until playback has finished, and `listen` refuses while a
     // session is live, so the microphone is never open into our own speakers.
     func speakForAgent(_ text: String) async throws {
-        try await Self.agentSpeaker.speak(text)
+        try await agentSpeaker.speak(text)
     }
 
     // Capture for an agent and hand back the transcript. Deliberately NOT the
     // dictation path: nothing is injected into the focused app, nothing is
     // written to history, and no audio backup is kept — an agent session's
     // words belong to the agent that asked for them and to nobody else.
-    func listenForAgent(from consentGranted: Date) async throws -> AgentTranscript {
+    // `holdingFor` is how long to keep the microphone open for somebody who is
+    // not in the room yet. Zero — the default, and every caller before this —
+    // gives up after `noSpeechAtAll` exactly as it always did.
+    func listenForAgent(from consentGranted: Date,
+                        holdingFor hold: TimeInterval = 0) async throws -> AgentTranscript {
         guard phase == .idle || phase.isError, !agentSpeaking else { throw AgentListenError.busy }
         guard transcriber.state == .ready || transcriber.modelIsDownloaded else {
             throw AgentListenError.notReady
@@ -1833,10 +1912,26 @@ final class DictationController: ObservableObject {
         // able to see there is somewhere for their words to go before any of
         // them have arrived, or the first second of a turn looks like nothing
         // is being heard.
-        indicator.openDraft()
-        let preview = transcriber.makeStreamingTranscription()
-        if let preview {
+        // Opened where the words start, which is not always where the
+        // microphone does. On a held session the pill spends its first minutes
+        // saying "waiting", and an empty draft field under that would promise a
+        // transcript for a room with nobody in it. `beginPreview` runs at the
+        // moment somebody speaks instead — for an ordinary listen that is right
+        // now, and for a held one it is whenever they walk back in.
+        var preview: StreamingTranscription?
+        func beginPreview() {
+            guard preview == nil else { return }
+            indicator.openDraft()
+            preview = transcriber.makeStreamingTranscription()
+            guard let preview else { return }
             indicator.updateTranscript("")
+            // Everything captured up to this instant, before the live feed is
+            // attached. On a held session this is the pre-roll — the second or
+            // so of somebody starting to talk that made the wait end — and
+            // without it the preview begins mid-word, so the field stays empty
+            // through the opening of their own sentence.
+            let alreadyHeard = recorder.bufferedSamples
+            if !alreadyHeard.isEmpty { preview.append(samples: alreadyHeard) }
             recorder.onChunk = { [weak preview] chunk in preview?.append(samples: chunk) }
             previewPump = Task { [weak self] in
                 for await update in preview.updates {
@@ -1851,6 +1946,16 @@ final class DictationController: ObservableObject {
             recorder.onChunk = nil
             if let preview { Task { await preview.cancel() } }
         }
+        // Wired to the microphone before the cue, not after it.
+        //
+        // A session with no wait is listening from this instant, so the
+        // streaming preview should be too — moving it below the cue guard cost
+        // it the better part of a second, on top of whatever the engine needs
+        // to emit its first words, and the user watched an empty field through
+        // the start of their own sentence. A held session is the exception and
+        // opens its draft when somebody actually speaks; there is nothing to
+        // preview in an empty room.
+        if hold <= 0 { beginPreview() }
         playCue(.listening)
         // The cue goes out of the speakers into an already-open microphone, and
         // the speech detector scores it as somebody talking. That armed the
@@ -1864,7 +1969,60 @@ final class DictationController: ObservableObject {
         try? await Task.sleep(nanoseconds: UInt64(AgentListen.cueGuard * 1_000_000_000))
         startSpeechActivity()
 
-        let samples = await captureUntilEndpoint()
+        // Nobody is coming, or nobody said anything once they did. Same outcome
+        // either way, and the same one an ordinary listen reports.
+        func giveUp() -> AgentListenError {
+            stopSpeechActivity()
+            isAgentSession = false
+            _ = recorder.stop()
+            indicator.hide()
+            phase = .idle
+            return AgentListenError.nothingHeard
+        }
+
+        let samples: [Float]
+        if hold > 0 {
+            let deadline = Date().addingTimeInterval(min(hold, AgentListen.maxHold))
+            var heard: [Float]
+            while true {
+                guard await holdForSpeech(until: deadline) else { throw giveUp() }
+                // Endpointing counts silence from the last thing the detector
+                // heard, and what it heard may have been a door closing several
+                // seconds ago. Carried into the capture unchanged, that reads as
+                // "they finished talking before they started" and ends the turn
+                // on an empty buffer — which is exactly how a ten-minute wait
+                // used to die two seconds in. Restarting means the capture
+                // measures the answer rather than the noise that preceded it.
+                startSpeechActivity()
+                beginPreview()
+                DevDiag.note("listen", "capturing for \(agentSessionHolder?.name ?? "an unnamed session")")
+                let attempt = await captureUntilEndpoint()
+                if attempt.heardSpeech { heard = attempt.samples; break }
+                // A false start. The wait is the point of this session, so it
+                // resumes rather than ending — a passing noise must not cost
+                // the user the window they were promised.
+                //
+                // Capture has to be started again because the attempt ended it:
+                // `captureUntilEndpoint` finishes by stopping the recorder,
+                // which is right for the one-shot listen it was written for.
+                // Nothing of the false start is worth keeping, so losing the
+                // buffer with it costs nothing.
+                DevDiag.note("listen", "false start; back to waiting")
+                guard Date() < deadline else { throw giveUp() }
+                guard (try? await startAgentCapture()) == true else { throw giveUp() }
+                // …and point the detector at the new capture. `stop()` clears
+                // `onMonitorChunk` along with everything else it tears down, so
+                // a restarted recorder feeds nothing to the speech detector
+                // until this runs. Without it the second wait is deaf: the pill
+                // says "Waiting" and means it, for the whole remaining ceiling,
+                // however much the user talks at it.
+                startSpeechActivity()
+            }
+            samples = heard
+        } else {
+            beginPreview()
+            samples = await captureUntilEndpoint().samples
+        }
         stopSpeechActivity()
         isAgentSession = false
 
@@ -1903,6 +2061,12 @@ final class DictationController: ObservableObject {
                 throw AgentListenError.nothingHeard
             }
             let transcript = await agentTranscript(raw: raw)
+            // Show the rewrite happening before the words leave. The user has
+            // just watched a live preview of what they actually said; jumping
+            // straight to the condensed version made the one thing Aloud does
+            // in between invisible — and with it the reason speaking through
+            // Aloud costs an agent fewer tokens than the same answer typed out.
+            await indicator.revealConcise(raw: raw, concise: transcript.text)
             // Not a plain hide: this is the text the agent is about to receive,
             // so the draft is *sent* — it lands in the thread as the user's own
             // message and the pill and panel wrap up together a beat later.
@@ -1932,7 +2096,89 @@ final class DictationController: ObservableObject {
 
     // Silence ends the turn; total silence times out; a runaway session is
     // capped. Nobody is holding a key, so nothing else will stop this.
-    private func captureUntilEndpoint() async -> [Float] {
+    // Keep the microphone open, and the session alive, until somebody speaks.
+    //
+    // This is the whole of "waiting mode". The agent asked its question out
+    // loud, the user heard it from another room, and the ordinary eight-second
+    // window closed long before they got back. Here the pill stays on screen
+    // saying so, the detector listens to an empty room, and the moment there is
+    // a voice in it the session becomes an ordinary listen.
+    //
+    // Nothing captured during the wait is kept. The buffer is trimmed back to a
+    // short tail every couple of seconds, so ten minutes of an empty kitchen
+    // costs the same memory as two — and the transcriber is handed the answer
+    // rather than the wait that preceded it. The tail is why trimming is safe:
+    // speech is recognised slightly after it starts, and the seconds either
+    // side of that moment are exactly the ones that must survive.
+    //
+    // Returns whether anybody spoke.
+    private func holdForSpeech(until deadline: Date) async -> Bool {
+        let began = Date()
+        // The pill does not say "waiting" yet.
+        //
+        // A hold is not a different kind of listen, it is the same listen with
+        // a longer fuse: for the first few seconds somebody may well be sitting
+        // there about to answer, and showing them a waiting state while they
+        // draw breath is the app giving up in front of them. So the ordinary
+        // meter stays until the ordinary window has passed with an empty room,
+        // and only then does the pill change to say it will keep listening.
+        var announced = false
+        // Not `defer`: the caller's failure paths take the pill down entirely,
+        // and setting a phase on the way out of those would put it back.
+        func stopWaiting() {
+            if announced { indicator.updateAgentPhase(.listening) }
+        }
+
+        var lastTrim = began
+        while true {
+            try? await Task.sleep(nanoseconds: UInt64(AgentListen.poll * 1_000_000_000))
+            if speechActivity.hasHeardSpeech {
+                DevDiag.note("listen", String(format: "somebody spoke after %.0fs of holding",
+                                              Date().timeIntervalSince(began)))
+                stopWaiting()
+                return true
+            }
+            if !announced, Date().timeIntervalSince(began) >= AgentListen.noSpeechAtAll {
+                announced = true
+                indicator.updateAgentPhase(.waiting)
+            }
+            // The user taking the microphone back, or the session being ended
+            // from the menu bar. Same check the capture loop makes, and it has
+            // to be here too: this loop can own the next ten minutes.
+            if !isAgentSession {
+                DevDiag.note("listen", "hold ended by the user")
+                stopWaiting()
+                return false
+            }
+            // Pressing the hotkey during a wait is a person saying "I am here
+            // now" — treat it as the end of the wait rather than the end of the
+            // turn, so they can simply start talking.
+            if agentManualDone {
+                agentManualDone = false
+                DevDiag.note("listen", "hold ended by the hotkey")
+                stopWaiting()
+                return true
+            }
+            let now = Date()
+            if now.timeIntervalSince(lastTrim) >= AgentListen.holdTrim {
+                recorder.discardBuffered(keepingLast: AgentListen.holdPreRoll)
+                lastTrim = now
+            }
+            if now >= deadline {
+                DevDiag.note("listen", String(format: "held %.0fs and nobody came",
+                                              now.timeIntervalSince(began)))
+                stopWaiting()
+                return false
+            }
+        }
+    }
+
+    // Returns the audio and whether anybody actually spoke during it. The
+    // second half matters to a held session and to nothing else: after a wait
+    // ends, this runs once to catch the answer, and "the detector twitched but
+    // nobody said anything" has to be told apart from a real reply so the wait
+    // can resume instead of ending on a passing noise.
+    private func captureUntilEndpoint() async -> (samples: [Float], heardSpeech: Bool) {
         let began = Date()
         func note(_ why: String) {
             let elapsed = Date().timeIntervalSince(began)
@@ -1975,7 +2221,7 @@ final class DictationController: ObservableObject {
                 break                      // force-released from the menu bar
             }
         }
-        return recorder.stop()
+        return (recorder.stop(), speechActivity.hasHeardSpeech)
     }
 
     // Consent presentation on the pill. The agent-session indicator variant
@@ -2188,6 +2434,17 @@ extension DictationController: AgentVoiceHost {
         !isAgentSession && (phase == .recording || phase == .transcribing)
     }
 
+    // Called on a beat for as long as the wait lasts, so the cue is gated on
+    // the notice not already being up — otherwise a chime every quarter second
+    // over somebody's dictation, which would be the opposite of subtle.
+    func noteAgentWaiting() {
+        let wasShowing = indicator.isShowingAgentWaiting
+        indicator.noteAgentWaiting()
+        if !wasShowing { playCue(.agentWaiting) }
+    }
+
+    func clearAgentWaiting() { indicator.clearAgentWaiting() }
+
     func speak(_ text: String) async throws {
         // Half-duplex in the other direction too: a user hold-to-talk (or an
         // agent's own listen — both sit at `.recording`) means the microphone
@@ -2215,9 +2472,12 @@ extension DictationController: AgentVoiceHost {
         // The wave follows the audio, and only exists while there is audio:
         // `speak` covers synthesis as well as playback, and on the enhanced
         // voice the synthesis is the slow half.
-        indicator.attachMeter(levelProvider: { Self.agentSpeaker.currentLevel },
+        // Resolved once, not per frame: the meter is polled at display rate and
+        // the resolver reads Settings on every call.
+        let speaker = agentSpeaker
+        indicator.attachMeter(levelProvider: { speaker.currentLevel },
                               micIsLive: false,
-                              playingProvider: { Self.agentSpeaker.isPlaying })
+                              playingProvider: { speaker.isPlaying })
         // What it said goes into the thread as it is said. The panel is a
         // mirror of the bridge traffic and nothing else: this is the same
         // string that reaches the speakers.
@@ -2243,11 +2503,22 @@ extension DictationController: AgentVoiceHost {
         }
         agentSpeaking = true
         defer { agentSpeaking = false }
+        // Let the pill land before the voice starts.
+        //
+        // Only on a session that has just appeared — most often one taking over
+        // from the user's own dictation, where the two indicators are still
+        // changing places. Talking through that reads as the app tripping over
+        // itself, and the user is being spoken to before they have registered
+        // who is speaking. Mid-conversation the pill is already up and there is
+        // nothing to wait for.
+        if indicator.pillJustAppeared {
+            try? await Task.sleep(for: .milliseconds(150))
+        }
         try await speakForAgent(text)
     }
 
-    func listen(from: Date) async throws -> AgentTranscript {
-        try await listenForAgent(from: from)
+    func listen(from: Date, holdingFor: TimeInterval) async throws -> AgentTranscript {
+        try await listenForAgent(from: from, holdingFor: holdingFor)
     }
 
     func startListenSession() async throws -> String { try await startAgentPollSession() }
@@ -2316,7 +2587,10 @@ extension DictationController: AgentVoiceHost {
         // Cut off a prompt still playing: the session is over, so the user
         // should not keep hearing a question from an agent that no longer
         // holds the microphone.
-        if agentSpeaking { Self.agentSpeaker.stop() }
+        // Just the voice the agent was using — the pool is shared with the
+        // preview in Settings, and a session ending must not cut a sample
+        // somebody is listening to.
+        if agentSpeaking { agentSpeaker.stop() }
         isAgentSession = false
         guard hadAgentActivity else { return }
         indicator.hide()
