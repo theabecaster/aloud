@@ -108,7 +108,12 @@ final class LeaseManager {
     // Idempotent on purpose. Agents re-claim to discover whether their turn has
     // arrived, so a second call from the same harness+pid must return the same
     // lease or the same queue position — never stack up duplicate entries.
-    func claim(harness: String, pid: pid_t, name: String, now: Date) -> ClaimResult {
+    // `ownerVerified` is the kernel's answer to "is the process this caller
+    // names really its own": the connecting process is that pid, or descends
+    // from it. Only a verified owner may be handed a lease that already exists,
+    // because that lease carries the user's consent with it.
+    func claim(harness: String, pid: pid_t, name: String, ownerVerified: Bool,
+               now: Date) -> ClaimResult {
         guard enabled else { return .disabled }
         reap(now: now)
 
@@ -125,8 +130,14 @@ final class LeaseManager {
         // cost is that an agent which loses its lease id waits out the TTL
         // rather than being handed the session back, which is the right way
         // round: a stalled agent is recoverable, a hijacked session is not.
+        // `ownerVerified` is the part of this that cannot be typed by the
+        // caller. Harness and pid both arrive over the socket, so on their own
+        // they are a claim, not evidence: any local process could read a
+        // running agent's pid out of `ps`, echo it back with that agent's
+        // harness id, and be handed the live lease — and with it the
+        // microphone the user had already said yes to.
         if let holder, holder.harness == harness, holder.pid == pid,
-           pid != LeaseManager.noOwnerPid {
+           pid != LeaseManager.noOwnerPid, ownerVerified {
             touch(now: now)
             rename(lease: holder.id, to: name)
             return .granted(holder.id)
@@ -243,7 +254,14 @@ final class LeaseManager {
 
     private func grant(harness: String, pid: pid_t, name: String, now: Date) -> String {
         counter += 1
-        let id = "L\(counter)-\(UInt32.random(in: 0..<UInt32.max))"
+        // The lease id is the capability: presenting it is what lets a caller
+        // speak and listen on a session the user has already consented to. 32
+        // bits behind a per-launch counter is a small space to guess at for
+        // something that stands in for the user's yes, and it costs nothing to
+        // make it a number nobody will arrive at.
+        let token = String(UInt64.random(in: 0...UInt64.max), radix: 16)
+            + String(UInt64.random(in: 0...UInt64.max), radix: 16)
+        let id = "L\(counter)-\(token)"
         holder = LeaseHolder(id: id, harness: harness, pid: pid, name: name,
                              grantedAt: now, lastUsed: now)
         freeAt = nil

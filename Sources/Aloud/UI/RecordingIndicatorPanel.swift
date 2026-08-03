@@ -133,7 +133,15 @@ final class RecordingIndicatorPanel {
     // True while we set the frame ourselves, so the didMove observer only
     // records user drags.
     private var isRepositioning = false
+    // Held so it can be handed back. Nothing else ever removed it, so a panel
+    // that goes away — this type is not a singleton, and the app is not the
+    // only thing that builds one — left an observer registered against a
+    // window that no longer exists.
     private var moveObserver: NSObjectProtocol?
+
+    deinit {
+        if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
+    }
 
     // Basic dictation (fallback engine) in use: the pill carries a small tag
     // so it's always visible when a session runs at reduced accuracy.
@@ -163,9 +171,16 @@ final class RecordingIndicatorPanel {
         model.bands = SpectrumAnalyzer.silent
         // Back to the dictation window. A user dictation can start while an
         // agent pill is still on screen (its wrap-up beat), and the agent
-        // window is 420×940 of mouse-opaque space around a 280×80 pill — the
-        // pill looks right either way, but everything under that rectangle
-        // stops taking clicks until the next show-from-hidden.
+        // window is 420×940 around a 280×80 pill — the pill looks right either
+        // way, but the window is the wrong size and in the wrong place for what
+        // is now a dictation.
+        //
+        // It is not, as this comment used to claim, a rectangle that swallows
+        // clicks: the window server hit-tests a non-opaque window against its
+        // composited alpha, so the transparent part passes them straight
+        // through. Checked with synthesized mouse events — a drag 400 pt above
+        // the pill reaches the panel not at all and does not move it, while the
+        // same drag on the pill does both.
         applyPanelSize()
         present()
         // While recording the pill takes mouse input so it can be dragged to
@@ -293,13 +308,23 @@ final class RecordingIndicatorPanel {
         }
     }
 
+    // Same idea again for the notice below: two identical notes are two notes.
+    // Matching on the text alone made a repeat of the same string share the
+    // first one's timer — and the device-change path posts the same sentence
+    // twice — so the second note was cleared early, part-way through the time
+    // it was meant to be readable for.
+    private var noticeGeneration = 0
+
     // Brief note inside a live recording pill (e.g. mic switched) — the meter
     // comes right back; unlike showHint this never leaves recording mode.
     func showNotice(_ text: String) {
         guard model.mode == .recording else { return }
         model.notice = text
+        noticeGeneration += 1
+        let generation = noticeGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
-            if self?.model.notice == text { self?.model.notice = nil }
+            guard let self, self.noticeGeneration == generation else { return }
+            self.model.notice = nil
         }
     }
 
@@ -625,6 +650,12 @@ final class RecordingIndicatorPanel {
         // Out of the spinner and into the words, whichever way this goes.
         withAnimation(.easeOut(duration: 0.22)) {
             model.chatIsSettling = false
+            // The composer is coming back, so the last turn's bubble gives up
+            // the send identity — the same handover `openDraft` makes, made
+            // again here because this is the other way the field returns to the
+            // screen, and a composer that follows a bubble it is not being sent
+            // into would be drawn on top of it.
+            model.lastSentMessageID = nil
             model.chatDraftIsVisible = true
             model.chatDraft = verbatim.isEmpty ? final : verbatim
         }
@@ -1422,6 +1453,10 @@ struct IndicatorView: View {
             }
             .buttonStyle(.plain)
             .help(loc("Stop — or press Esc"))
+            // `help` is the description, not the name: an SF Symbol carries no
+            // label of its own, so without this VoiceOver announces the only
+            // control that ends a hands-free session as an unnamed button.
+            .accessibilityLabel(loc("Stop — or press Esc"))
         }
     }
 
@@ -1612,11 +1647,12 @@ struct IndicatorView: View {
     // count sits on an app icon, it says so without taking a place in that
     // sentence or crowding the meter.
     //
-    // Filled and tinted when filtering is on, and always visible then — the
-    // point of it is that you can see the state at a glance. Off, it waits for
-    // the pointer and then fades in hollow: same corner, same shape, obviously
-    // the same control, obviously not doing anything. Either way one click
-    // flips it.
+    // On screen only while filtering is on, filled and tinted — the point of it
+    // is that you can see the state at a glance, and there is nothing to show
+    // when there is no state. Switching it off is the one moment it is drawn
+    // any other way: the colour drains, it holds a beat as a grey badge so it
+    // is seen to change rather than simply vanishing, and then it goes. While
+    // it is there, one click flips the filter back off.
     @ViewBuilder
     private var noiseBadge: some View {
         if model.mode == .recording, badgeVisible {
@@ -1652,6 +1688,9 @@ struct IndicatorView: View {
             .buttonStyle(.plain)
             .contentShape(Circle())
             .help(loc("Background noise is being filtered — click to stop"))
+            // Named as well as described, for the same reason the stop button
+            // is: the glyph is all there is, and a glyph has no name.
+            .accessibilityLabel(loc("Background noise is being filtered — click to stop"))
             // Scale only, no opacity: the badge's own background is a
             // translucent material off, solid on — fading its alpha in on top
             // of the tint/border reveal sweeping in behind it let that sweep
@@ -1780,14 +1819,7 @@ struct IndicatorView: View {
     @ViewBuilder
     private var quickMenu: some View {
         if let settings = model.settings {
-            Picker(loc("Microphone"), selection: Binding(
-                get: { settings.microphoneUID },
-                set: { settings.microphoneUID = $0 })) {
-                Text(loc("System default")).tag(nil as String?)
-                ForEach(AudioDevices.inputDevices()) { d in
-                    Text(d.name).tag(d.uid as String?)
-                }
-            }
+            MicrophoneMenuPicker(settings: settings)
             Picker(loc("Clean-up"), selection: Binding(
                 get: { settings.polishLevel },
                 set: { settings.polishLevel = $0 })) {
@@ -1804,6 +1836,35 @@ struct IndicatorView: View {
                 .disabled(!model.noiseReductionAvailable)
             Divider()
             Button(loc("Reset Position")) { model.onResetPosition?() }
+        }
+    }
+}
+
+// The quick menu's microphone list, in a view of its own so the Mac is asked
+// what it has when the menu opens rather than on every redraw.
+//
+// `AudioDevices.inputDevices()` is a CoreAudio enumeration — every device on
+// the machine, described — and the closure handed to `.contextMenu` is rebuilt
+// on every pass of the pill's body. The pill's body runs thirty times a second
+// for as long as the meter is moving, so the menu nobody has opened was
+// interrogating the audio hardware thirty times a second for the whole of every
+// dictation and every agent session. A nested view's own body is evaluated only
+// when the menu is actually put on screen, which is the moment the answer is
+// wanted and the only moment it is guaranteed to be current.
+private struct MicrophoneMenuPicker: View {
+    // Deliberately not observed: the menu is built fresh each time it opens,
+    // so it reads the store rather than watching it — exactly as it did when
+    // these lines sat inline.
+    let settings: SettingsStore
+
+    var body: some View {
+        Picker(loc("Microphone"), selection: Binding(
+            get: { settings.microphoneUID },
+            set: { settings.microphoneUID = $0 })) {
+            Text(loc("System default")).tag(nil as String?)
+            ForEach(AudioDevices.inputDevices()) { d in
+                Text(d.name).tag(d.uid as String?)
+            }
         }
     }
 }

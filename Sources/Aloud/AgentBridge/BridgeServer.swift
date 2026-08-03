@@ -358,7 +358,18 @@ final class BridgeServer: @unchecked Sendable {
         } else if fd >= 0 {
             close(fd)
         }
-        unlink(socketURL.path)
+        // Only if this instance actually bound the socket.
+        //
+        // Unlinking unconditionally meant an instance that never owned the path
+        // deleted the live one's socket on its way out. Two ordinary ways in:
+        // `start()` refuses with `.alreadyRunning` when another Aloud is
+        // listening, and the refused server is then released — straight into
+        // `deinit { stop() }`, which removed the *running* app's socket. Same
+        // shape when the feature is switched off and on again, because an
+        // in-flight request keeps the old server alive past its replacement.
+        // Either way every later `ask` reports "Aloud isn't running" against an
+        // app that is, until it is relaunched.
+        if fd >= 0 { unlink(socketURL.path) }
     }
 
     // MARK: accepting
@@ -422,6 +433,19 @@ final class BridgeServer: @unchecked Sendable {
                     self.reply(fd: fd, response: .failure(.badRequest, "Couldn't read that request."))
                     return
                 }
+                // A version this build predates is refused rather than guessed
+                // at. `v` was decoded and then never read by anything, which
+                // made bumping it meaningless — the one thing it exists to do.
+                // Older versions stay welcome; it is the newer ones we cannot
+                // honestly claim to understand.
+                guard (request.v ?? BridgeProtocolVersion.current) <= BridgeProtocolVersion.current
+                else {
+                    self.reply(fd: fd,
+                               response: .failure(.badRequest,
+                                                  "This Aloud speaks bridge protocol "
+                                                  + "\(BridgeProtocolVersion.current)."))
+                    return
+                }
                 guard let handler = self.handler else {
                     // Transport is up but nothing is wired to it yet — from the
                     // agent's side that is indistinguishable from the app not
@@ -454,6 +478,44 @@ final class BridgeServer: @unchecked Sendable {
 
     // LOCAL_PEERPID is the SO_PEERCRED equivalent on Darwin: the kernel's view
     // of who connected, which the peer cannot spoof.
+    // Is `candidate` the process on the other end of the socket, or one of its
+    // forebears?
+    //
+    // This is what makes `--owner-pid` mean anything. A caller names its own
+    // long-lived process so its lease can outlive the CLI invocation, and that
+    // number arrives over the socket where anybody can write it — a pid read
+    // out of `ps` is not a secret. Unchecked, echoing back the pid of a running
+    // agent handed the caller that agent's lease, and with it a microphone the
+    // user had already consented to: Aloud holds the Microphone grant, so a
+    // process that holds none inherited one.
+    //
+    // A real caller is always a descendant of the process it names — the
+    // harness spawns the shell that spawns this CLI — so walking the parent
+    // chain up from the connecting process separates the two cases without
+    // asking either of them anything.
+    static func processIsSelfOrAncestor(_ candidate: pid_t, of descendant: pid_t,
+                                        maxDepth: Int = 64) -> Bool {
+        guard candidate > 0, descendant > 0 else { return false }
+        var current = descendant
+        for _ in 0..<maxDepth {
+            if current == candidate { return true }
+            // launchd is the top of every chain, and a pid that reports itself
+            // as its own parent would otherwise spin out the depth budget.
+            guard let parent = parentPid(of: current), parent > 0, parent != current
+            else { return false }
+            current = parent
+        }
+        return false
+    }
+
+    static func parentPid(of pid: pid_t) -> pid_t? {
+        var info = proc_bsdshortinfo()
+        let size = Int32(MemoryLayout<proc_bsdshortinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, &info, size) == size
+        else { return nil }
+        return pid_t(info.pbsi_ppid)
+    }
+
     static func peerIdentity(of fd: Int32) -> PeerIdentity {
         var pid: pid_t = -1
         var size = socklen_t(MemoryLayout<pid_t>.size)

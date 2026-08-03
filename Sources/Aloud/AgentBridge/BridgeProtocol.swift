@@ -37,7 +37,12 @@ enum BridgeOperation: String, Codable, CaseIterable {
 }
 
 struct BridgeRequest: Codable {
-    var v: Int = BridgeProtocolVersion.current
+    // Optional on the wire, always written by us. It read as optional already —
+    // it carries a default — but a synthesized decoder makes a defaulted
+    // property a *required* key, so a request without `v` was rejected as
+    // unparseable while the declaration said otherwise. Absent now means
+    // "version 1", which is the only version that has ever existed.
+    var v: Int? = BridgeProtocolVersion.current
     var op: BridgeOperation
     // Label only, never authentication — anything can pass any harness id.
     // It exists so the user sees something meaningful on the indicator and
@@ -91,6 +96,19 @@ enum BridgeRefusal: String, Codable {
     case notHolder      // this lease expired, was reaped, or was never yours
     case unavailable    // Aloud isn't running, or has no microphone permission
     case badRequest
+
+    // A reason this build has never heard of still has to arrive as a refusal.
+    //
+    // The two halves of this feature are updated separately: the app swaps its
+    // own bundle while the CLI on disk is whatever the last install wrote, so
+    // an older client talking to a newer app is an ordinary Tuesday rather than
+    // an edge case. A strict decode threw the entire response away over one
+    // unknown string, and the agent lost the `message` it was supposed to read
+    // along with it.
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = BridgeRefusal(rawValue: raw) ?? .unavailable
+    }
 }
 
 struct BridgeResponse: Codable {
@@ -116,11 +134,12 @@ struct BridgeResponse: Codable {
     var speaking: Bool?            // poll: is the user still talking
     var silentFor: Double?         // poll: seconds since speech stopped
     var session: String?           // listen --start
-    // How long a held listen waited before anybody spoke. Present only when it
-    // actually waited, and it earns the bytes: it is the difference between
-    // "they answered immediately" and "they were away for six minutes", which
-    // is exactly what an agent needs to decide whether its own state is still
-    // current before acting on the answer.
+    // How long the held listen took, end to end — the waiting, the answer, and
+    // transcribing it. Present only when it actually waited, and it earns the
+    // bytes: it is the difference between "they answered immediately" and "they
+    // were away for six minutes", which is exactly what an agent needs to
+    // decide whether its own state is still current before acting on the
+    // answer.
     var waited: Double?
 
     // status — the two things a caller can act on, and nothing else. `voice`
@@ -139,6 +158,13 @@ struct BridgeResponse: Codable {
         case concise    // on-device rewrite
         case basic      // deterministic polish only
         case none
+
+        // Same reasoning as BridgeRefusal's: a tier this build has not heard of
+        // must not cost the caller the transcript it arrived with.
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Cleanup(rawValue: raw) ?? .none
+        }
     }
 
     static func failure(_ reason: BridgeRefusal, _ message: String) -> BridgeResponse {

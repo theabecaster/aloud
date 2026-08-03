@@ -11,12 +11,27 @@ import AVFoundation
 final class SystemSpeaker: NSObject, Speaker {
     // AVSpeechSynthesizerDelegate is Sendable-refined, so conforming makes this
     // class Sendable and its non-Sendable stored properties an error under
-    // -warnings-as-errors. Both are only ever touched from the one `speak` /
-    // `synthesize` call in flight (each awaits its own completion before
-    // returning) and from the delegate callbacks that call answers, so the
-    // access is already serialized — there is no second writer to race.
+    // -warnings-as-errors.
     nonisolated(unsafe) private let synthesizer = AVSpeechSynthesizer()
-    nonisolated(unsafe) private var finishHandler: (() -> Void)?
+
+    // Keyed by the utterance it belongs to, not a single slot.
+    //
+    // One slot was right while every consumer built its own speaker. SpeakerPool
+    // now hands the *same* instance to the agent bridge and to the Settings
+    // preview, so two `speak` calls can be in flight at once — and with one slot
+    // the second overwrote the first's handler before the first's `didCancel`
+    // landed. The cancel then resumed the *second* caller, and the first's
+    // continuation was never resumed at all: `speak` never returned, so
+    // `agentSpeaking` stayed true forever, and from there every later speak and
+    // listen threw `.busy` and the user's own hotkey was refused. Dictation and
+    // Agent Speak both dead until relaunch, from pressing preview at the wrong
+    // moment.
+    //
+    // Removing-and-calling under the lock is what makes it safe: exactly one
+    // caller can take a given handler, so a continuation is resumed once and
+    // belongs to the utterance that actually ended.
+    nonisolated(unsafe) private var finishHandlers: [ObjectIdentifier: () -> Void] = [:]
+    private let handlerLock = NSLock()
     // The voice the user picked, if they picked one of this engine's. nil means
     // "whatever this Mac says best", which is also what a picked voice degrades
     // to once it stops being installed.
@@ -83,17 +98,28 @@ final class SystemSpeaker: NSObject, Speaker {
     func speak(_ text: String) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw SpeakerError.emptyText }
+        // Built before the stop, so the utterance this call waits on is a
+        // distinct object from any the stop is about to cancel.
+        let mine = utterance(for: trimmed)
         stop()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            var resumed = false
-            finishHandler = {
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume()
-            }
-            synthesizer.speak(utterance(for: trimmed))
+            register({ continuation.resume() }, for: mine)
+            synthesizer.speak(mine)
         }
-        finishHandler = nil
+        // Normally already taken by the callback that resumed us; this only
+        // matters on a path where one never arrives, so a handler cannot
+        // outlive the call that registered it.
+        _ = takeHandler(for: mine)
+    }
+
+    private func register(_ handler: @escaping () -> Void, for utterance: AVSpeechUtterance) {
+        handlerLock.lock(); defer { handlerLock.unlock() }
+        finishHandlers[ObjectIdentifier(utterance)] = handler
+    }
+
+    private func takeHandler(for utterance: AVSpeechUtterance) -> (() -> Void)? {
+        handlerLock.lock(); defer { handlerLock.unlock() }
+        return finishHandlers.removeValue(forKey: ObjectIdentifier(utterance))
     }
 
     // Renders to buffers instead of the speakers, so synthesis is verifiable
@@ -106,19 +132,34 @@ final class SystemSpeaker: NSObject, Speaker {
         var samples: [Float] = []
         var rate = 0
 
+        // The buffer callback outlives the call that started it: AVSpeechSynthesizer
+        // keeps handing over buffers after the terminator, and it holds the closure
+        // until it is done with the whole utterance. Two things follow.
+        //
+        // `self` is captured strongly so the synthesizer cannot be deallocated
+        // while it still owns a callback into it — a speaker built for one
+        // `synthesize` and released the moment it returned took the synthesizer
+        // down with it mid-write.
+        //
+        // `done` closes the door behind the terminator, so a late buffer cannot
+        // append to `samples` while the caller below is already reading it.
+        let writeLock = NSLock()
+        var done = false
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            var resumed = false
-            let finish = {
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume()
-            }
-            synthesizer.write(utterance(for: trimmed)) { buffer in
-                guard let pcm = buffer as? AVAudioPCMBuffer else { finish(); return }
+            synthesizer.write(utterance(for: trimmed)) { [self] buffer in
+                _ = self
+                writeLock.lock()
+                guard !done else { writeLock.unlock(); return }
                 // A zero-length buffer is the terminator, not audio.
-                guard pcm.frameLength > 0 else { finish(); return }
+                guard let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 else {
+                    done = true
+                    writeLock.unlock()
+                    continuation.resume()
+                    return
+                }
                 rate = Int(pcm.format.sampleRate)
                 samples.append(contentsOf: Self.mono(from: pcm))
+                writeLock.unlock()
             }
         }
 
@@ -157,11 +198,11 @@ final class SystemSpeaker: NSObject, Speaker {
 extension SystemSpeaker: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                            didFinish utterance: AVSpeechUtterance) {
-        finishHandler?()
+        takeHandler(for: utterance)?()
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                            didCancel utterance: AVSpeechUtterance) {
-        finishHandler?()
+        takeHandler(for: utterance)?()
     }
 }

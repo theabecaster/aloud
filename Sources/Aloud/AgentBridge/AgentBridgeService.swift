@@ -107,6 +107,32 @@ final class AgentBridgeService {
     private var refusedUntil: [String: Date] = [:]
     static let refusalBackoff: TimeInterval = 60
 
+    // Every claimant that could not prove which process it belongs to shares
+    // one back-off. A key made of caller-supplied text is not an identity: a
+    // process that wanted to keep asking could simply vary the harness id or
+    // the pid it sent and arrive with a clean slate every time.
+    private static let unverifiedClaimantKey = "#unverified"
+
+    // Letters, digits, dot, dash, underscore; 32 characters at the outside.
+    // Every id the installer writes ("claude-code", "codex", "opencode") fits,
+    // and nothing that fits can be mistaken for a sentence.
+    static func isWellFormedHarness(_ harness: String) -> Bool {
+        guard (1...32).contains(harness.count) else { return false }
+        return harness.allSatisfy {
+            $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_")
+        }
+    }
+
+    // The floor under every claimant, not just the one that was refused.
+    //
+    // Short on purpose. Its whole job is to break the loop where a refusal is
+    // followed by another prompt as soon as the 1.5 s audio cooldown lapses; it
+    // is not meant to punish a genuinely different agent for a question the
+    // user has not been asked yet, which is why it is seconds rather than the
+    // full minute a refused claimant itself waits out.
+    private var lastRefusalUntil: Date?
+    static let anyRefusalQuiet: TimeInterval = 5
+
     // How long a `claim --wait` may park. Deliberately short of any plausible
     // harness command timeout: a wait that outlives the shell holding it is a
     // lease granted to nobody, and the microphone would sit reserved for a
@@ -168,6 +194,16 @@ final class AgentBridgeService {
         // without that discovery itself being refused.
         guard settings.agentVoiceAvailable || request.op == .status else {
             return .failure(.disabled, "Agent Speak is turned off in Aloud.")
+        }
+        // A harness id is a short machine-written label, and every one the
+        // installer writes already looks like this. It is checked because it
+        // does not stay inside Aloud: the holder's id is handed back to *other*
+        // callers ("codex is using the microphone", `queuedBehind`, `status`),
+        // so unvalidated it was a megabyte of attacker-chosen prose landing
+        // verbatim in another agent's tool output — a text channel from a
+        // process with no other capability into a trusted agent's context.
+        guard Self.isWellFormedHarness(request.harness) else {
+            return .failure(.badRequest, "That harness id isn't one Aloud recognises.")
         }
         leases.enabled = settings.agentVoiceAvailable
         consent.mode = settings.agentConsentMode
@@ -346,6 +382,14 @@ final class AgentBridgeService {
         // was — corroboration for the name we show the user, never authority
         // over the session's lifetime.
         let pid = request.pid > 0 ? request.pid : LeaseManager.noOwnerPid
+        // Whether the kernel agrees that the process this caller named is its
+        // own. A legitimate caller is spawned by the process it names, so this
+        // holds for every real harness; what it excludes is a stranger echoing
+        // back a pid it read out of `ps` in order to be handed somebody else's
+        // consented session.
+        let ownerVerified = pid != LeaseManager.noOwnerPid
+            && peer.isKnown
+            && BridgeServer.processIsSelfOrAncestor(pid, of: peer.pid)
         let at = now()
 
         // A session that will not say what it is doing cannot be shown to the
@@ -362,8 +406,33 @@ final class AgentBridgeService {
         // the other — `denied` is a decision about *this request*, and the
         // other window's request was never shown to anybody. Callers without
         // an owner pid share a key, but they are indistinguishable anyway.
+        //
+        // Only a verified owner gets its own key. Both halves of the key are
+        // caller-chosen text otherwise, so an unverified process could walk
+        // away from a refusal simply by claiming a different harness id or a
+        // different pid — and put the prompt back in front of the user every
+        // 1.5 seconds, which is the opposite of what saying no is for.
+        // Two keys, because they answer different questions. The queue knows a
+        // caller by what it says it is — that is only a label, and a waiter the
+        // user dismissed has to be findable by it. The back-off has to be
+        // something the caller cannot simply change, or a refusal is walked
+        // away from by sending a different harness id.
         let claimantKey = "\(request.harness)#\(pid)"
-        if let until = refusedUntil[claimantKey], at < until {
+        let refusalKey = ownerVerified ? claimantKey : Self.unverifiedClaimantKey
+        // Dropped as they expire rather than kept forever: one entry was left
+        // behind per declined request, each with a distinct pid, in a process
+        // that runs for weeks.
+        refusedUntil = refusedUntil.filter { $0.value > at }
+        if let until = refusedUntil[refusalKey], at < until {
+            var response = BridgeResponse.failure(.denied, "The user declined.")
+            response.retryAfter = until.timeIntervalSince(at)
+            return response
+        }
+        // A floor under all of it: whoever was just told no, nobody gets to ask
+        // again for a moment. Without this a refusal only quiets one claimant
+        // while the prompt keeps reappearing, which the user experiences as
+        // saying no having done nothing.
+        if let until = lastRefusalUntil, at < until {
             var response = BridgeResponse.failure(.denied, "The user declined.")
             response.retryAfter = until.timeIntervalSince(at)
             return response
@@ -382,8 +451,16 @@ final class AgentBridgeService {
         // here is real time while `now()` is the injectable logical clock, and
         // mixing the two makes the ceiling unreachable whenever the clock is
         // held still — which is exactly what a test does, and what hung one.
+        //
+        // One budget, spent by both of the loops below rather than granted to
+        // each of them. Two independent counters meant `--wait 300` could park
+        // 300 s riding out a dictation and then a further 300 s in the queue,
+        // while the CLI's own socket timeout is sized against the number the
+        // caller asked for — so the shell gave up at 330 s and the app went on
+        // to grant a lease at ~600 s to a caller that was no longer there,
+        // which is exactly what the ceiling exists to prevent.
         let requested = min(max(request.wait ?? 0, 0), Self.maxQueueWait)
-        let pollsRemaining = Int(requested / Self.queuePoll)
+        var pollsRemaining = Int(requested / Self.queuePoll)
 
         // The user is dictating right now.
         //
@@ -396,9 +473,8 @@ final class AgentBridgeService {
         // dictating is somebody who is *there*, and about to be free.
         if host?.userDictationInProgress == true {
             host?.noteAgentWaiting()
-            var polls = 0
-            while host?.userDictationInProgress == true, polls < pollsRemaining {
-                polls += 1
+            while host?.userDictationInProgress == true, pollsRemaining > 0 {
+                pollsRemaining -= 1
                 try? await Task.sleep(nanoseconds: UInt64(Self.queuePoll * 1_000_000_000))
                 guard settings.agentVoiceAvailable else {
                     host?.clearAgentWaiting()
@@ -430,12 +506,12 @@ final class AgentBridgeService {
             return .failure(.denied, "The user dismissed this session's request.")
         }
 
-        var outcome = leases.claim(harness: request.harness, pid: pid, name: name, now: at)
+        var outcome = leases.claim(harness: request.harness, pid: pid, name: name,
+                                   ownerVerified: ownerVerified, now: at)
         if pollsRemaining > 0 {
-            var polls = 0
             let reclaimsAtEntry = reclaims
-            while case .queued = outcome, polls < pollsRemaining {
-                polls += 1
+            while case .queued = outcome, pollsRemaining > 0 {
+                pollsRemaining -= 1
                 try? await Task.sleep(nanoseconds: UInt64(Self.queuePoll * 1_000_000_000))
                 // The gate going off mid-wait must end it, not strand the
                 // caller until its ceiling.
@@ -455,7 +531,8 @@ final class AgentBridgeService {
                     return .failure(.denied, "The user dismissed this session's request.")
                 }
                 leases.enabled = true
-                outcome = leases.claim(harness: request.harness, pid: pid, name: name, now: now())
+                outcome = leases.claim(harness: request.harness, pid: pid, name: name,
+                                       ownerVerified: ownerVerified, now: now())
             }
         }
 
@@ -509,7 +586,8 @@ final class AgentBridgeService {
                 case .denied:
                     // No point holding a lease the user just refused, and no
                     // asking again for a while.
-                    refusedUntil[claimantKey] = now().addingTimeInterval(Self.refusalBackoff)
+                    refusedUntil[refusalKey] = now().addingTimeInterval(Self.refusalBackoff)
+                    lastRefusalUntil = now().addingTimeInterval(Self.anyRefusalQuiet)
                     leases.release(lease: lease, now: now())
                     return .failure(.denied, "The user declined.")
                 case .timedOut:
@@ -554,10 +632,12 @@ final class AgentBridgeService {
         // they had already answered. Reported as "the checkmark only works
         // once the prompt finishes", which is exactly what it looked like.
         let deadline = prompt.deadline
+        // Held so the answer can wait for the question to finish being read.
+        var promptSpeech: Task<Void, Never>?
         let resolution = await withCheckedContinuation { (continuation: CheckedContinuation<ConsentResolution, Never>) in
             pendingConsent[lease] = continuation
             if prompt.mode == .confirmByVoice {
-                Task { [weak self] in
+                promptSpeech = Task { [weak self] in
                     // Spoken through whichever voice is available. A failure
                     // here is not fatal on its own — the pill is still showing
                     // the same words — but it does mean a user looking away
@@ -583,6 +663,16 @@ final class AgentBridgeService {
                 self?.timeOutConsent(lease: lease)
             }
         }
+        // The pill invites an answer while the question is still being read
+        // out, and people take it up — which is the whole point of the controls
+        // being live from the first instant. But the speaker is half-duplex:
+        // for as long as this task sits inside `speak`, the host reports itself
+        // as speaking and refuses the next one as busy. Returning the lease
+        // before that finished meant `converse` immediately tried to say the
+        // agent's actual question, was refused, hung the lease up as a failure —
+        // and the agent retried seconds later, so the user was asked to consent
+        // a second time to something they had just said yes to.
+        await promptSpeech?.value
         if case .accepted = resolution {
             await host?.dismissConsent(accepted: true)
         } else {
@@ -646,8 +736,12 @@ final class AgentBridgeService {
         // process — must not hide the pill and force the phase idle out from
         // under whoever holds the microphone now, be that another agent or the
         // user's own dictation.
+        // Revoking the grant is held to the same rule as tearing the session
+        // down. It was unconditional, so a lease id supplied by any local
+        // process dropped that lease's consent — costing whoever actually held
+        // it a fresh prompt for a session the user had already approved.
         let wasHolder = leases.holder?.id == lease
-        consent.endLease(lease)
+        if wasHolder { consent.endLease(lease) }
         leases.release(lease: lease, now: now())
         if wasHolder { await host?.endAgentSession() }
         return .success()
@@ -718,10 +812,33 @@ final class AgentBridgeService {
             if pendingConsent[lease] != nil {
                 return .failure(.queued, "A consent prompt for this session is already open.")
             }
+            // A no given here has to hold here too, or the back-off recorded
+            // below only ever stops the *next claim* while this verb keeps
+            // raising the prompt on the lease it already holds.
+            let at = now()
+            let holderKey = leases.holder.map { "\($0.harness)#\($0.pid)" }
+                ?? Self.unverifiedClaimantKey
+            let quietUntil = [refusedUntil[holderKey], lastRefusalUntil].compactMap { $0 }.max()
+            if let until = quietUntil, at < until {
+                var response = BridgeResponse.failure(.denied, "The user declined.")
+                response.retryAfter = until.timeIntervalSince(at)
+                return response
+            }
             switch await awaitConsent(prompt) {
             case .accepted(let granted, _):
                 grant = granted
             case .denied:
+                // The same quiet a decline buys at `claim`. Without it this
+                // verb was the way around it: a holder whose grant was cleared
+                // — by the user tightening the consent mode mid-session — could
+                // be declined and put the prompt straight back up, as often as
+                // it liked, because nothing here recorded that the answer had
+                // been no.
+                let holder = leases.holder
+                let claimantKey = holder.map { "\($0.harness)#\($0.pid)" }
+                    ?? Self.unverifiedClaimantKey
+                refusedUntil[claimantKey] = now().addingTimeInterval(Self.refusalBackoff)
+                lastRefusalUntil = now().addingTimeInterval(Self.anyRefusalQuiet)
                 return .failure(.denied, "The user declined.")
             case .timedOut, .unrecognized, .ignored:
                 return .failure(.timeout, "Nobody answered.")
@@ -800,8 +917,13 @@ final class AgentBridgeService {
             do {
                 // Capped well under the harness's command timeout: a poll that
                 // outlives the shell asking it returns into nothing.
-                let heard = try await host.pollListenSession(id: session,
-                                                             waitingUpTo: min(request.wait ?? 5, 30))
+                // Floored as well as capped. The socket is the trust boundary,
+                // not the CLI that usually sits in front of it: a negative wait
+                // sent straight to the socket reached an `Int(_: Double)`
+                // conversion on the other side and trapped, taking the menu-bar
+                // app — and the user's dictation with it — down with it.
+                let wait = min(max(request.wait ?? 5, 0), 30)
+                let heard = try await host.pollListenSession(id: session, waitingUpTo: wait)
                 var response = BridgeResponse.success()
                 response.session = session
                 response.text = heard.text

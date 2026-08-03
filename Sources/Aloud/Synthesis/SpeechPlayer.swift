@@ -19,6 +19,12 @@ final class SpeechPlayer {
     private let levelLock = NSLock()
     private var envelope = SpeechEnvelope(frames: [])
     private var startedAt: TimeInterval?
+    // Which utterance the clock above belongs to. `play` is built for a second
+    // call to interrupt the first, and the first then resumes and runs its
+    // `defer` — so without a token it clears the clock of the utterance that is
+    // currently audible, and the pill stops drawing a voice mid-sentence.
+    private var levelRun = 0
+    private var idleWork: DispatchWorkItem?
 
     // Whether samples are going out of the speakers at this instant.
     var isPlaying: Bool {
@@ -33,16 +39,54 @@ final class SpeechPlayer {
         return envelope.level(at: ProcessInfo.processInfo.systemUptime - startedAt)
     }
 
-    private func beginLevels(_ speech: Speech) {
+    private func beginLevels(_ speech: Speech) -> Int {
         let built = SpeechEnvelope(samples: speech.samples, sampleRate: speech.sampleRate)
         levelLock.lock(); defer { levelLock.unlock() }
+        idleWork?.cancel()
+        idleWork = nil
         envelope = built
         startedAt = ProcessInfo.processInfo.systemUptime
+        levelRun += 1
+        return levelRun
     }
 
-    private func endLevels() {
+    // Only the utterance that owns the clock may stop it.
+    private func endLevels(_ run: Int) {
         levelLock.lock(); defer { levelLock.unlock() }
+        guard run == levelRun else { return }
         startedAt = nil
+    }
+
+    // Let the output device go once nothing has been said for a while.
+    //
+    // The engine is started on the first utterance and, before this, was never
+    // stopped: `shutdown()` had no callers at all. In a menu-bar app that runs
+    // for weeks that means one agent question — or one press of the preview
+    // button — pins the default output open for the rest of the session, which
+    // on Bluetooth can hold the headset in call mode.
+    //
+    // Deferred rather than immediate because a conversation is several
+    // utterances with pauses between them, and tearing the engine down between
+    // two sentences would put the cold lead-in back in front of each of them.
+    private static let idleShutdown: TimeInterval = 20
+
+    private func scheduleIdleShutdown(after run: Int) {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            levelLock.lock()
+            let stillIdle = startedAt == nil && run == levelRun
+            levelLock.unlock()
+            guard stillIdle else { return }
+            shutdown()
+        }
+        levelLock.lock()
+        // A newer utterance started while this one was finishing: it owns the
+        // engine now, and its own completion will arm the next timer.
+        guard run == levelRun else { levelLock.unlock(); return }
+        idleWork?.cancel()
+        idleWork = work
+        levelLock.unlock()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.idleShutdown, execute: work)
     }
 
     // Resolves when playback finishes, or immediately if it was interrupted by
@@ -163,20 +207,38 @@ final class SpeechPlayer {
         // Started here rather than at the top: everything above can still
         // throw, and a level clock running for audio that never played would
         // draw a voice nobody heard.
-        beginLevels(padded)
-        defer { endLevels() }
+        let run = beginLevels(padded)
+        defer {
+            endLevels(run)
+            scheduleIdleShutdown(after: run)
+        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            // Two things can resume this: the completion callback, and the
+            // failure path below. Once the buffer is scheduled the node owns a
+            // callback we cannot take back, so whether that callback fires
+            // before or after a raise out of `play()` is not ours to decide —
+            // and resuming a CheckedContinuation twice traps the process.
+            // Whoever gets here first wins; the other is a no-op.
+            let resumeLock = NSLock()
+            var resumed = false
+            let resumeOnce = {
+                resumeLock.lock()
+                let first = !resumed
+                resumed = true
+                resumeLock.unlock()
+                if first { continuation.resume() }
+            }
             // AVFAudio still raises from here on format edge cases we haven't
             // hit; a failed utterance must degrade, never abort the process.
             if let raised = AloudCatchException({
                 node.scheduleBuffer(buffer, at: nil, options: options,
                                     completionCallbackType: .dataPlayedBack) { _ in
-                    continuation.resume()
+                    resumeOnce()
                 }
                 node.play()
             }) {
                 scheduleFailure = raised.reason ?? raised.name.rawValue
-                continuation.resume()
+                resumeOnce()
             }
         }
         if let scheduleFailure { throw SpeakerError.playbackFailed(scheduleFailure) }

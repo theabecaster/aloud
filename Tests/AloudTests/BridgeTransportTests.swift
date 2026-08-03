@@ -414,6 +414,30 @@ final class BridgeTransportTests: XCTestCase {
         XCTAssertTrue(BridgeClient.send(request(), timeout: 5, socketURL: socketURL).ok)
     }
 
+    // …and it stays untouched after the refused one is released.
+    //
+    // The test above passes either way, because ARC happens to keep `intruder`
+    // alive to the end of the function. What it could not see: `deinit` calls
+    // `stop()`, and `stop()` used to `unlink` the socket path whether or not
+    // this instance had ever bound it — so the refused server deleted the
+    // running app's socket on its way out of scope. The way in is the ordinary
+    // development loop in AGENTS.md: the installed app is running with Agent
+    // Speak on, and a `swift build` binary is launched beside it. From then on
+    // every agent call reports "Aloud isn't running" against an app that is.
+    func testARefusedServerDoesNotTakeTheLiveSocketWithItWhenItGoesAway() throws {
+        try startServer { _ in .success() }
+        // Scoped so the refused instance is deallocated — and its deinit runs —
+        // before the assertion below.
+        do {
+            let intruder = BridgeServer(socketURL: socketURL)
+            XCTAssertThrowsError(try intruder.start())
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: socketURL.path),
+                      "the live server's socket file was removed by an instance that never bound it")
+        XCTAssertTrue(BridgeClient.send(request(), timeout: 5, socketURL: socketURL).ok,
+                      "the live server must still answer")
+    }
+
     // MARK: peers that go away
 
     // A harness timing out its shell command kills the CLI mid-exchange. The

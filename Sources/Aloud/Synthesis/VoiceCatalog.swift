@@ -186,11 +186,19 @@ enum VoiceCatalog {
     //     you a question.
     //   * a declared gender — it is the only thing being chosen here, so a
     //     voice that will not say cannot be chosen.
+    // What this Mac says it can speak with. Injectable for the same reason
+    // `LeaseManager`'s liveness check and the recorder's deaf-device check are:
+    // the interesting behaviour here is what happens on a Mac that is not this
+    // one — a machine with only one gender installed, where the catalog has to
+    // fall back across sides — and there is no other way to present one.
+    nonisolated(unsafe) static var installedSystemVoices: () -> [AVSpeechSynthesisVoice]
+        = AVSpeechSynthesisVoice.speechVoices
+
     private static func bestSystemVoices(languageCode: String) -> [VoiceGender: VoiceOption] {
         let region = Locale.current.region?.identifier
         var best: [VoiceGender: (score: Int, option: VoiceOption)] = [:]
 
-        for voice in AVSpeechSynthesisVoice.speechVoices() {
+        for voice in installedSystemVoices() {
             guard voice.identifier.hasPrefix("com.apple.voice."),
                   voice.language.lowercased().hasPrefix(languageCode),
                   let gender = gender(of: voice) else { continue }

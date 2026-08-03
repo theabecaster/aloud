@@ -58,7 +58,12 @@ final class EnhancedVoices: ObservableObject {
         fetching.insert(gender)
         Task { [weak self] in
             do {
-                try await NeuralSpeaker(engine: engine, style: style).prepare()
+                // Kept rather than discarded: `prepare()` is the download *and*
+                // the model load, so throwing this away meant loading the same
+                // CoreML chain a second time moments later, under `warm`.
+                let fetched = NeuralSpeaker(engine: engine, style: style)
+                try await fetched.prepare()
+                SpeakerPool.adopt(fetched, for: option)
                 // The catalog's answer to "what speaks for this side" just
                 // changed, and so has the speaker the pool should hand out.
                 VoiceCatalog.refresh()
@@ -82,7 +87,13 @@ final class EnhancedVoices: ObservableObject {
     /// the cold cost, and the first synthesis is what compiles the CoreML
     /// variant for this chunk length. Paying it here is the difference between
     /// a press that speaks and a press that seems to have missed.
-    func warm(_ gender: VoiceGender) {
+    /// `chosen` says this is the side the user actually picked, as opposed to a
+    /// side that merely finished downloading. Only that one evicts the other:
+    /// `ensureAll` warms both sides as their assets land, and evicting on every
+    /// warm would drop the selected voice's models moments before an agent
+    /// asked its first question with them.
+    func warm(_ gender: VoiceGender, chosen: Bool = false) {
+        if chosen { SpeakerPool.keepOnlyEnhanced(VoiceCatalog.resolved(gender: gender)) }
         guard !warmed.contains(gender), !warming.contains(gender) else { return }
         let voice = SpeakerPool.speaker(for: VoiceCatalog.resolved(gender: gender))
         warming.insert(gender)

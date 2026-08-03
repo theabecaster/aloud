@@ -13,26 +13,41 @@ import XCTest
 // developer's real `~` would be modifying the machine it runs on.
 final class HarnessInstallerTests: XCTestCase {
     private var home: URL!
-    // Its own suite, per test. The installer remembers things across launches —
-    // which harnesses the user removed, which permission entries they have been
-    // offered — and those memories change what a later install writes. Sharing
-    // `.standard` would make the outcome depend on what ran before, in this
-    // process and in every previous run on the developer's own machine.
+    // Its own suite, never `.standard`. The installer remembers things across
+    // launches — which harnesses the user removed, which permission entries
+    // they have been offered — and those memories change what a later install
+    // writes. Sharing `.standard` would make the outcome depend on what ran
+    // before, in this process and in every previous run on the developer's own
+    // machine.
+    //
+    // One fixed name for the whole class, wiped on the way *in*, rather than a
+    // fresh UUID per test: `removePersistentDomain` empties the domain but
+    // leaves the plist on disk, and cfprefsd rewrites it asynchronously after
+    // tearDown — so a per-test name loses that race and drops a file in
+    // ~/Library/Preferences every single run. Thousands had piled up. A stable
+    // name still isolates (the domain is emptied before each test) and can
+    // leave at most one file, which tearDown then deletes by hand.
+    private static let suiteName = "aloud-harness-tests"
     private var defaults: UserDefaults!
-    private var suiteName: String!
     private var fm: FileManager { .default }
 
     override func setUpWithError() throws {
         home = fm.temporaryDirectory
             .appendingPathComponent("aloud-harness-tests-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: home, withIntermediateDirectories: true)
-        suiteName = "aloud-harness-tests-\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults = try XCTUnwrap(UserDefaults(suiteName: Self.suiteName))
+        defaults.removePersistentDomain(forName: Self.suiteName)
     }
 
     override func tearDown() {
         try? fm.removeItem(at: home)
-        defaults.removePersistentDomain(forName: suiteName)
+        defaults.removePersistentDomain(forName: Self.suiteName)
+        // removePersistentDomain empties the domain but leaves the plist
+        // behind, so it is deleted by hand or the suite litters the
+        // developer's Preferences directory.
+        let plist = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/\(Self.suiteName).plist")
+        try? fm.removeItem(at: plist)
     }
 
     // Every installer a test builds goes through here, so none of them can
@@ -170,9 +185,9 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertEqual(changed.count, 3,
                        "the skill file, settings.json, and the note in ~/.claude/CLAUDE.md")
 
-        let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        let skill = try XCTUnwrap(read(".claude/skills/aloud-agent-speak/SKILL.md"))
         XCTAssertTrue(skill.hasPrefix("---"), "Claude Code needs the skill frontmatter")
-        XCTAssertTrue(skill.contains("name: aloud-voice"))
+        XCTAssertTrue(skill.contains("name: aloud-agent-speak"))
         XCTAssertTrue(skill.contains(AgentVoiceInstructions.markerStart))
         XCTAssertTrue(skill.contains("--harness claude-code"), "the harness id is baked in, not left to the agent")
 
@@ -196,13 +211,13 @@ final class HarnessInstallerTests: XCTestCase {
     // merely "equivalent".
     func testDoubleInstallChangesNothing() throws {
         _ = try installer().install(.claudeCode)
-        let skillBefore = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        let skillBefore = try XCTUnwrap(read(".claude/skills/aloud-agent-speak/SKILL.md"))
         let settingsBefore = try XCTUnwrap(read(".claude/settings.json"))
 
         let second = try installer().install(.claudeCode)
         guard case .installed(let changed) = second else { return XCTFail("expected an install result") }
         XCTAssertEqual(changed, [], "a repeat install must report that it wrote nothing")
-        XCTAssertEqual(read(".claude/skills/aloud-voice/SKILL.md"), skillBefore)
+        XCTAssertEqual(read(".claude/skills/aloud-agent-speak/SKILL.md"), skillBefore)
         XCTAssertEqual(read(".claude/settings.json"), settingsBefore)
     }
 
@@ -215,18 +230,18 @@ final class HarnessInstallerTests: XCTestCase {
     // agents to call the CLI in a form that had moved on.
     func testAnOutdatedSkillIsBroughtUpToDate() throws {
         _ = try installer().install(.claudeCode)
-        let current = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        let current = try XCTUnwrap(read(".claude/skills/aloud-agent-speak/SKILL.md"))
 
         // An older Aloud's block: our markers, somebody else's body.
         let stale = current.replacingOccurrences(of: "--harness claude-code",
                                                  with: "--harness claude-code --legacy-flag")
         XCTAssertNotEqual(stale, current)
-        try write(stale, to: ".claude/skills/aloud-voice/SKILL.md")
+        try write(stale, to: ".claude/skills/aloud-agent-speak/SKILL.md")
         XCTAssertTrue(installer().isInstalled(.claudeCode),
                       "a stale block still reads as installed — that is the trap")
 
         XCTAssertEqual(installer().refreshInstalled(), [.claudeCode])
-        XCTAssertEqual(read(".claude/skills/aloud-voice/SKILL.md"), current,
+        XCTAssertEqual(read(".claude/skills/aloud-agent-speak/SKILL.md"), current,
                        "the instructions must be brought back to what this build says")
     }
 
@@ -330,7 +345,7 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertEqual(after.count, AgentVoiceInstructions.verbs.count,
                        "the new verb joins the four that were already there")
         XCTAssertTrue(after.contains { $0.contains(" ask:") })
-        let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        let skill = try XCTUnwrap(read(".claude/skills/aloud-agent-speak/SKILL.md"))
         XCTAssertTrue(skill.contains("ask --harness"),
                       "and the skill that teaches it went out in the same pass")
     }
@@ -357,7 +372,7 @@ final class HarnessInstallerTests: XCTestCase {
         try write("{ this is not json", to: ".claude/settings.json")
         let new = "/opt/tools/Aloud.app/Contents/MacOS/Aloud"
         _ = installer(command: new).refreshInstalled()
-        let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        let skill = try XCTUnwrap(read(".claude/skills/aloud-agent-speak/SKILL.md"))
         XCTAssertTrue(skill.contains(new), "the skill followed the new path despite the broken settings file")
         XCTAssertEqual(read(".claude/settings.json"), "{ this is not json",
                        "the corrupt file is left exactly as it was")
@@ -407,7 +422,7 @@ final class HarnessInstallerTests: XCTestCase {
         let permissions = try XCTUnwrap(root["permissions"] as? [String: Any])
         XCTAssertEqual(permissions["deny"] as? [String], ["Bash(rm:*)"])
 
-        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".claude/skills/aloud-voice/SKILL.md").path))
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".claude/skills/aloud-agent-speak/SKILL.md").path))
         XCTAssertFalse(installer().isInstalled(.claudeCode))
     }
 
@@ -429,8 +444,93 @@ final class HarnessInstallerTests: XCTestCase {
         }
 
         XCTAssertEqual(read(".claude/settings.json"), broken, "the broken file must be byte-identical")
-        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".claude/skills/aloud-voice/SKILL.md").path),
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".claude/skills/aloud-agent-speak/SKILL.md").path),
                        "nothing may be written once the install is going to fail")
+    }
+
+    // A settings.json that exists but will not open — a permission, an ACL, a
+    // file somebody chmod'd while debugging — is NOT the same thing as no
+    // settings.json, and it is the more expensive of the two to confuse. The
+    // write below is atomic and replaces the whole file, so treating an
+    // unreadable one as absent would truncate a user's entire Claude Code
+    // configuration down to four permission entries. This guard is the only
+    // thing standing between them and that, and until now nothing exercised it:
+    // every test reached `unreadableSettings` through unparseable JSON, which
+    // is the branch two lines further down.
+    func testASettingsFileWeCannotOpenIsRefusedRatherThanReplaced() throws {
+        let original = "{\"model\":\"opus\",\"permissions\":{\"allow\":[\"Bash(git status:*)\"]}}"
+        try write(original, to: ".claude/settings.json")
+        let settings = home.appendingPathComponent(".claude/settings.json")
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: settings.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: settings.path) }
+        try XCTSkipIf(fm.isReadableFile(atPath: settings.path),
+                      "this user can read through a chmod 000, so there is nothing to refuse")
+
+        XCTAssertThrowsError(try installer().install(.claudeCode)) { error in
+            guard case .unreadableSettings(let path, let snippet)? = error as? HarnessInstallError else {
+                return XCTFail("expected an unreadableSettings refusal, got \(error)")
+            }
+            XCTAssertTrue(path.hasSuffix(".claude/settings.json"))
+            // Refusing is only half of it: the user still has to be able to
+            // finish the job by hand.
+            XCTAssertTrue(snippet.contains("Bash(\(Self.command) listen:*)"))
+        }
+
+        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: settings.path)
+        XCTAssertEqual(read(".claude/settings.json"), original,
+                       "the file we could not read is the file we do not write")
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".claude/skills/aloud-agent-speak/SKILL.md").path),
+                       "nothing may be written once the install is going to fail")
+    }
+
+    // A block of ours whose markers do not pair up — a hand edit, an
+    // interrupted write. We cannot tell which lines are ours, so we refuse both
+    // ways: appending would stack a second block on top (and a refresh runs
+    // every launch, so the file would grow without bound), and stripping would
+    // be guessing at somebody's own text.
+    func testAnInstructionFileWithAnOrphanedMarkerIsRefusedInBothDirections() throws {
+        let damaged = """
+        # My instructions
+
+        Always use tabs.
+
+        \(AgentVoiceInstructions.markerStart)
+        half a block, and no end marker
+
+        """
+        try write(damaged, to: ".codex/AGENTS.md")
+
+        XCTAssertThrowsError(try installer().install(.codex)) { error in
+            guard case .damagedBlock(let path)? = error as? HarnessInstallError else {
+                return XCTFail("expected a damagedBlock refusal, got \(error)")
+            }
+            XCTAssertTrue(path.hasSuffix(".codex/AGENTS.md"))
+        }
+        XCTAssertEqual(read(".codex/AGENTS.md"), damaged, "the damaged file must be byte-identical")
+
+        // The same refusal on the way out. An uninstall that guessed here would
+        // take the user's own instructions with it, which is the one loss they
+        // cannot undo from the Trash.
+        XCTAssertThrowsError(try installer().uninstall(.codex))
+        XCTAssertEqual(read(".codex/AGENTS.md"), damaged)
+    }
+
+    // A write that cannot land has to be reported: the Settings pane says what
+    // went wrong, and a silently swallowed failure would leave a row reading
+    // "Installed" against a file that was never written.
+    func testAWriteThatCannotLandIsReportedRatherThanSwallowed() throws {
+        // Something in the way that is not a file we can replace.
+        try fm.createDirectory(at: home.appendingPathComponent(".codex/AGENTS.md"),
+                               withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(try installer().install(.codex)) { error in
+            guard case .writeFailed(let path, let message)? = error as? HarnessInstallError else {
+                return XCTFail("expected a writeFailed refusal, got \(error)")
+            }
+            XCTAssertTrue(path.hasSuffix(".codex/AGENTS.md"))
+            XCTAssertFalse(message.isEmpty, "the pane has to be able to say what happened")
+        }
+        XCTAssertFalse(installer().isInstalled(.codex))
     }
 
     // `permissions.allow` holding something that isn't a list is the same class
@@ -443,11 +543,11 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertEqual(read(".claude/settings.json"), odd)
     }
 
-    // Somebody else's aloud-voice skill is not ours to delete.
+    // Somebody else's aloud-agent-speak skill is not ours to delete.
     func testUninstallSpareAForeignSkillOfTheSameName() throws {
-        try write("# my own notes about aloud\n", to: ".claude/skills/aloud-voice/SKILL.md")
+        try write("# my own notes about aloud\n", to: ".claude/skills/aloud-agent-speak/SKILL.md")
         try installer().uninstall(.claudeCode)
-        XCTAssertEqual(read(".claude/skills/aloud-voice/SKILL.md"), "# my own notes about aloud\n")
+        XCTAssertEqual(read(".claude/skills/aloud-agent-speak/SKILL.md"), "# my own notes about aloud\n")
     }
 
     // The file is not ours, so it gets copied before it is changed.
@@ -558,7 +658,7 @@ final class HarnessInstallerTests: XCTestCase {
         guard case .installed(let changed) = try installer().install(.cursor) else {
             return XCTFail("Cursor installs globally, not as a snippet")
         }
-        let skill = home.appendingPathComponent(".cursor/skills/aloud-voice/SKILL.md")
+        let skill = home.appendingPathComponent(".cursor/skills/aloud-agent-speak/SKILL.md")
         let config = home.appendingPathComponent(Self.cursorConfigPath)
         // Allowlist first, skill second — so a failure writing the allowlist
         // leaves the harness not-installed and cleanly retryable rather than
@@ -630,7 +730,7 @@ final class HarnessInstallerTests: XCTestCase {
     // skill wrapper — frontmatter, escaping, indentation — is caught too.
     func testTheInstalledCursorSkillAndItsAllowlistAgree() throws {
         _ = try installer().install(.cursor)
-        let skill = try XCTUnwrap(read(".cursor/skills/aloud-voice/SKILL.md"))
+        let skill = try XCTUnwrap(read(".cursor/skills/aloud-agent-speak/SKILL.md"))
         let ours = try cursorAllowList().filter {
             AgentVoiceInstructions.isPermissionEntry($0, style: .cursorCLIConfig)
         }
@@ -648,7 +748,7 @@ final class HarnessInstallerTests: XCTestCase {
         let installer = installer(command: spaced)
         _ = try installer.install(.cursor)
 
-        let skill = try XCTUnwrap(read(".cursor/skills/aloud-voice/SKILL.md"))
+        let skill = try XCTUnwrap(read(".cursor/skills/aloud-agent-speak/SKILL.md"))
         XCTAssertTrue(skill.contains("'\(spaced)' listen"), "the sample commands must be runnable as written")
         XCTAssertTrue(try cursorAllowList().contains("Shell('\(spaced)':listen*)"))
     }
@@ -743,7 +843,7 @@ final class HarnessInstallerTests: XCTestCase {
         }
 
         XCTAssertEqual(read(Self.cursorConfigPath), broken, "the broken file must be byte-identical")
-        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".cursor/skills/aloud-voice/SKILL.md").path),
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".cursor/skills/aloud-agent-speak/SKILL.md").path),
                        "nothing may be written once the install is going to fail")
     }
 
@@ -777,7 +877,7 @@ final class HarnessInstallerTests: XCTestCase {
     // A skill of ours is deleted on uninstall; one that merely shares the name
     // is somebody else's file.
     func testCursorUninstallLeavesAForeignSkillAlone() throws {
-        let skill = home.appendingPathComponent(".cursor/skills/aloud-voice/SKILL.md")
+        let skill = home.appendingPathComponent(".cursor/skills/aloud-agent-speak/SKILL.md")
         try fm.createDirectory(at: skill.deletingLastPathComponent(),
                                withIntermediateDirectories: true)
         try "hand written, not ours".write(to: skill, atomically: true, encoding: .utf8)
@@ -811,10 +911,10 @@ final class HarnessInstallerTests: XCTestCase {
     // reads the directory at all, which is why detection is pinned to a marker
     // only the real tool writes (below).
     private static let addedHarnesses: [(AgentHarness, String, String)] = [
-        (.opencode, ".opencode", ".opencode/skills/aloud-voice/SKILL.md"),
-        (.pi, ".pi/agent", ".pi/agent/skills/aloud-voice/SKILL.md"),
-        (.openclaw, ".openclaw/openclaw.json", ".openclaw/skills/aloud-voice/SKILL.md"),
-        (.hermes, ".hermes/config.yaml", ".hermes/skills/aloud-voice/SKILL.md"),
+        (.opencode, ".opencode", ".opencode/skills/aloud-agent-speak/SKILL.md"),
+        (.pi, ".pi/agent", ".pi/agent/skills/aloud-agent-speak/SKILL.md"),
+        (.openclaw, ".openclaw/openclaw.json", ".openclaw/skills/aloud-agent-speak/SKILL.md"),
+        (.hermes, ".hermes/config.yaml", ".hermes/skills/aloud-agent-speak/SKILL.md"),
     ]
 
     func testAddedHarnessesInstallAsGlobalSkillFiles() throws {
@@ -841,7 +941,7 @@ final class HarnessInstallerTests: XCTestCase {
 
             let text = try XCTUnwrap(read(path))
             XCTAssertTrue(text.hasPrefix("---\n"), "skills are read from their frontmatter")
-            XCTAssertTrue(text.contains("name: aloud-voice"))
+            XCTAssertTrue(text.contains("name: aloud-agent-speak"))
             XCTAssertTrue(text.contains(AgentVoiceInstructions.markerStart))
             XCTAssertTrue(text.contains("--harness \(harness.id)"),
                           "the harness id is baked in, not left to the agent")
@@ -1112,7 +1212,7 @@ final class HarnessInstallerTests: XCTestCase {
     // that rewrites the body (frontmatter, indentation, escaping) is caught too.
     func testTheInstalledSkillAndTheInstalledAllowlistAgree() throws {
         _ = try installer().install(.claudeCode)
-        let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        let skill = try XCTUnwrap(read(".claude/skills/aloud-agent-speak/SKILL.md"))
         for entry in try allowList() {
             let typed = String(entry.dropFirst("Bash(".count).dropLast(":*)".count))
             XCTAssertTrue(skill.contains(typed), "settings.json allows `\(typed)` but the skill never mentions it")
@@ -1137,7 +1237,7 @@ final class HarnessInstallerTests: XCTestCase {
         let installer = installer(command: spaced)
         _ = try installer.install(.claudeCode)
 
-        let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        let skill = try XCTUnwrap(read(".claude/skills/aloud-agent-speak/SKILL.md"))
         XCTAssertTrue(skill.contains("'\(spaced)' claim"), "the sample commands must be runnable as written")
         XCTAssertTrue(try allowList().contains("Bash('\(spaced)' claim:*)"))
     }

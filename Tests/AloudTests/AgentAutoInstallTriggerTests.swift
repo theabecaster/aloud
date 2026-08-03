@@ -8,20 +8,30 @@ import XCTest
 @MainActor
 final class AgentAutoInstallTriggerTests: XCTestCase {
     private var home: URL!
-    private var suiteName: String!
     private var defaults: UserDefaults!
+
+    // One fixed suite for the whole class, wiped before each test rather than a
+    // fresh UUID per run: `removePersistentDomain` empties the domain but
+    // leaves the plist behind, and cfprefsd rewrites it asynchronously after
+    // tearDown, so a random name loses that race and litters
+    // ~/Library/Preferences once per test, forever. A stable name still
+    // isolates and can leave at most one file, which tearDown removes.
+    private static let suiteName = "com.aloud.tests.autoinstall"
 
     override func setUp() {
         super.setUp()
         home = FileManager.default.temporaryDirectory
             .appendingPathComponent("aloud-autoinstall-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-        suiteName = "com.aloud.tests.autoinstall.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
+        defaults = UserDefaults(suiteName: Self.suiteName)
+        defaults.removePersistentDomain(forName: Self.suiteName)
     }
 
     override func tearDown() {
-        defaults.removePersistentDomain(forName: suiteName)
+        defaults.removePersistentDomain(forName: Self.suiteName)
+        let plist = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/\(Self.suiteName).plist")
+        try? FileManager.default.removeItem(at: plist)
         try? FileManager.default.removeItem(at: home)
         super.tearDown()
     }
@@ -46,7 +56,7 @@ final class AgentAutoInstallTriggerTests: XCTestCase {
 
     private func skillExists() -> Bool {
         FileManager.default.fileExists(
-            atPath: home.appendingPathComponent(".claude/skills/aloud-voice/SKILL.md").path)
+            atPath: home.appendingPathComponent(".claude/skills/aloud-agent-speak/SKILL.md").path)
     }
 
     // The gate is an opt-in, and installing instructions for a feature the user
@@ -79,7 +89,7 @@ final class AgentAutoInstallTriggerTests: XCTestCase {
         let settings = store(agentVoiceOn: true)
         AgentAutoInstall.runIfNeeded(settings: settings, defaults: defaults,
                                      version: "1.2.3", installer: installer())
-        let skill = home.appendingPathComponent(".claude/skills/aloud-voice/SKILL.md")
+        let skill = home.appendingPathComponent(".claude/skills/aloud-agent-speak/SKILL.md")
         try FileManager.default.removeItem(at: skill)
 
         AgentAutoInstall.runIfNeeded(settings: settings, defaults: defaults,
@@ -96,7 +106,7 @@ final class AgentAutoInstallTriggerTests: XCTestCase {
         AgentAutoInstall.runIfNeeded(settings: settings, defaults: defaults,
                                      version: "1.2.3", installer: installer())
         try FileManager.default.removeItem(
-            at: home.appendingPathComponent(".claude/skills/aloud-voice/SKILL.md"))
+            at: home.appendingPathComponent(".claude/skills/aloud-agent-speak/SKILL.md"))
 
         AgentAutoInstall.runIfNeeded(settings: settings, defaults: defaults,
                                      version: "1.3.0", installer: installer())
@@ -111,7 +121,7 @@ final class AgentAutoInstallTriggerTests: XCTestCase {
         AgentAutoInstall.runIfNeeded(settings: settings, defaults: defaults,
                                      version: "1.2.3", installer: installer())
         try FileManager.default.removeItem(
-            at: home.appendingPathComponent(".claude/skills/aloud-voice/SKILL.md"))
+            at: home.appendingPathComponent(".claude/skills/aloud-agent-speak/SKILL.md"))
 
         AgentAutoInstall.runAfterOnboarding(settings: settings, defaults: defaults,
                                             version: "1.2.3", installer: installer())

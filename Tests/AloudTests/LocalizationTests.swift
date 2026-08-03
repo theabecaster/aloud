@@ -15,7 +15,6 @@ final class LocalizationTests: XCTestCase {
         // and it is what tells someone a decision is being asked of them — a
         // silent fallback to English is a non-English user not knowing to
         // answer at all.
-        "Let an agent listen? Yes or no",
         "Let %@ agent listen? Yes or no",
         // Settings → Agents and the onboarding opt-in. Agent Speak hands local
         // processes the mic and the speakers, so the screens that say so — and
@@ -83,9 +82,6 @@ final class LocalizationTests: XCTestCase {
         // The pill while an agent has the mic: who is asking, the two answers,
         // and what each phase means. Heard through VoiceOver as often as it is
         // read, and it is the only surface up while the mic is open.
-        "An agent",
-        "An agent wants to listen",
-        "%@ wants to listen",
         "Accept — or press the Aloud hotkey",
         "Decline — or press Esc",
         "Waiting for your answer",
@@ -147,35 +143,49 @@ final class LocalizationTests: XCTestCase {
     // work alone — the consent modes, a settings subtitle, a toggle footer —
     // and once before it, when "Play sound effects" was renamed and the new
     // label never localized. This walks the sources instead of a list.
-    func testEveryLocalizedLiteralInTheSourcesHasAnEnglishEntry() throws {
+    // Every shipped language, not just English.
+    //
+    // Pointed at `en` alone this guard could not see the failure it was written
+    // for: adding a `loc()` call *and* its English entry, and forgetting the
+    // other four, left the suite green while de, es, fr and pt-BR rendered
+    // English. The tables happen to agree today — checked, all five — so this
+    // closes the gap before it costs another release rather than after.
+    func testEveryLocalizedLiteralInTheSourcesHasAnEntryInEveryLanguage() throws {
         let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()      // AloudTests
             .deletingLastPathComponent()      // Tests
             .deletingLastPathComponent()      // package root
             .appendingPathComponent("Sources/Aloud")
 
-        let bundle = try table(for: "en")
-        var missing: [String] = []
-        var checked = 0
-
         let files = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" } ?? []
 
+        var literals: [(file: String, key: String)] = []
         for file in files {
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
             for key in Self.localizedLiterals(in: text) {
-                checked += 1
-                let value = bundle.localizedString(forKey: key, value: missingMarker, table: nil)
+                literals.append((file.lastPathComponent, key))
+            }
+        }
+
+        XCTAssertGreaterThan(literals.count, 100,
+                             "the scanner found almost nothing — it is probably broken")
+
+        var missing: [String] = []
+        for language in Self.languages {
+            let bundle = try table(for: language)
+            for literal in literals {
+                let value = bundle.localizedString(forKey: literal.key, value: missingMarker,
+                                                   table: nil)
                 if value == missingMarker {
-                    missing.append("\(file.lastPathComponent): \"\(key)\"")
+                    missing.append("\(language)/\(literal.file): \"\(literal.key)\"")
                 }
             }
         }
 
-        XCTAssertGreaterThan(checked, 100, "the scanner found almost nothing — it is probably broken")
         XCTAssertTrue(missing.isEmpty,
-                      "loc() calls with no en.lproj entry:\n" + missing.sorted().joined(separator: "\n"))
+                      "loc() calls with no entry:\n" + missing.sorted().joined(separator: "\n"))
     }
 
     // Only literal loc("…") calls. Keys built from variables (Section.title
@@ -235,12 +245,43 @@ final class LocalizationTests: XCTestCase {
         }
     }
 
+    // The wording of the spoken consent prompt, held where the English table
+    // can be loaded by name rather than through the process locale.
+    //
+    // It asks for "yes or no" rather than "accept or decline" because those are
+    // the words the recognizer can actually hear: measured on the shipping
+    // engine, a spoken "accept" came back as "Except for the same thing", while
+    // the same voice saying "yes" transcribed as "Yes." every time. So the
+    // question a user is asked out loud may not drift back to a word we cannot
+    // hear the answer to — which is a fact about this string, not about
+    // whichever language the developer's Mac happens to prefer.
+    func testTheSpokenConsentPromptAsksForAWordTheRecognizerCanHear() throws {
+        let english = try table(for: "en")
+        let format = english.localizedString(forKey: "Let %@ agent listen? Yes or no",
+                                             value: missingMarker, table: nil)
+        XCTAssertNotEqual(format, missingMarker)
+        let asked = String(format: format, "fixing tests")
+        XCTAssertTrue(asked.lowercased().contains("yes or no"), asked)
+        XCTAssertTrue(asked.contains("fixing tests"), asked)
+        XCTAssertFalse(asked.contains("%@"), asked)
+        // The words the matcher treats as consent have to include the one the
+        // prompt asks for, in every language the prompt is spoken in.
+        for language in Self.languages {
+            let localized = try table(for: language)
+                .localizedString(forKey: "Let %@ agent listen? Yes or no",
+                                 value: missingMarker, table: nil)
+            XCTAssertNotEqual(localized, missingMarker, language)
+            XCTAssertTrue(localized.contains("%@"),
+                          "\(language): the session's name has nowhere to go")
+        }
+    }
+
     func testFormatKeysProduceFormattedStrings() throws {
         for language in Self.languages {
             let bundle = try table(for: language)
             let hold = bundle.localizedString(forKey: "Hold %@ to dictate", value: missingMarker, table: nil)
             XCTAssertTrue(String(format: hold, "⌥").contains("⌥"), language)
-            let percent = bundle.localizedString(forKey: "Improving accuracy… %ld%%",
+            let percent = bundle.localizedString(forKey: "Downloading voice recognition… %ld%%",
                                                  value: missingMarker, table: nil)
             let formatted = String(format: percent, 42)
             XCTAssertTrue(formatted.contains("42"), language)
@@ -267,6 +308,6 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(loc("Quit Aloud").isEmpty, false)
         XCTAssertFalse(loc("Hold %@ to dictate", "⌥").isEmpty)
         // The helper must never echo an unresolved format key to the UI.
-        XCTAssertFalse(loc("Improving accuracy… %ld%%", 50).contains("%ld"))
+        XCTAssertFalse(loc("Downloading voice recognition… %ld%%", 50).contains("%ld"))
     }
 }

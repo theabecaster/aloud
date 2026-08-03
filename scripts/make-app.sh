@@ -81,7 +81,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Aloud uses the microphone to hear what you say while you hold the dictation key. Audio never leaves your Mac.</string>
+  <string>Aloud uses the microphone to hear what you say — while you hold the dictation key, and when a coding agent on this Mac asks you a question. Audio never leaves your Mac.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Aloud can use your Mac’s built-in dictation as a temporary option while its own voice recognition finishes setting up. Audio never leaves your Mac.</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
@@ -91,10 +91,30 @@ PLIST
 
 # Hard gate: every language shipped in the source tree must have made it
 # into the staged app, or that language silently falls back to English.
+#
+# SPM lowercases .lproj directory names when it copies resources (pt-BR.lproj
+# becomes pt-br.lproj), so both spellings count as present. Testing only the
+# declared casing passes on a case-insensitive APFS volume and fails the
+# release build on a case-sensitive one, for a language that is right there.
+BUNDLE="$APP/Contents/Resources/Aloud_Aloud.bundle"
 for lproj in Sources/Aloud/Resources/*.lproj; do
   lang="$(basename "$lproj" .lproj)"
-  if [ ! -f "$APP/Contents/Resources/Aloud_Aloud.bundle/$lang.lproj/Localizable.strings" ]; then
+  lower="$(printf '%s' "$lang" | tr '[:upper:]' '[:lower:]')"
+  if [ ! -f "$BUNDLE/$lang.lproj/Localizable.strings" ] \
+     && [ ! -f "$BUNDLE/$lower.lproj/Localizable.strings" ]; then
     echo "error: $lang localization missing from $APP" >&2
+    exit 1
+  fi
+done
+
+# Hard gate: the sound cues. A cue that stops being copied is a silent app
+# with a green build and a green --selftest — nothing else notices. Note
+# .process("Resources") flattens the tree, so Sounds/foo.wav lands at the
+# bundle root rather than in a Sounds/ subdirectory.
+for cue in Sources/Aloud/Resources/Sounds/*.wav; do
+  name="$(basename "$cue")"
+  if [ ! -f "$BUNDLE/$name" ]; then
+    echo "error: sound cue $name missing from $APP" >&2
     exit 1
   fi
 done

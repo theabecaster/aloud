@@ -44,6 +44,9 @@ final class DictationController: ObservableObject {
     // An agent-initiated capture. Kept distinct from a command session so
     // every existing guard that asks "is this a dictation?" still answers no.
     private var isAgentSession = false
+    // The tail of an agent's turn: capture over, but transcription and the
+    // reveal still running under the agent's phase rather than the user's.
+    private var agentTurnSettling = false
     // The hotkey during an agent listen is the manual "done" (§7.2): nobody
     // is holding a key in an agent session, so the press is the one gesture
     // the user has to end the turn deliberately instead of waiting out the
@@ -455,7 +458,7 @@ final class DictationController: ObservableObject {
         // cold machine — and paying that inside the first `speak` means an
         // agent asks its question into that much silence. Only the chosen
         // side, so one voice is resident rather than two.
-        EnhancedVoices.shared.warm(settings.agentVoiceGender)
+        EnhancedVoices.shared.warm(settings.agentVoiceGender, chosen: true)
     }
 
     private func reportSetup(progress: Double) {
@@ -1897,6 +1900,19 @@ final class DictationController: ObservableObject {
             throw error
         }
 
+        // The consent boundary, enforced here rather than assumed.
+        //
+        // Nothing recorded before the user said yes may reach the agent. That
+        // has always been true in practice — accepting the prompt stops the
+        // consent capture before this opens a fresh one — but nothing checked
+        // it, so it held by the order two functions happened to run in. If a
+        // capture is somehow older than the grant it is carrying audio from
+        // before the decision, including whatever the confirm-by-voice prompt
+        // heard, and that audio is dropped rather than transcribed.
+        if let began = recorder.captureStartedAt, began < consentGranted {
+            recorder.discardBuffered(keepingLast: 0)
+        }
+
         // A preview, for the pill only. An agent session types nothing into the
         // focused app, so this is the sole place the user can see they are being
         // heard (§7.1d) — and the blocking listen, which is the documented
@@ -2025,6 +2041,10 @@ final class DictationController: ObservableObject {
         }
         stopSpeechActivity()
         isAgentSession = false
+        // Everything from here to `phase = .idle` is still the agent's turn,
+        // even though its capture has ended.
+        agentTurnSettling = true
+        defer { agentTurnSettling = false }
 
         guard Double(samples.count) / AudioRecorder.targetSampleRate >= 0.35 else {
             indicator.hide()
@@ -2335,6 +2355,16 @@ final class DictationController: ObservableObject {
         // said anything, and an agent watching `silentFor` can end the turn
         // before the user could plausibly have begun.
         try? await Task.sleep(nanoseconds: UInt64(AgentListen.cueGuard * 1_000_000_000))
+        // The same check this function already makes after opening the
+        // microphone, repeated after the cue guard — the only other place it
+        // suspends. A release, a force-release or the sweep landing in that
+        // gap tears the session down, and resuming here re-armed the detector
+        // on a stopped recorder, wired a pump to a cancelled stream, and handed
+        // the agent a session id whose every later poll could only answer busy.
+        guard agentPoll === session else {
+            _ = recorder.stop()
+            throw AgentListenError.busy
+        }
         startSpeechActivity()
 
         session.pump = Task { [weak self] in
@@ -2431,7 +2461,15 @@ extension DictationController: AgentVoiceHost {
     // sits at `.recording`. The service reads this before it puts a consent
     // prompt on the hotkey.
     var userDictationInProgress: Bool {
-        !isAgentSession && (phase == .recording || phase == .transcribing)
+        // `agentTurnSettling` covers the gap between an agent's capture ending
+        // and its phase returning to idle — transcription, the cleanup pass and
+        // the reveal animation, a couple of seconds in all. `isAgentSession` is
+        // already false through that window while `phase` is still
+        // `.transcribing`, so without it an agent's own turn read as a user
+        // dictation: a second agent claiming right then was told "the user is
+        // dictating", lost its queue position, and the person at the Mac — who
+        // was not dictating — got the waiting chime and a bubble about it.
+        !isAgentSession && !agentTurnSettling && (phase == .recording || phase == .transcribing)
     }
 
     // Called on a beat for as long as the wait lasts, so the cue is gated on
@@ -2591,7 +2629,26 @@ extension DictationController: AgentVoiceHost {
         // preview in Settings, and a session ending must not cut a sample
         // somebody is listening to.
         if agentSpeaking { agentSpeaker.stop() }
+        // The blocking listen's capture is closed here rather than left to its
+        // own poll to notice.
+        //
+        // It checks `isAgentSession` once every 100 ms, so clearing the flag and
+        // freeing the phase released the *state* immediately while the recorder
+        // stayed open for up to a tenth of a second longer. A hotkey press in
+        // that window passed `beginRecording`'s idle guard, and `startAsync`
+        // short-circuits on an already-running recorder — so the user's new
+        // dictation silently adopted the agent's open capture and its buffered
+        // audio. The agent's loop then woke, saw the session gone, and called
+        // `stop()` on what had become the user's session, which then had its
+        // phase overwritten out from under it. Releasing both together is what
+        // closes that window; the loop's own check still ends it cleanly.
+        let wasCapturing = isAgentSession
         isAgentSession = false
+        if wasCapturing, agentPoll == nil, phase == .recording {
+            recorder.onChunk = nil
+            _ = recorder.stop()
+            stopSpeechActivity()
+        }
         guard hadAgentActivity else { return }
         indicator.hide()
         if phase == .recording { phase = .idle }

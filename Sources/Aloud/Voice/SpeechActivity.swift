@@ -72,11 +72,27 @@ final class SpeechActivity: @unchecked Sendable {
     }
 
     // Safe to call from the audio tap thread.
+    //
+    // Trimmed here as well as in `nextFrame`, because the drain is not
+    // guaranteed to be running. When the speech detector never loaded — an
+    // offline first launch, where the download is tried once per process — the
+    // pump returns immediately and `nextFrame`, the only other place that
+    // bounds this, is never reached. The tap keeps feeding it regardless, so a
+    // hands-free session or a ten-minute agent hold accumulated every sample it
+    // ever heard: about 38 MB for ten minutes, in an app that stays running for
+    // weeks. A backlog is stale by definition here — this answers a question
+    // about *now* — so dropping the oldest costs nothing.
     func append(samples: [Float]) {
         lock.lock()
         pending.append(contentsOf: samples)
+        if pending.count > Self.maxPending {
+            pending.removeFirst(pending.count - Self.maxPending)
+        }
         lock.unlock()
     }
+
+    // ~2 s at 16 kHz, the same ceiling `nextFrame` applies.
+    private static let maxPending = VadManager.chunkSize * 8
 
     private func run(detector: VadManager) async {
         markRunning()

@@ -1,2 +1,2 @@
-"NSMicrophoneUsageDescription" = "O Aloud usa o microfone para ouvir o que você diz enquanto segura a tecla de ditado. O áudio nunca sai do seu Mac.";
+"NSMicrophoneUsageDescription" = "O Aloud usa o microfone para ouvir o que você diz — enquanto você segura a tecla de ditado e quando um agente de programação neste Mac faz uma pergunta. O áudio nunca sai do seu Mac.";
 "NSSpeechRecognitionUsageDescription" = "O Aloud pode usar o ditado integrado do seu Mac como opção temporária enquanto o próprio reconhecimento de voz termina de ser configurado. O áudio nunca sai do seu Mac.";

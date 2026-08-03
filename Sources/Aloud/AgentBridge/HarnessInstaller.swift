@@ -267,18 +267,18 @@ enum AgentHarness: String, CaseIterable, Codable {
     // repo-relative for the per-project pair.
     var instructionPath: String {
         switch self {
-        case .claudeCode: return ".claude/skills/aloud-voice/SKILL.md"
+        case .claudeCode: return ".claude/skills/aloud-agent-speak/SKILL.md"
         case .codex: return ".codex/AGENTS.md"
-        case .cursor: return ".cursor/skills/aloud-voice/SKILL.md"
+        case .cursor: return ".cursor/skills/aloud-agent-speak/SKILL.md"
         case .copilot: return ".github/copilot-instructions.md"
         // OpenCode also scans ~/.claude/skills and ~/.agents/skills, so a Mac
         // with both Claude Code and OpenCode installed will have two skills
-        // named aloud-voice and OpenCode will log a duplicate-name warning.
+        // named aloud-agent-speak and OpenCode will log a duplicate-name warning.
         // Harmless — the bodies are identical apart from `--harness`, and that
         // flag is a label rather than authentication (§7.1c) — but it is the
         // reason not to be surprised by the warning.
-        case .opencode: return ".opencode/skills/aloud-voice/SKILL.md"
-        case .pi: return ".pi/agent/skills/aloud-voice/SKILL.md"
+        case .opencode: return ".opencode/skills/aloud-agent-speak/SKILL.md"
+        case .pi: return ".pi/agent/skills/aloud-agent-speak/SKILL.md"
         // Documentation-derived, unverified against a live install: OpenClaw's
         // managed skill root is <state-dir>/skills and the state dir defaults
         // to ~/.openclaw. Its higher-precedence roots are the workspace and
@@ -287,7 +287,7 @@ enum AgentHarness: String, CaseIterable, Codable {
         // that has adopted the convention — writing there would install one
         // file that several harnesses each read under a different `--harness`
         // id, which the id is not equipped to describe.
-        case .openclaw: return ".openclaw/skills/aloud-voice/SKILL.md"
+        case .openclaw: return ".openclaw/skills/aloud-agent-speak/SKILL.md"
         // Documentation-derived, unverified against a live install: Hermes
         // resolves <HERMES_HOME>/skills, HERMES_HOME defaults to ~/.hermes, and
         // a skill is <skills dir>/<name>/SKILL.md. Named profiles get their own
@@ -295,7 +295,7 @@ enum AgentHarness: String, CaseIterable, Codable {
         // directory, so a user who works inside a non-default profile will not
         // see this skill. Nothing here can fix that without enumerating
         // profiles, which is more than a row in a table.
-        case .hermes: return ".hermes/skills/aloud-voice/SKILL.md"
+        case .hermes: return ".hermes/skills/aloud-agent-speak/SKILL.md"
         }
     }
 }
@@ -354,8 +354,14 @@ enum HarnessInstallError: LocalizedError, Equatable {
 // the same words; only the wrapper (frontmatter, heading level) differs. Five
 // harness-specific copies of this text would drift within a release.
 enum AgentVoiceInstructions {
-    static let markerStart = "<!-- aloud-voice:start -->"
-    static let markerEnd = "<!-- aloud-voice:end -->"
+    // What the skill is called wherever a harness lists it, and the name the
+    // user sees next to it. Matches what the app calls the feature — the two
+    // said different things, and the one the user reads in Settings is the one
+    // that had to win.
+    static let skillDirectory = "aloud-agent-speak"
+
+    static let markerStart = "<!-- aloud-agent-speak:start -->"
+    static let markerEnd = "<!-- aloud-agent-speak:end -->"
 
     // "Agent Speak" is the product name for this capability, and it belongs in
     // every word the user or the agent reads. The CLI verbs below are the wire
@@ -388,7 +394,13 @@ enum AgentVoiceInstructions {
     // The verbs a distributed build exposes (CLI.swift). Also the verbs Claude
     // Code's allowlist has to cover, which is why they live next to the text
     // that teaches them rather than in the installer.
-    static let verbs = ["ask", "wait", "claim", "listen", "speak", "release"]
+    // Kept in step with `BridgeOperation` by a test, because it drifted:
+    // `status` shipped, the skill file teaches it by name and shows the command
+    // to run, and it was missing from here — so the allowlist written for the
+    // user covered six of the seven verbs, and the first `status` an agent ran
+    // stopped for a permission prompt. In the one feature whose whole premise
+    // is not having to touch the keyboard.
+    static let verbs = ["ask", "wait", "claim", "listen", "speak", "release", "status"]
 
     // What every Aloud before `ask` put in front of a user. A machine whose
     // allowlist we have written but whose *offered* set we never recorded was
@@ -634,7 +646,7 @@ enum AgentVoiceInstructions {
         \#(command) speak  --lease L1 "Which of the two should I take first?"
         \#(command) listen --start --lease L1        # {"ok":true,"session":"S1","v":1}
         \#(command) listen --poll  --lease L1 --session S1 --wait 5
-        # {"ok":true,"silentFor":0.4,"speaking":true,"text":"…","v":1}
+        # {"ok":true,"session":"S1","silentFor":0.4,"speaking":true,"text":"…","v":1}
         \#(command) listen --stop  --lease L1 --session S1
         ```
 
@@ -666,7 +678,7 @@ enum AgentVoiceInstructions {
     static func skillFile(harness: AgentHarness, command: String) -> String {
         let frontmatter = """
         ---
-        name: aloud-voice
+        name: aloud-agent-speak
         description: \(summary)
         ---
         """
@@ -685,8 +697,8 @@ enum AgentVoiceInstructions {
     // instructions and the two are installed and removed independently: one
     // marker for both would make a note in ~/.claude/CLAUDE.md look like a
     // damaged instructions block in ~/.claude/skills/…/SKILL.md.
-    static let noteMarkerStart = "<!-- aloud-voice-note:start -->"
-    static let noteMarkerEnd = "<!-- aloud-voice-note:end -->"
+    static let noteMarkerStart = "<!-- aloud-agent-speak-note:start -->"
+    static let noteMarkerEnd = "<!-- aloud-agent-speak-note:end -->"
 
     // Three sentences at most, and they have to earn their place in a file the
     // user wrote for themselves. So: what is available, when to reach for it,
@@ -727,7 +739,7 @@ enum AgentVoiceInstructions {
         question to a sentence or two. If it comes back `"ok":false`, that is a \
         normal answer — ask in text and carry on, never retry in a loop. Full \
         details, including follow-up questions in the same session, are in the \
-        `aloud-voice` skill.
+        `aloud-agent-speak` skill.
         """
     }
 
@@ -861,7 +873,10 @@ struct HarnessInstaller {
     // refresh is really for.
     @discardableResult
     func refreshInstalled() -> [AgentHarness] {
-        AgentHarness.allCases.filter { harness in
+        // Before anything is refreshed, so an install written under the old
+        // name is gone rather than sitting beside the new one.
+        removeLegacyNamedInstalls()
+        return AgentHarness.allCases.filter { harness in
             guard harness.scope == .global, isInstalled(harness) else { return false }
             guard case .installed(let changed)? = try? install(harness, permissions: .migrate)
             else { return false }
@@ -1115,6 +1130,61 @@ struct HarnessInstaller {
                 try write(data, to: allowlist)
             }
             removeBackup(of: allowlist)
+        }
+    }
+
+    // MARK: - the old name
+
+    // What Aloud called this before it was called Agent Speak.
+    //
+    // The skill, the marker around the block in an AGENTS.md, and the note in a
+    // CLAUDE.md all carried `aloud-voice` while the app itself said "Agent
+    // Speak" everywhere the user could see. Renaming without this would leave
+    // every existing install carrying both: a stale `aloud-voice` skill
+    // teaching the same seven verbs beside the new one, and a duplicated block
+    // in files the user has open every day. So the old name is not just
+    // replaced, it is cleaned up — once, quietly, on the first launch after the
+    // update.
+    enum LegacyNames {
+        static let skillDirectory = "aloud-voice"
+        static let markerStart = "<!-- aloud-voice:start -->"
+        static let markerEnd = "<!-- aloud-voice:end -->"
+        static let noteMarkerStart = "<!-- aloud-voice-note:start -->"
+        static let noteMarkerEnd = "<!-- aloud-voice-note:end -->"
+    }
+
+    // Take out anything an earlier Aloud installed under the old name. Guarded
+    // by the old marker exactly as the uninstaller is: a file that happens to
+    // share the name but was not written by us is not ours to remove.
+    func removeLegacyNamedInstalls() {
+        for harness in AgentHarness.allCases {
+            let path = harness.instructionPath
+            let legacy = path.replacingOccurrences(
+                of: "skills/\(AgentVoiceInstructions.skillDirectory)/",
+                with: "skills/\(LegacyNames.skillDirectory)/")
+            if legacy != path {
+                removeLegacySkill(at: home.appendingPathComponent(legacy))
+            } else if harness.mechanism == .appendedBlock {
+                try? removeBlock(from: home.appendingPathComponent(path),
+                                 start: LegacyNames.markerStart,
+                                 end: LegacyNames.markerEnd)
+            }
+            if let note = harness.globalNotePath {
+                try? removeBlock(from: home.appendingPathComponent(note),
+                                 start: LegacyNames.noteMarkerStart,
+                                 end: LegacyNames.noteMarkerEnd)
+            }
+        }
+    }
+
+    private func removeLegacySkill(at skill: URL) {
+        guard let text = try? String(contentsOf: skill, encoding: .utf8),
+              text.contains(LegacyNames.markerStart) else { return }
+        try? fm.removeItem(at: skill)
+        removeBackup(of: skill)
+        let dir = skill.deletingLastPathComponent()
+        if (try? fm.contentsOfDirectory(atPath: dir.path))?.isEmpty == true {
+            try? fm.removeItem(at: dir)
         }
     }
 

@@ -65,15 +65,26 @@ final class CLIArgumentTests: XCTestCase {
                        "Shall I tag it — or wait for review?")
     }
 
-    // The known limitation, pinned rather than left to be rediscovered: a
-    // positional is anything not starting with `--`, so text that *does* start
-    // with `--` is read as a flag and never found. Nothing an agent asks a
-    // person out loud begins that way, and the alternatives all cost more than
-    // they buy — a `--` terminator the instructions would have to teach, or a
-    // shape test that would start guessing at the user's own words. Written
-    // down so the next person meets a decision rather than a bug.
-    func testTextBeginningWithDashesIsReadAsAFlagAndNotFound() {
-        XCTAssertNil(CLI.firstPositional(after: 1, in: ["speak", "--lease", "L1", "--odd"]))
+    // The limitation this used to pin is gone. Skipping anything that merely
+    // looked like a flag — and the word after it — made a whole class of
+    // perfectly ordinary questions unreachable: "--wait or ship it?" was read
+    // as a flag, skipped along with the next word, and the call came back
+    // "usage:" as though no text had been passed. Only the flags that actually
+    // exist are skipped now, which is the rule `value(of:)` has always used.
+    func testTextBeginningWithDashesIsStillTheCallersOwnWords() {
+        XCTAssertEqual(CLI.firstPositional(after: 1, in: ["speak", "--lease", "L1", "--odd"]),
+                       "--odd")
+        XCTAssertEqual(CLI.firstPositional(after: 1,
+                                           in: ["ask", "--harness", "claude-code",
+                                                "--wait for review, or ship it?"]),
+                       "--wait for review, or ship it?")
+    }
+
+    // The conventional escape hatch, for the one case the rule above cannot
+    // cover: text that is character-for-character a flag Aloud does know.
+    func testDoubleDashEndsTheOptionsAndHandsBackWhateverFollows() {
+        XCTAssertEqual(CLI.firstPositional(after: 1, in: ["speak", "--lease", "L1", "--", "--wait"]),
+                       "--wait")
     }
 
     // Every ordering the instructions could plausibly be copied into. The text

@@ -81,7 +81,15 @@ final class ConsentPolicyTests: XCTestCase {
         // Capture starts with the prompt so the answer is not clipped — and the
         // type says what that audio is for, and only that.
         XCTAssertEqual(prompt.capture, .forConsentOnly)
-        XCTAssertTrue(prompt.text.contains("Yes or no"), prompt.text)
+        // Compared against the builder rather than against English words. The
+        // prompt is localized and `loc()` reads the process bundle's language,
+        // which nothing here injects — so a developer whose Mac prefers Spanish
+        // failed this line for having their Mac set up the way they like it.
+        // That the wording asks for "yes or no" is a fact about the en table
+        // and is held in LocalizationTests, where the table is loaded
+        // explicitly.
+        XCTAssertEqual(prompt.text, ConsentPolicy.promptText(sessionName: "fixing tests"))
+        XCTAssertFalse(prompt.text.contains("%@"), "the format argument must be substituted")
 
         let at = t0.addingTimeInterval(2)
         guard case .accepted(let grant, let audio) = p.heard("yes", lease: "L1", now: at) else {
@@ -338,9 +346,12 @@ final class ConsentPolicyTests: XCTestCase {
         let text = ConsentPolicy.promptText(sessionName: "fixing tests")
         XCTAssertTrue(text.contains("fixing tests"), text)
         XCTAssertFalse(text.contains("%@"), "the format argument must be substituted")
-        // And in words the recognizer can hear — see promptText for why this is
-        // "yes or no" rather than "accept or decline".
-        XCTAssertTrue(text.contains("Yes or no"), text)
+        // What the words themselves are — "yes or no" rather than "accept or
+        // decline", because those are the ones the recognizer can hear — is a
+        // claim about the English table, and it is held in LocalizationTests
+        // where that table is loaded by name. Asserting it here read the
+        // process bundle's language instead, so the test failed for anyone
+        // whose Mac prefers something other than English.
     }
 
     // The prompt the pill and the voice both use is built at request time, so

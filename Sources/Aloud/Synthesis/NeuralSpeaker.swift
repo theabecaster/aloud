@@ -165,7 +165,37 @@ final class NeuralSpeaker: Speaker {
     }
 
     func speak(_ text: String) async throws {
-        try await player.play(try await synthesize(text))
+        // Synthesis on this engine takes seconds, and `stop()` during it had
+        // nothing to stop: the player was not playing yet, so `node.stop()` was
+        // a no-op and nothing recorded that a stop had happened. The buffer
+        // then played anyway — so ending an agent session took the pill down
+        // and the Mac read out the question of the session the user had just
+        // ended, a second later, with nothing on screen to explain it.
+        let mine = beginUtterance()
+        let speech = try await synthesize(text)
+        guard isCurrent(mine) else { return }
+        try await player.play(speech)
+    }
+
+    // Bumped by every new utterance and by every stop, so "is the utterance I
+    // started still the one that is wanted" has an answer across an await.
+    private let utteranceLock = NSLock()
+    private var utteranceRun = 0
+
+    private func beginUtterance() -> Int {
+        utteranceLock.lock(); defer { utteranceLock.unlock() }
+        utteranceRun += 1
+        return utteranceRun
+    }
+
+    private func isCurrent(_ run: Int) -> Bool {
+        utteranceLock.lock(); defer { utteranceLock.unlock() }
+        return run == utteranceRun
+    }
+
+    private func cancelUtterance() {
+        utteranceLock.lock(); defer { utteranceLock.unlock() }
+        utteranceRun += 1
     }
 
     // Everything on its default placement except the one stage that cannot
@@ -189,7 +219,10 @@ final class NeuralSpeaker: Speaker {
         return Supertonic3Constants.availableLanguages.contains(code) ? code : "en"
     }
 
-    func stop() { player.stop() }
+    func stop() {
+        cancelUtterance()
+        player.stop()
+    }
 
     var currentLevel: Float { player.currentLevel }
 

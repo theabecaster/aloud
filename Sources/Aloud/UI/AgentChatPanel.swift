@@ -236,7 +236,18 @@ struct AgentChatPanel: View {
                     .offset(x: -6, y: -4)
             }
         }
-        .matchedGeometryEffect(id: Self.sendID, in: sendNamespace)
+        // Never the source. At the moment of the send two live views wear this
+        // identity — the bubble that has just been appended and this composer
+        // on its way out — and two sources for one id is undefined, which here
+        // showed up as a bubble that jumps. The bubble is the one that stays,
+        // so it is the source and the composer follows it up into the thread,
+        // which is the motion the send is drawn to make. Unconditional on
+        // purpose: a departing view keeps whatever value it last rendered
+        // with, so a flag flipped in the same update as the removal would
+        // arrive too late to hand the source over. While the composer is alone
+        // — no send has happened yet — the group has no source at all, and a
+        // follower without one simply keeps its own place.
+        .matchedGeometryEffect(id: Self.sendID, in: sendNamespace, isSource: false)
         // It rises into place under the conversation when the microphone opens,
         // and leaves upward at the moment of the send, into the space the new
         // bubble is arriving in. Both directions travel the same axis, so the
@@ -368,6 +379,6 @@ private struct TokenSavingCoin: View {
             withAnimation(.easeIn(duration: 0.45).delay(1.0)) { faded = true }
         }
         .allowsHitTesting(false)
-        .accessibilityLabel(loc("Saved about %d tokens", saving.tokens))
+        .accessibilityLabel(loc("Saved about %ld tokens", saving.tokens))
     }
 }

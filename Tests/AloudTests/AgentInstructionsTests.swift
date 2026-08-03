@@ -78,19 +78,34 @@ final class AgentInstructionsTests: XCTestCase {
     func testEveryExampleIsWrittenTheWayTheAppEncodesIt() throws {
         for example in examples(in: text) + examples(in: note) {
             let data = try XCTUnwrap(example.data(using: .utf8))
-            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-            // Keys, not the whole string: re-encoding a Double here would
-            // print 0.4 as 0.40000000000000002, which says something about
-            // JSONSerialization and nothing about the instructions.
-            let shown = object.keys.sorted()
-            let written = example
-                .dropFirst().dropLast()          // the braces
-                .split(separator: ",")
-                .compactMap { $0.split(separator: ":").first }
-                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"")) }
-            XCTAssertEqual(written, shown,
+            // Round-tripped through the app's own codec, so the order compared
+            // against is the order the socket really emits.
+            //
+            // This used to derive both sides from the same literal — a
+            // JSONSerialization parse of the example against a text split of
+            // the example — which only ever proved that one hand-written string
+            // was alphabetical. `BridgeCodec`'s `.sortedKeys` could have been
+            // deleted outright and it stayed green, while every agent reading
+            // these examples was taught a wire format that no longer arrived.
+            let response = try BridgeCodec.decode(BridgeResponse.self, from: data)
+            let reencoded = try BridgeCodec.encode(response)
+            let emitted = try XCTUnwrap(String(data: reencoded, encoding: .utf8))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            XCTAssertEqual(keyOrder(of: example), keyOrder(of: emitted),
                            "example is not in the app's own key order: \(example)")
         }
+    }
+
+    // The keys in the order they appear on the wire. Keys only, not the whole
+    // string: a Double re-encoded here prints 0.4 as 0.40000000000000002, which
+    // says something about JSON encoders and nothing about the instructions.
+    private func keyOrder(of json: String) -> [String] {
+        json
+            .dropFirst().dropLast()          // the braces
+            .split(separator: ",")
+            .compactMap { $0.split(separator: ":").first }
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\" ")) }
     }
 
     // Flags the instructions teach have to be flags the CLI reads. A typo here

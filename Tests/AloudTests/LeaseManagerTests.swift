@@ -24,7 +24,7 @@ final class LeaseManagerTests: XCTestCase {
 
     func testFirstClaimIsGranted() {
         let m = manager()
-        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("first claim should be granted")
         }
         XCTAssertFalse(id.isEmpty)
@@ -33,8 +33,8 @@ final class LeaseManagerTests: XCTestCase {
 
     func testSecondHarnessQueuesBehindTheHolder() {
         let m = manager()
-        _ = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0)
-        let result = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0)
+        _ = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0)
+        let result = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0)
         XCTAssertEqual(result, .queued(position: 1, reason: .busy(holder: "claude-code")))
     }
 
@@ -42,17 +42,17 @@ final class LeaseManagerTests: XCTestCase {
     // hand them a second lease, nor a second place in the queue.
     func testReclaimingIsIdempotentForHolderAndQueue() {
         let m = manager()
-        guard case .granted(let first) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let first) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("expected grant")
         }
-        guard case .granted(let again) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let again) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("holder re-claiming should get its own lease back")
         }
         XCTAssertEqual(first, again)
 
-        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0)
-        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0)
-        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0)
+        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0)
+        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0)
+        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0)
         XCTAssertEqual(m.queue.count, 1, "re-claiming must not stack duplicate queue entries")
     }
 
@@ -68,14 +68,20 @@ final class LeaseManagerTests: XCTestCase {
     func testAnonymousSecondSessionQueuesInsteadOfInheritingTheLease() {
         let m = manager()
         guard case .granted(let first) = m.claim(harness: "claude-code", pid: LeaseManager.noOwnerPid,
-                                                 name: "fixing tests", now: t0) else {
+                                                 name: "fixing tests", ownerVerified: true,
+                                                 now: t0) else {
             return XCTFail("expected grant")
         }
-        let second = m.claim(harness: "claude-code", pid: LeaseManager.noOwnerPid, name: "fixing tests", now: t0)
+        let second = m.claim(harness: "claude-code", pid: LeaseManager.noOwnerPid, name: "fixing tests", ownerVerified: true, now: t0)
         XCTAssertEqual(second, .queued(position: 1, reason: .busy(holder: "claude-code")),
                        "a second anonymous session must wait its turn")
+        // Stated as a failure rather than as an assertion inside the branch:
+        // the line above has already established `second` is `.queued`, so a
+        // `.granted` body could only ever run when the test was failing anyway
+        // — which made the check that pins the actual field-observed bug
+        // unreachable in every passing run.
         if case .granted(let id) = second {
-            XCTAssertNotEqual(id, first, "…and must never be handed the holder's lease")
+            XCTFail("a second anonymous session was handed lease \(id)")
         }
         XCTAssertEqual(m.holder?.id, first, "the original session still owns the microphone")
     }
@@ -84,20 +90,45 @@ final class LeaseManagerTests: XCTestCase {
     // collide — and the one that named itself still gets its own lease back.
     func testNamedSessionsOfTheSameHarnessAreDistinct() {
         let m = manager()
-        guard case .granted(let first) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let first) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("expected grant")
         }
-        XCTAssertEqual(m.claim(harness: "claude-code", pid: 2, name: "fixing tests", now: t0),
+        XCTAssertEqual(m.claim(harness: "claude-code", pid: 2, name: "fixing tests", ownerVerified: true, now: t0),
                        .queued(position: 1, reason: .busy(holder: "claude-code")))
-        guard case .granted(let again) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let again) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("the named holder re-claiming should get its own lease back")
         }
         XCTAssertEqual(first, again)
     }
 
+    // The harness id and the owner pid both arrive over the socket, so on their
+    // own they are a claim rather than evidence. Anybody can read a running
+    // agent's pid out of `ps`; echoing it back with that agent's harness id
+    // used to be enough to be handed the live lease — and a lease carries the
+    // user's consent, so a process holding no microphone permission of its own
+    // inherited one that did.
+    func testAnUnverifiedOwnerIsNeverHandedTheHoldersLease() {
+        let m = manager()
+        guard case .granted(let first) = m.claim(harness: "claude-code", pid: 42,
+                                                 name: "fixing tests", ownerVerified: true,
+                                                 now: t0) else {
+            return XCTFail("expected grant")
+        }
+        let impostor = m.claim(harness: "claude-code", pid: 42, name: "reading mail",
+                               ownerVerified: false, now: t0)
+        XCTAssertEqual(impostor, .queued(position: 1, reason: .busy(holder: "claude-code")),
+                       "a caller that cannot prove the pid it names must queue like anyone else")
+        if case .granted(let id) = impostor {
+            XCTFail("an unverified claimant was handed lease \(id)")
+        }
+        XCTAssertEqual(m.holder?.id, first, "the real session still owns the microphone")
+        XCTAssertEqual(m.holder?.name, "fixing tests",
+                       "and the impostor may not rename what the user is reading")
+    }
+
     func testHolderKeepsTheLeaseAcrossManyCalls() {
         let m = manager()
-        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("expected grant")
         }
         // A whole conversation: speak, listen, speak, listen…
@@ -110,7 +141,7 @@ final class LeaseManagerTests: XCTestCase {
 
     func testNonHolderIsRefused() {
         let m = manager()
-        _ = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0)
+        _ = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0)
         XCTAssertEqual(m.validate(lease: "not-a-lease", now: t0), .failure(.notHolder))
     }
 
@@ -121,17 +152,17 @@ final class LeaseManagerTests: XCTestCase {
         config.cooldown = 2
         let m = manager(config)
 
-        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("expected grant")
         }
-        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0)
+        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0)
         m.release(lease: id, now: t0)
 
         // Still cooling: the waiting agent is told why, not just "busy".
-        XCTAssertEqual(m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0.addingTimeInterval(1)),
+        XCTAssertEqual(m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0.addingTimeInterval(1)),
                        .queued(position: 1, reason: .cooldown))
 
-        guard case .granted = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0.addingTimeInterval(2.1)) else {
+        guard case .granted = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0.addingTimeInterval(2.1)) else {
             return XCTFail("codex should take over once the cooldown has passed")
         }
         XCTAssertEqual(m.holder?.harness, "codex")
@@ -140,7 +171,7 @@ final class LeaseManagerTests: XCTestCase {
 
     func testReleasingSomeoneElsesLeaseDoesNothing() {
         let m = manager()
-        _ = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0)
+        _ = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0)
         m.release(lease: "someone-elses-id", now: t0)
         XCTAssertEqual(m.holder?.harness, "claude-code")
     }
@@ -155,12 +186,12 @@ final class LeaseManagerTests: XCTestCase {
         config.cooldown = 0
         let m = manager(config)
 
-        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("expected grant")
         }
         let later = t0.addingTimeInterval(31)
         XCTAssertEqual(m.validate(lease: id, now: later), .failure(.notHolder))
-        guard case .granted = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: later) else {
+        guard case .granted = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: later) else {
             return XCTFail("an abandoned lease must not lock the microphone forever")
         }
     }
@@ -171,7 +202,7 @@ final class LeaseManagerTests: XCTestCase {
         var config = LeaseConfig.default
         config.leaseTTL = 30
         let m = manager(config)
-        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("expected grant")
         }
         for step in 1...10 {
@@ -186,7 +217,7 @@ final class LeaseManagerTests: XCTestCase {
         config.leaseTTL = 600
         config.cooldown = 0
         let m = manager(config, alive: [7])
-        _ = m.claim(harness: "claude-code", pid: 42, name: "fixing tests", now: t0)
+        _ = m.claim(harness: "claude-code", pid: 42, name: "fixing tests", ownerVerified: true, now: t0)
 
         m.reap(now: t0.addingTimeInterval(1))   // 42 is not in `alive`
         XCTAssertNil(m.holder, "a lease whose harness process died must not survive its TTL")
@@ -196,8 +227,8 @@ final class LeaseManagerTests: XCTestCase {
         var config = LeaseConfig.default
         config.queueTTL = 60
         let m = manager(config)
-        _ = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0)
-        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0)
+        _ = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0)
+        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0)
         XCTAssertEqual(m.queue.count, 1)
 
         m.reap(now: t0.addingTimeInterval(61))
@@ -211,8 +242,8 @@ final class LeaseManagerTests: XCTestCase {
         let liveness = Liveness()
         let m = LeaseManager(isAlive: { liveness.alive.contains($0) })
 
-        _ = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0)
-        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0)
+        _ = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0)
+        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0)
         XCTAssertEqual(m.queue.count, 1)
 
         liveness.alive.remove(2)
@@ -224,7 +255,7 @@ final class LeaseManagerTests: XCTestCase {
 
     func testForceReleaseTakesTheMicrophoneBack() {
         let m = manager()
-        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("expected grant")
         }
         m.forceRelease(now: t0)
@@ -234,17 +265,17 @@ final class LeaseManagerTests: XCTestCase {
 
     func testDisabledRefusesEverythingAndClearsTheQueue() {
         let m = manager()
-        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("expected grant")
         }
-        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0)
+        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0)
 
         m.disable()
         XCTAssertNil(m.holder)
         XCTAssertTrue(m.queue.isEmpty)
         // `disabled` is distinct from `denied` on purpose: it means stop asking,
         // not try again in a moment.
-        XCTAssertEqual(m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0), .disabled)
+        XCTAssertEqual(m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0), .disabled)
         XCTAssertEqual(m.validate(lease: id, now: t0), .failure(.disabled))
     }
 
@@ -254,12 +285,12 @@ final class LeaseManagerTests: XCTestCase {
         var config = LeaseConfig.default
         config.cooldown = 0
         let m = manager(config)
-        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", now: t0) else {
+        guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {
             return XCTFail("expected grant")
         }
-        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: t0.addingTimeInterval(1))
-        _ = m.claim(harness: "cursor", pid: 3, name: "fixing tests", now: t0.addingTimeInterval(2))
-        XCTAssertEqual(m.claim(harness: "cursor", pid: 3, name: "fixing tests", now: t0.addingTimeInterval(3)),
+        _ = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: t0.addingTimeInterval(1))
+        _ = m.claim(harness: "cursor", pid: 3, name: "fixing tests", ownerVerified: true, now: t0.addingTimeInterval(2))
+        XCTAssertEqual(m.claim(harness: "cursor", pid: 3, name: "fixing tests", ownerVerified: true, now: t0.addingTimeInterval(3)),
                        .queued(position: 2, reason: .busy(holder: "claude-code")))
 
         m.release(lease: id, now: t0.addingTimeInterval(4))
@@ -267,18 +298,18 @@ final class LeaseManagerTests: XCTestCase {
 
         // Cursor asks first, but codex has waited longer — granting to whoever
         // asks would starve it.
-        XCTAssertEqual(m.claim(harness: "cursor", pid: 3, name: "fixing tests", now: now),
+        XCTAssertEqual(m.claim(harness: "cursor", pid: 3, name: "fixing tests", ownerVerified: true, now: now),
                        .queued(position: 2, reason: .busy(holder: "codex")))
         XCTAssertNil(m.holder, "the lease stays idle until its rightful owner comes back for it")
 
         // No auto-promotion on release: a lease handed to an agent that isn't
         // asking would start its TTL ticking against a caller who cannot even
         // be told the lease id — the only way to learn it is to claim.
-        guard case .granted = m.claim(harness: "codex", pid: 2, name: "fixing tests", now: now) else {
+        guard case .granted = m.claim(harness: "codex", pid: 2, name: "fixing tests", ownerVerified: true, now: now) else {
             return XCTFail("the longest waiter takes over when it comes back")
         }
         XCTAssertEqual(m.holder?.harness, "codex")
-        XCTAssertEqual(m.claim(harness: "cursor", pid: 3, name: "fixing tests", now: now),
+        XCTAssertEqual(m.claim(harness: "cursor", pid: 3, name: "fixing tests", ownerVerified: true, now: now),
                        .queued(position: 1, reason: .busy(holder: "codex")))
     }
 }

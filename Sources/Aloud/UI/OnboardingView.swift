@@ -39,7 +39,12 @@ struct OnboardingView: View {
     @State private var axStatus = Permissions.accessibility
     @State private var tryItDone = false
     @State private var isOnline = true
-    @State private var networkMonitor = NWPathMonitor()
+    // Made on appear rather than as this property's default value: a default is
+    // re-evaluated every time the struct is initialised, and with a poll
+    // redrawing this screen every 0.8 s that was a monitor allocated and thrown
+    // away several times a second. One is created when the flow opens and
+    // cancelled when it closes.
+    @State private var networkMonitor: NWPathMonitor?
     @State private var startingBasic = false
     @State private var basicUnavailable = false
     @State private var openedAccessibility = false
@@ -98,7 +103,12 @@ struct OnboardingView: View {
             Task { await controller.prepareModel() }
             // Watch connectivity for the voice screen: no network is a normal
             // first-run situation, and the download should resume by itself.
-            networkMonitor.pathUpdateHandler = { path in
+            // One at a time: an appear that arrives without an intervening
+            // disappear must not strand the monitor it already started.
+            guard networkMonitor == nil else { return }
+            let monitor = NWPathMonitor()
+            networkMonitor = monitor
+            monitor.pathUpdateHandler = { path in
                 let nowOnline = path.status == .satisfied
                 Task { @MainActor in
                     let cameBack = nowOnline && !isOnline
@@ -111,7 +121,13 @@ struct OnboardingView: View {
                     }
                 }
             }
-            networkMonitor.start(queue: .global(qos: .utility))
+            monitor.start(queue: .global(qos: .utility))
+        }
+        // Nothing else stops it: a started monitor keeps its queue and its
+        // handler alive for the life of the process otherwise.
+        .onDisappear {
+            networkMonitor?.cancel()
+            networkMonitor = nil
         }
         .onReceive(poll) { _ in
             micStatus = Permissions.microphone

@@ -204,7 +204,7 @@ final class AgentAutoInstallTests: XCTestCase {
         XCTAssertTrue(text.contains(AgentVoiceInstructions.noteMarkerStart))
         XCTAssertTrue(text.contains(AgentVoiceInstructions.noteMarkerEnd))
         XCTAssertTrue(text.contains(AgentVoiceInstructions.globalNote(harness: .claudeCode, command: Self.command)))
-        XCTAssertTrue(exists(".claude/skills/aloud-voice/SKILL.md"), "the skill still gets written")
+        XCTAssertTrue(exists(".claude/skills/aloud-agent-speak/SKILL.md"), "the skill still gets written")
     }
 
     // The file we are appending to may hold years of somebody's own notes. It
@@ -247,7 +247,7 @@ final class AgentAutoInstallTests: XCTestCase {
         XCTAssertNil(read(".config/opencode/AGENTS.md"))
         XCTAssertFalse(exists(".config/opencode"),
                        "the directory itself must not be conjured either")
-        XCTAssertNotNil(read(".opencode/skills/aloud-voice/SKILL.md"), "the skill still installs")
+        XCTAssertNotNil(read(".opencode/skills/aloud-agent-speak/SKILL.md"), "the skill still installs")
     }
 
     // Both note-carrying harnesses whose file is not also their skill file. pi
@@ -318,7 +318,7 @@ final class AgentAutoInstallTests: XCTestCase {
         XCTAssertEqual(read(".claude/CLAUDE.md"),
                        mine + "\nAnd never commit to main.\n",
                        "uninstall must take our block and the blank line we added, and nothing else")
-        XCTAssertFalse(exists(".claude/skills/aloud-voice/SKILL.md"), "the skill goes too")
+        XCTAssertFalse(exists(".claude/skills/aloud-agent-speak/SKILL.md"), "the skill goes too")
     }
 
     // We created the file, so removing our block should not leave an empty

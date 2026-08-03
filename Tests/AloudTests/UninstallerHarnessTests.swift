@@ -16,18 +16,38 @@ final class UninstallerHarnessTests: XCTestCase {
     private var fm: FileManager { .default }
     private static let command = "/Applications/Aloud.app/Contents/MacOS/Aloud"
 
+    // The installer keeps state about the user — which harnesses they removed,
+    // which permission verbs they have been offered — and defaults to
+    // `UserDefaults.standard`. Left uninjected these tests wrote
+    // `agentDeclinedHarnesses` and friends into the xctest tool's own domain,
+    // shared with every other xctest process on the machine and persisted
+    // across runs. Nothing reads them today, which is exactly the problem:
+    // `installAllDetected()` short-circuits on `declinedHarnesses`, so the
+    // first test here that called it would return `[]` and pass for the wrong
+    // reason on the second run. One fixed suite, wiped on the way in, and the
+    // plist deleted on the way out (see AgentAutoInstallTests for why the name
+    // is stable rather than random).
+    private static let suiteName = "aloud-uninstaller-harness-tests"
+    private var defaults: UserDefaults!
+
     override func setUpWithError() throws {
         home = fm.temporaryDirectory
             .appendingPathComponent("aloud-uninstall-tests-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: home, withIntermediateDirectories: true)
+        defaults = try XCTUnwrap(UserDefaults(suiteName: Self.suiteName))
+        defaults.removePersistentDomain(forName: Self.suiteName)
     }
 
     override func tearDown() {
         try? fm.removeItem(at: home)
+        defaults.removePersistentDomain(forName: Self.suiteName)
+        let plist = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/\(Self.suiteName).plist")
+        try? fm.removeItem(at: plist)
     }
 
     private func installer() -> HarnessInstaller {
-        HarnessInstaller(home: home, command: Self.command)
+        HarnessInstaller(home: home, command: Self.command, defaults: defaults)
     }
 
     private func sweep() -> [Uninstaller.HarnessCleanupFailure] {
@@ -81,18 +101,18 @@ final class UninstallerHarnessTests: XCTestCase {
 
         XCTAssertEqual(sweep(), [])
 
-        XCTAssertFalse(exists(".claude/skills/aloud-voice/SKILL.md"))
-        XCTAssertFalse(exists(".claude/skills/aloud-voice"))
-        XCTAssertFalse(exists(".cursor/skills/aloud-voice/SKILL.md"))
+        XCTAssertFalse(exists(".claude/skills/aloud-agent-speak/SKILL.md"))
+        XCTAssertFalse(exists(".claude/skills/aloud-agent-speak"))
+        XCTAssertFalse(exists(".cursor/skills/aloud-agent-speak/SKILL.md"))
         XCTAssertFalse(exists(".codex/AGENTS.md"), "the file held nothing but our section")
         // The harnesses added after launch. Spelled out as literal paths as
         // well as being covered by the loop below, because a typo'd path in the
         // table would make an `isInstalled` check pass by looking in the same
         // wrong place twice.
-        XCTAssertFalse(exists(".opencode/skills/aloud-voice/SKILL.md"))
-        XCTAssertFalse(exists(".pi/agent/skills/aloud-voice/SKILL.md"))
-        XCTAssertFalse(exists(".openclaw/skills/aloud-voice/SKILL.md"))
-        XCTAssertFalse(exists(".hermes/skills/aloud-voice/SKILL.md"))
+        XCTAssertFalse(exists(".opencode/skills/aloud-agent-speak/SKILL.md"))
+        XCTAssertFalse(exists(".pi/agent/skills/aloud-agent-speak/SKILL.md"))
+        XCTAssertFalse(exists(".openclaw/skills/aloud-agent-speak/SKILL.md"))
+        XCTAssertFalse(exists(".hermes/skills/aloud-agent-speak/SKILL.md"))
 
         XCTAssertEqual(try allowList(), [], "the allowlist must not keep permitting a binary that is going away")
         XCTAssertEqual(try allowList(Self.cursorConfigPath), [],
@@ -152,14 +172,14 @@ final class UninstallerHarnessTests: XCTestCase {
         }
 
         // Deleted outright.
-        try fm.removeItem(at: home.appendingPathComponent(".cursor/skills/aloud-voice"))
+        try fm.removeItem(at: home.appendingPathComponent(".cursor/skills/aloud-agent-speak"))
         // Rewritten by hand, markers and all, into something that is now theirs.
-        try write("# my own aloud notes\n", to: ".claude/skills/aloud-voice/SKILL.md")
+        try write("# my own aloud notes\n", to: ".claude/skills/aloud-agent-speak/SKILL.md")
         // Our section pulled out, their own text left behind.
         try write("Always use tabs.\n", to: ".codex/AGENTS.md")
 
         XCTAssertEqual(sweep(), [])
-        XCTAssertEqual(read(".claude/skills/aloud-voice/SKILL.md"), "# my own aloud notes\n",
+        XCTAssertEqual(read(".claude/skills/aloud-agent-speak/SKILL.md"), "# my own aloud notes\n",
                        "a file that no longer carries our marker is not ours to delete")
         XCTAssertEqual(read(".codex/AGENTS.md"), "Always use tabs.\n")
         XCTAssertEqual(try allowList(), [], "the allowlist entries are still ours even if the skill file is not")
@@ -184,17 +204,17 @@ final class UninstallerHarnessTests: XCTestCase {
 
         XCTAssertEqual(read(".claude/settings.json"), broken, "a file we cannot parse is a file we do not write")
         XCTAssertFalse(exists(".codex/AGENTS.md"))
-        XCTAssertFalse(exists(".cursor/skills/aloud-voice/SKILL.md"))
-        XCTAssertFalse(exists(".opencode/skills/aloud-voice/SKILL.md"))
-        XCTAssertFalse(exists(".pi/agent/skills/aloud-voice/SKILL.md"))
-        XCTAssertFalse(exists(".openclaw/skills/aloud-voice/SKILL.md"))
-        XCTAssertFalse(exists(".hermes/skills/aloud-voice/SKILL.md"))
+        XCTAssertFalse(exists(".cursor/skills/aloud-agent-speak/SKILL.md"))
+        XCTAssertFalse(exists(".opencode/skills/aloud-agent-speak/SKILL.md"))
+        XCTAssertFalse(exists(".pi/agent/skills/aloud-agent-speak/SKILL.md"))
+        XCTAssertFalse(exists(".openclaw/skills/aloud-agent-speak/SKILL.md"))
+        XCTAssertFalse(exists(".hermes/skills/aloud-agent-speak/SKILL.md"))
         // Including the other harness that has an allowlist: two allowlists in
         // two files means one unreadable file must not strand the other.
         XCTAssertEqual(try allowList(Self.cursorConfigPath), [])
         // Even the failing harness gets as far as it can: the skill file goes,
         // only the allowlist is left stale.
-        XCTAssertFalse(exists(".claude/skills/aloud-voice/SKILL.md"))
+        XCTAssertFalse(exists(".claude/skills/aloud-agent-speak/SKILL.md"))
     }
 
     // Removing the permission entries must not turn into rewriting somebody's

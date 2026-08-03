@@ -50,7 +50,7 @@ struct VoiceChooser: View {
             VoiceCatalog.refresh()
             genders = VoiceCatalog.availableGenders
             sample.refreshReadiness(for: settings.agentVoiceGender)
-            voices.warm(settings.agentVoiceGender)
+            voices.warm(settings.agentVoiceGender, chosen: true)
         }
         .onChange(of: settings.agentVoiceSpeed) { _, speed in
             sample.speedChanged(to: speed, gender: settings.agentVoiceGender)
@@ -214,7 +214,7 @@ struct VoiceChooser: View {
                     sample.refreshReadiness(for: $0)
                     // And the moment to pay this side's load, so the play
                     // button they reach for next is instant.
-                    voices.warm($0)
+                    voices.warm($0, chosen: true)
                 })
     }
 }
@@ -236,6 +236,9 @@ final class VoiceSample: ObservableObject {
     private var speaker: Speaker?
     private var speaking: Task<Void, Never>?
     private var watch: Task<Void, Never>?
+    /// Which side `watch` is watching. A watcher is only ever right about the
+    /// gender it was started for, so switching sides has to start a new one.
+    private var watchedGender: VoiceGender?
     private var restart: Task<Void, Never>?
     /// Bumped by every start and every stop. A sample that finishes after the
     /// number moved on is stale and says nothing about what the button shows.
@@ -253,15 +256,30 @@ final class VoiceSample: ObservableObject {
         // A download that finishes while this screen is open should stop the
         // screen saying it hasn't. Nothing here drives the fetch — this only
         // watches for it landing, and stops the moment it has.
-        guard standingIn else { watch?.cancel(); watch = nil; return }
-        guard watch == nil else { return }
+        guard standingIn else {
+            watch?.cancel()
+            watch = nil
+            watchedGender = nil
+            return
+        }
+        // A watcher already running for the *other* side is worse than none:
+        // on a Mac downloading both, picking Male left the female watcher up,
+        // and the footer announced the voice was ready the moment the female
+        // one landed — while the chosen male side was still a stand-in.
+        guard watch == nil || watchedGender != gender else { return }
+        watch?.cancel()
+        watchedGender = gender
         watch = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self, !Task.isCancelled else { return }
+                // Someone switched sides while this was asleep; the watcher
+                // that replaced it owns the answer now.
+                guard self.watchedGender == gender else { return }
                 if !VoiceCatalog.isStandingIn(gender) {
                     self.standingIn = false
                     self.watch = nil
+                    self.watchedGender = nil
                     // The better voice is here; the next sample resolves to
                     // it through the pool rather than reusing the stand-in.
                     self.speaker = nil
@@ -353,6 +371,7 @@ final class VoiceSample: ObservableObject {
         stop()
         watch?.cancel()
         watch = nil
+        watchedGender = nil
         speaker = nil
     }
 

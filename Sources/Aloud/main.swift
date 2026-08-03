@@ -10,15 +10,22 @@ let cliArgs = Array(CommandLine.arguments.dropFirst())
 // explicitly — anything unrecognised must still fall through to launching the
 // menu bar app, which is what a bare `open -a Aloud` relies on.
 //
-// Taken from `BridgeOperation` rather than written out. As a hand-kept list it
-// silently disagreed with `CLI.run` the moment a verb was added: `ask` reached
-// neither branch, so it fell through to the launch path below, found the app
-// already running, activated it and exited 0 — no output, no error, nothing to
-// debug from. Every unrecognised argument has to stay launchable, which is
-// exactly what makes a missing verb here invisible.
-let agentVerbs = Set(BridgeOperation.allCases.map(\.rawValue))
-
-if let first = cliArgs.first, first.hasPrefix("--") || agentVerbs.contains(first) {
+// The verb list itself lives in `BridgeOperation`, and `CLI.run` matches
+// against it. Nothing is written out here: as a hand-kept list it silently
+// disagreed with `CLI.run` the moment a verb was added — `ask` reached neither
+// branch, fell through to the launch path, activated the running app and
+// exited 0 with no output and nothing to debug from.
+// A bare word that is not a verb is a typo, and it used to be silent: `aloud
+// spek "…"` matched neither branch, fell through to the launch path, found the
+// app already running, activated it and exited 0 — no output on either stream
+// and a success status, which an agent reads as the question having been asked.
+// Sending every bare word to `CLI.run` gets it the ordinary "unknown flag"
+// refusal and a non-zero exit instead.
+//
+// Single-dash arguments still fall through untouched: those are what
+// LaunchServices passes (`-psn_0_…`, `-NSDocumentRevisionsDebugMode`), and a
+// bare `open -a Aloud` passes nothing at all.
+if let first = cliArgs.first, !first.isEmpty, first.hasPrefix("--") || !first.hasPrefix("-") {
     let code = await CLI.run(cliArgs)
     exit(code)
 }

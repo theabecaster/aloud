@@ -243,7 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // chosen side is loaded as well as fetched, so the first question an
         // agent asks is not the one that waits for a CoreML chain.
         EnhancedVoices.shared.ensureAll()
-        EnhancedVoices.shared.warm(controller.settings.agentVoiceGender)
+        EnhancedVoices.shared.warm(controller.settings.agentVoiceGender, chosen: true)
 
         let service = AgentBridgeService(settings: controller.settings, host: controller)
         service.onHolderChanged = { [weak self] sessions in
@@ -270,17 +270,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             // start, so without it a `swift build` binary rewrites the note,
             // the skill files and the permission entries of every harness on
             // the Mac — pointing them all at a scratch binary — every launch.
-            if AgentAutoInstall.mayWriteToHome {
-                let refreshed = HarnessInstaller(home: HarnessInstaller.userHome).refreshInstalled()
-                if !refreshed.isEmpty {
-                    DevDiag.note("install", "refreshed: \(refreshed.map(\.id).joined(separator: ", "))")
+            //
+            // Off the main thread: this is a read of every harness's
+            // instruction file and, where the text has moved on, an atomic
+            // rewrite of each — on the launch path and again on every flip of
+            // the Agent Speak switch. The auto-install below follows it rather
+            // than running beside it, because both write into the same home
+            // directory and the order they ran in when this was synchronous is
+            // the only order either has ever been tested in.
+            let mayWriteToHome = AgentAutoInstall.mayWriteToHome
+            let settings = controller.settings
+            Task.detached(priority: .utility) {
+                let refreshed = mayWriteToHome
+                    ? HarnessInstaller(home: HarnessInstaller.userHome).refreshInstalled()
+                    : []
+                await MainActor.run {
+                    if !refreshed.isEmpty {
+                        DevDiag.note("install", "refreshed: \(refreshed.map(\.id).joined(separator: ", "))")
+                    }
+                    // …and the harnesses that were never installed at all.
+                    // Refreshing only ever reached the ones somebody had
+                    // already clicked Install for, which left every user who
+                    // updated with the feature switched on and no agent on the
+                    // machine able to find it.
+                    AgentAutoInstall.runIfNeeded(settings: settings)
                 }
             }
-            // …and the harnesses that were never installed at all. Refreshing
-            // only ever reached the ones somebody had already clicked Install
-            // for, which left every user who updated with the feature switched
-            // on and no agent on the machine able to find it.
-            AgentAutoInstall.runIfNeeded(settings: controller.settings)
             // Nothing else will notice an abandoned session. Every other reap
             // rides in on a bridge call, and the case that strands the pill on
             // screen is precisely the one where no more calls are coming.
@@ -796,23 +811,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             window.displayIfNeeded()
             window.alphaValue = 1
         }
-        // Never leave the window invisible: whatever the key dance does,
-        // this is the longest the user waits.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { reveal() }
         if window.isKeyWindow {
             DispatchQueue.main.async { reveal() }
+            // Never leave the window invisible: whatever the key dance does,
+            // this is the longest the user waits.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { reveal() }
             return
         }
-        final class TokenBox: @unchecked Sendable { var value: NSObjectProtocol? }
+        // The same box `whenActive` uses, and for the same reason: whichever of
+        // the two paths gets there first hands the observer back. A window that
+        // never becomes key — it can be ordered out, or another app can hold on
+        // to key — used to leave this one registered for the life of the app,
+        // one per presentation.
+        final class TokenBox: @unchecked Sendable {
+            var value: NSObjectProtocol?
+            var done = false
+        }
         let box = TokenBox()
-        box.value = NotificationCenter.default.addObserver(
-            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { _ in
+        let fire = { @MainActor in
+            guard !box.done else { return }
+            box.done = true
             if let token = box.value {
                 NotificationCenter.default.removeObserver(token)
                 box.value = nil
             }
-            MainActor.assumeIsolated { reveal() }
+            reveal()
         }
+        box.value = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { _ in
+            MainActor.assumeIsolated { fire() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { fire() }
     }
 
     private func showOnboarding() {

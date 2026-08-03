@@ -45,6 +45,20 @@ enum CLI {
         let verb = args[0]
         guard let op = BridgeOperation(rawValue: verb) else { return 64 }
 
+        // A number that isn't one is refused rather than dropped. Silently
+        // ignoring it ran the call with a different ceiling than the caller
+        // asked for and said nothing, so `--wait abc` behaved exactly like no
+        // `--wait` at all — indistinguishable, from the agent's side, from
+        // having been honoured.
+        for flag in ["--wait", "--hold"] where value(of: flag, in: args).map({ Double($0) == nil }) == true {
+            usage("\(verb) \(flag) <seconds>")
+            return 64
+        }
+        if value(of: "--owner-pid", in: args).map({ Int32($0) == nil }) == true {
+            usage("\(verb) --owner-pid <pid>")
+            return 64
+        }
+
         var request = BridgeRequest(op: op,
                                     harness: value(of: "--harness", in: args) ?? "unknown",
                                     pid: ownerProcessID(args))
@@ -147,8 +161,17 @@ enum CLI {
         FileHandle.standardOutput.write(data)
     }
 
+    // The usage line goes to stderr for a person, and the same refusal goes to
+    // stdout as JSON for the agent reading it.
+    //
+    // The installed instructions teach exactly one shape for "you asked for
+    // something I can't do": `{"ok":false,"reason":"badRequest",...}`. A missing
+    // flag caught app-side answered in that shape; the same mistake caught here
+    // printed prose to stderr and left stdout empty, so an agent parsing the
+    // documented field got nothing at all and had to guess what happened.
     private static func usage(_ line: String) {
         FileHandle.standardError.write(Data("usage: Aloud \(line)\n".utf8))
+        emit(.failure(.badRequest, "usage: Aloud \(line)"))
     }
 
     static func value(of flag: String, in args: [String]) -> String? {
@@ -172,14 +195,29 @@ enum CLI {
     // no question had been passed at all.
     static let valuelessFlags: Set<String> = ["--end", "--start", "--poll", "--stop"]
 
+    // The flags that take a value. Named, rather than inferred from a `--`
+    // prefix, because the thing being looked for here is a *sentence*: skipping
+    // anything that starts with two dashes — and the word after it — made every
+    // question that opened with a dash unreachable. `speak --lease L "--wait for
+    // me"` read the user's own text as a flag, skipped it and the word after,
+    // and came back "usage:" as though no text had been passed. `value(of:)`
+    // has always got this right; this is the same rule, applied here.
+    static let valueFlags: Set<String> = [
+        "--harness", "--lease", "--name", "--wait", "--session", "--hold", "--owner-pid",
+    ]
+
     // The first argument that is neither a flag nor a flag's value — the text
     // for `speak` and `ask`, wherever the caller chose to put it.
     static func firstPositional(after start: Int, in args: [String]) -> String? {
         var index = start
         while index < args.count {
-            if valuelessFlags.contains(args[index]) { index += 1; continue }
-            if args[index].hasPrefix("--") { index += 2; continue }
-            return args[index]
+            let token = args[index]
+            // The conventional escape hatch: everything after `--` is the
+            // caller's own words, whatever they look like.
+            if token == "--" { return index + 1 < args.count ? args[index + 1] : nil }
+            if valuelessFlags.contains(token) { index += 1; continue }
+            if valueFlags.contains(token) { index += 2; continue }
+            return token
         }
         return nil
     }
@@ -1057,6 +1095,16 @@ extension CLI {
 
     // In-process checks needing no TCC grants and no model. Exit 0 = pass.
     static func selfTest() async -> Int32 {
+        // Line-buffered, because this runs in CI with stdout on a pipe.
+        //
+        // Block buffering is the default there, so a crash mid-run loses every
+        // line printed before it: a segfault on the runner produced a bare
+        // "Segmentation fault: 11" and not one word of the eighty checks that
+        // had already passed, which says nothing about where to look. Flushing
+        // per line costs nothing at this scale and makes the last line printed
+        // the check that died.
+        setvbuf(stdout, nil, _IOLBF, 0)
+
         var failures: [String] = []
         func expect(_ cond: Bool, _ name: String) {
             if cond { print("ok  \(name)") } else { print("FAIL \(name)"); failures.append(name) }

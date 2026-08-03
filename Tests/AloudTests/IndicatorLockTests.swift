@@ -9,7 +9,21 @@ import XCTest
 @MainActor
 final class IndicatorLockTests: XCTestCase {
 
-    func testLockOutlivesTheHiddenPill() {
+    // `showLocked()` only raises the flag — it does not put a pill on screen.
+    // So every test that wants `hide()` to actually run has to show one first,
+    // or `hide()` returns at its `guard let panel, isShowing` and the test
+    // passes without reaching a line of the code it is named after.
+    private func shownLockedPill() -> RecordingIndicatorPanel {
+        let panel = RecordingIndicatorPanel()
+        panel.show(levelProvider: { 0 })
+        panel.showLocked()
+        return panel
+    }
+
+    // A lock set on a pill that never reached the screen survives the `hide()`
+    // that does nothing — which is why a new session clears the flag rather
+    // than trusting hiding to have done it.
+    func testLockOutlivesAHideThatHadNoPillToTakeDown() {
         let panel = RecordingIndicatorPanel()
         panel.showLocked()
         panel.hide()
@@ -23,6 +37,16 @@ final class IndicatorLockTests: XCTestCase {
         panel.hide()
         panel.clearHandsFreeLock()
         XCTAssertFalse(panel.isHandsFreeLocked)
+    }
+
+    // …and a pill that really was on screen takes the lock down with it, so the
+    // next ordinary push-to-talk cannot inherit the orange mic and stop button.
+    func testHidingAPillThatWasOnScreenClearsTheLock() {
+        let panel = shownLockedPill()
+        XCTAssertTrue(panel.isHandsFreeLocked)
+        panel.hide()
+        XCTAssertFalse(panel.isHandsFreeLocked,
+                       "a pill that actually left the screen ended the session it belonged to")
     }
 
     func testClearingIsSafeWhenNoLockWasSet() {
@@ -44,6 +68,30 @@ final class IndicatorLockTests: XCTestCase {
         panel.hide()
         panel.hide()
         XCTAssertEqual(ended, 0)
+    }
+
+    // The other half, and the one the test above cannot reach: a pill that WAS
+    // on screen sounds the cue, exactly once, and does not lend it to the
+    // session after it. `hide()` is called liberally — a teardown behind a
+    // fade, a second path to the same end — so both the repeat and the
+    // hand-over are ways one session's end could be announced twice.
+    func testTheEndCueSoundsOncePerLockedSession() {
+        let panel = shownLockedPill()
+        var ended = 0
+        panel.onHandsFreeEnd = { ended += 1 }
+
+        panel.hide()
+        XCTAssertEqual(ended, 1, "a locked pill leaving the screen announces itself")
+
+        panel.hide()
+        XCTAssertEqual(ended, 1, "and never twice for the one session")
+
+        // The next session is an ordinary push-to-talk. A lock left standing
+        // would put a "that's over" chime on a session the user never started
+        // hands-free.
+        panel.show(levelProvider: { 0 })
+        panel.hide()
+        XCTAssertEqual(ended, 1, "an unlocked session does not inherit the last one's cue")
     }
 }
 

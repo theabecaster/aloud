@@ -277,15 +277,27 @@ struct AgentsSettings: View {
 
     // MARK: - Actions
 
+    // Off the main thread, then back to it.
+    //
+    // `detect()` reads every harness's instruction file, and this runs from
+    // `onAppear` — so the pane opened by blocking the main thread on eight
+    // file reads, and then published `installedHarnesses` from inside the
+    // appear pass, which is a store mutated during a view update. Both go away
+    // by doing the reading somewhere else and assigning when it is done.
     private func refresh() {
-        detected = installer.detect()
-        bridgeFailure = BridgeStartFailure.read(stateDir: AppPaths.stateDir)
-        // What the bridge reads to decide whether the spoken prompt names the
-        // caller. Kept from the same read the rows are drawn from, so the two
-        // can never disagree.
-        let installed = detected.filter(\.isInstalled).map(\.harness.id)
-        if settings.installedHarnesses != installed {
-            settings.installedHarnesses = installed
+        let installer = installer
+        Task {
+            let found = await Task.detached { installer.detect() }.value
+            let failure = await Task.detached { BridgeStartFailure.read(stateDir: AppPaths.stateDir) }.value
+            detected = found
+            bridgeFailure = failure
+            // What the bridge reads to decide whether the spoken prompt names
+            // the caller. Kept from the same read the rows are drawn from, so
+            // the two can never disagree.
+            let installed = found.filter(\.isInstalled).map(\.harness.id)
+            if settings.installedHarnesses != installed {
+                settings.installedHarnesses = installed
+            }
         }
     }
 
