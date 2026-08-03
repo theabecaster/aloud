@@ -482,3 +482,10 @@
 "%@ isn’t valid JSON, so Aloud left it alone. Remove the Aloud permission entries by hand." = "%@ n’est pas un JSON valide, donc Aloud n’y a pas touché. Retirez les entrées d’autorisation Aloud à la main.";
 "%@ has an Aloud section with a broken marker, so Aloud left it alone. Fix or remove that section by hand." = "%@ contient une section Aloud avec un marqueur endommagé, donc Aloud n’y a pas touché. Corrigez ou retirez cette section à la main.";
 "Let an agent listen? Yes or no" = "Laisser un agent écouter ? Oui ou non";
+
+/* Agent Speak — the sentence a user says to an agent to make voice replies
+   certain, rather than relying on the agent to reach for it. */
+"Tell Your Agent" = "Dites-le à votre agent";
+"Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain." = "Les agents que vous configurez peuvent vous poser une question à voix haute d’eux-mêmes. Le dire une fois en début de session le garantit.";
+"Copy this to paste into an agent" = "Copier pour le coller dans un agent";
+"Agent tools on this Mac are set up automatically. To be sure, tell your agent:" = "Les outils d’agent de ce Mac sont configurés automatiquement. Pour en être sûr, dites à votre agent :";

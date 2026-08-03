@@ -23,7 +23,11 @@ enum BridgeSocket {
 
 // MARK: requests
 
-enum BridgeOperation: String, Codable {
+// CaseIterable so the two places that have to know the verb list — `CLI.run`'s
+// switch and `main.swift`'s "is this a subcommand or a launch" test — can be
+// driven from it instead of each keeping a copy.
+enum BridgeOperation: String, Codable, CaseIterable {
+    case ask        // claim if needed, say it, hear the answer — all in one call
     case claim      // take the lease, or join the queue
     case release    // give it up; starts the cooldown
     case speak      // say something out loud
@@ -54,6 +58,11 @@ struct BridgeRequest: Codable {
     // exactly when it matters. A label, like `harness` — never authentication.
     var name: String?
     var session: String?        // listen --poll / --stop: what --start returned
+    // `ask`: hang up as soon as the answer is in, instead of handing the lease
+    // back for a follow-up. One question then becomes one command — no claim
+    // before it and no release after it — which is the shape most agent
+    // questions actually have.
+    var end: Bool?
 
     enum ListenMode: String, Codable {
         case blocking   // default: capture until the speaker stops, return the final

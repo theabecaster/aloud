@@ -482,3 +482,10 @@
 "%@ isn’t valid JSON, so Aloud left it alone. Remove the Aloud permission entries by hand." = "%@ isn’t valid JSON, so Aloud left it alone. Remove the Aloud permission entries by hand.";
 "%@ has an Aloud section with a broken marker, so Aloud left it alone. Fix or remove that section by hand." = "%@ has an Aloud section with a broken marker, so Aloud left it alone. Fix or remove that section by hand.";
 "Let an agent listen? Yes or no" = "Let an agent listen? Yes or no";
+
+/* Agent Speak — the sentence a user says to an agent to make voice replies
+   certain, rather than relying on the agent to reach for it. */
+"Tell Your Agent" = "Tell Your Agent";
+"Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain." = "Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain.";
+"Copy this to paste into an agent" = "Copy this to paste into an agent";
+"Agent tools on this Mac are set up automatically. To be sure, tell your agent:" = "Agent tools on this Mac are set up automatically. To be sure, tell your agent:";

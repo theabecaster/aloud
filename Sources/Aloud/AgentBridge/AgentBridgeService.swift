@@ -148,11 +148,93 @@ final class AgentBridgeService {
         defer { publishHolder() }
         switch request.op {
         case .status:  return status()
+        case .ask:     return await converse(request, peer: peer)
         case .claim:   return await claim(request, peer: peer)
         case .release: return await release(request)
         case .speak:   return await speak(request)
         case .listen:  return await listen(request)
         }
+    }
+
+    // MARK: ask — the whole conversation in one call
+
+    // `claim`, `speak` and `listen` are three commands, and an agent pays for
+    // each of them in model turns: the harness re-sends the conversation, waits
+    // for a tool result, and reasons about it, three times over, to put one
+    // question to somebody. Four times with the `release`. That cost is the
+    // reason an agent weighs asking out loud against just ending its turn — and
+    // ending the turn is free.
+    //
+    // So the sequence an agent actually wants is one verb. Nothing here is new
+    // policy: it is the existing three in order, sharing their refusals
+    // verbatim, so an agent that learns `ask` has learned the same contract.
+    // `claim`/`speak`/`listen` stay exactly as they were, for the streaming case
+    // and for anyone already built against them.
+    private func converse(_ request: BridgeRequest,
+                          peer: BridgeServer.PeerIdentity) async -> BridgeResponse {
+        guard let text = request.text,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .failure(.badRequest, "ask needs a question to put to the user.")
+        }
+
+        // Continue the caller's session, or open one. Which of the two happened
+        // decides who owns the cleanup below, so it is remembered rather than
+        // re-derived.
+        let lease: String
+        let opened: Bool
+        if let existing = request.lease {
+            if let refusal = validate(existing) { return refusal }
+            lease = existing
+            opened = false
+        } else {
+            let claimed = await claim(request, peer: peer)
+            guard claimed.ok, let granted = claimed.lease else { return claimed }
+            lease = granted
+            opened = true
+        }
+
+        // A lease this call opened is this call's to clean up. Every refusal
+        // below is one the skill teaches an agent to accept and move on from —
+        // so nobody is coming back with the `release`, and without this the
+        // microphone would sit reserved for a session that ended in a refusal
+        // the agent has already stopped thinking about.
+        func hangUpIfOurs(_ response: BridgeResponse) async -> BridgeResponse {
+            guard opened else { return response }
+            await end(lease)
+            return response
+        }
+
+        var saying = request
+        saying.op = .speak
+        saying.lease = lease
+        let said = await speak(saying)
+        guard said.ok else { return await hangUpIfOurs(said) }
+
+        var hearing = request
+        hearing.op = .listen
+        hearing.lease = lease
+        hearing.text = nil
+        hearing.mode = .blocking
+        var answer = await listen(hearing)
+        guard answer.ok else { return await hangUpIfOurs(answer) }
+
+        if request.end == true {
+            await end(lease)
+        } else {
+            // The lease rides back with the answer so a follow-up question is
+            // one more `ask --lease` — no second claim, and no second consent
+            // prompt for a user who has already said yes to this session.
+            answer.lease = lease
+        }
+        return answer
+    }
+
+    // Release exactly as the `release` verb would, so the pill, the consent
+    // record and the cooldown all end the one way rather than two.
+    private func end(_ lease: String) async {
+        var hangUp = BridgeRequest(op: .release, harness: "", pid: LeaseManager.noOwnerPid)
+        hangUp.lease = lease
+        _ = await release(hangUp)
     }
 
     // MARK: status — never opens the microphone
@@ -292,9 +374,9 @@ final class AgentBridgeService {
             case .awaiting(let prompt):
                 // A prompt for this lease already open (the holder re-claimed
                 // while its earlier claim is still parked on an answer): a
-                // second `ask` would overwrite the first continuation and hang
-                // that caller to its own timeout. Tell the duplicate to wait
-                // rather than opening a second prompt over the first.
+                // second `awaitConsent` would overwrite the first continuation
+                // and hang that caller to its own timeout. Tell the duplicate
+                // to wait rather than opening a second prompt over the first.
                 if pendingConsent[lease] != nil {
                     return .failure(.queued, "A consent prompt for this session is already open.")
                 }
@@ -308,7 +390,7 @@ final class AgentBridgeService {
                     response.retryAfter = 3
                     return response
                 }
-                let resolution = await ask(prompt)
+                let resolution = await awaitConsent(prompt)
                 switch resolution {
                 case .accepted:
                     var response = BridgeResponse.success()
@@ -340,7 +422,7 @@ final class AgentBridgeService {
 
     // Show the prompt, speak it when the mode says to, and wait for whichever
     // of the three answers arrives first.
-    private func ask(_ prompt: ConsentPrompt) async -> ConsentResolution {
+    private func awaitConsent(_ prompt: ConsentPrompt) async -> ConsentResolution {
         // The pill's accept/deny are a third way to answer, alongside a spoken
         // reply and the deadline. Whichever lands first wins; the rest are
         // ignored because the continuation resumes exactly once.
@@ -506,9 +588,13 @@ final class AgentBridgeService {
         // per-lease grant passes straight through, and a mode the user
         // tightened mid-session correctly asks again instead of coasting on
         // permission given under the old one.
+        // The lease already knows whose it is, and it is the better answer:
+        // once a session is open a caller need not keep re-sending `--harness`
+        // on every command, and the CLI fills the gap with "unknown". Naming
+        // the *prompt* "unknown" is how that omission would reach the user.
         let grant: ConsentGrant
         switch consent.request(lease: lease,
-                               harness: request.harness,
+                               harness: leases.holder?.harness ?? request.harness,
                                name: leases.holder?.name ?? request.harness,
                                installedHarnesses: settings.installedHarnesses.count,
                                now: now()) {
@@ -516,13 +602,13 @@ final class AgentBridgeService {
             grant = granted
         case .awaiting(let prompt):
             // Same guard `claim` carries: a prompt for this lease already open
-            // means a second `ask` would overwrite its continuation and hang
-            // the first caller. Reachable here when the mode was tightened
-            // mid-session and two listens race on one lease.
+            // means a second `awaitConsent` would overwrite its continuation
+            // and hang the first caller. Reachable here when the mode was
+            // tightened mid-session and two listens race on one lease.
             if pendingConsent[lease] != nil {
                 return .failure(.queued, "A consent prompt for this session is already open.")
             }
-            switch await ask(prompt) {
+            switch await awaitConsent(prompt) {
             case .accepted(let granted, _):
                 grant = granted
             case .denied:

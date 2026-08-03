@@ -13,16 +13,32 @@ import XCTest
 // developer's real `~` would be modifying the machine it runs on.
 final class HarnessInstallerTests: XCTestCase {
     private var home: URL!
+    // Its own suite, per test. The installer remembers things across launches —
+    // which harnesses the user removed, which permission entries they have been
+    // offered — and those memories change what a later install writes. Sharing
+    // `.standard` would make the outcome depend on what ran before, in this
+    // process and in every previous run on the developer's own machine.
+    private var defaults: UserDefaults!
+    private var suiteName: String!
     private var fm: FileManager { .default }
 
     override func setUpWithError() throws {
         home = fm.temporaryDirectory
             .appendingPathComponent("aloud-harness-tests-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: home, withIntermediateDirectories: true)
+        suiteName = "aloud-harness-tests-\(UUID().uuidString)"
+        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     }
 
     override func tearDown() {
         try? fm.removeItem(at: home)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    // Every installer a test builds goes through here, so none of them can
+    // quietly pick up `.standard`.
+    private func installer(command: String, home: URL? = nil) -> HarnessInstaller {
+        HarnessInstaller(home: home ?? self.home, command: command, defaults: defaults)
     }
 
     // Pinned rather than defaulted: the real default is the running binary's
@@ -32,7 +48,7 @@ final class HarnessInstallerTests: XCTestCase {
     static let command = "/Applications/Aloud.app/Contents/MacOS/Aloud"
 
     private func installer() -> HarnessInstaller {
-        HarnessInstaller(home: home, command: Self.command)
+        installer(command: Self.command)
     }
 
     private func makeDir(_ relative: String) throws {
@@ -226,10 +242,10 @@ final class HarnessInstallerTests: XCTestCase {
     func testRefreshMigratesAllowlistEntriesWhenTheBundleMoves() throws {
         let old = "/Applications/Aloud.app/Contents/MacOS/Aloud"
         let new = "/opt/tools/Aloud.app/Contents/MacOS/Aloud"
-        _ = try HarnessInstaller(home: home, command: old).install(.claudeCode)
+        _ = try installer(command: old).install(.claudeCode)
         XCTAssertTrue(try allowList().contains { $0.contains(old) })
 
-        let moved = HarnessInstaller(home: home, command: new)
+        let moved = installer(command: new)
         XCTAssertEqual(moved.refreshInstalled(), [.claudeCode])
         let after = try allowList()
         XCTAssertTrue(after.contains { $0.contains(new) }, "entries must name the new path")
@@ -258,28 +274,88 @@ final class HarnessInstallerTests: XCTestCase {
     func testMigrationCarriesOnlyTheVerbsTheUserStillHas() throws {
         let old = "/Applications/Aloud.app/Contents/MacOS/Aloud"
         let new = "/opt/tools/Aloud.app/Contents/MacOS/Aloud"
-        _ = try HarnessInstaller(home: home, command: old).install(.claudeCode)
+        _ = try installer(command: old).install(.claudeCode)
         var allow = try allowList()
         // Drop the `speak` grant, leaving three at the old path.
         allow.removeAll { $0.contains("speak") && AgentVoiceInstructions.isPermissionEntry($0, style: .claudeSettings) }
         try writeAllow(allow)
 
-        XCTAssertEqual(HarnessInstaller(home: home, command: new).refreshInstalled(), [.claudeCode])
+        XCTAssertEqual(installer(command: new).refreshInstalled(), [.claudeCode])
         let after = try allowList().filter { AgentVoiceInstructions.isPermissionEntry($0, style: .claudeSettings) }
-        XCTAssertEqual(after.count, 3, "three verbs migrate, not four")
+        // The three survivors move, and `ask` arrives beside them — a verb this
+        // build ships that the install being migrated never offered, so there
+        // is no choice of the user's to overrule. The one they *did* make is
+        // the point of the test and is still honoured.
         XCTAssertFalse(after.contains { $0.contains("speak") }, "the revoked verb is not resurrected by the move")
-        XCTAssertTrue(after.allSatisfy { $0.contains(new) }, "the survivors are at the new path")
+        XCTAssertTrue(after.contains { $0.contains(" ask:") }, "a newly shipped verb is granted, not withheld")
+        XCTAssertEqual(after.count, 4, "three migrated verbs plus the new one — never the deleted one")
+        XCTAssertTrue(after.allSatisfy { $0.contains(new) }, "everything ends up at the new path")
+    }
+
+    // The instructions and the binary have to agree about what the binary
+    // answers to. They disagreed once, and the way it failed is the reason this
+    // is a test rather than a comment: `ask` shipped in the skill file and in
+    // every allowlist, and the argument router did not know the word. Because
+    // an unrecognised argument must stay launchable — `open -a Aloud` depends
+    // on it — the call did not fail. It launched the app, found it already
+    // running, and exited 0 with no output at all.
+    func testEveryVerbTheInstructionsTeachIsOneTheBinaryAnswersTo() {
+        for verb in AgentVoiceInstructions.verbs {
+            XCTAssertNotNil(BridgeOperation(rawValue: verb),
+                            "the installed skill tells agents to run `\(verb)`, which nothing routes")
+        }
+    }
+
+    // The turn-one trap, and the reason `offeredVerbs` exists.
+    //
+    // Everyone who already has Agent Speak was installed by a build that shipped
+    // four verbs. This one ships five and its refresh rewrites their skill file
+    // to teach the new one — so unless the grant goes with it, the very first
+    // `ask` stops for a permission prompt, in a feature whose whole premise is
+    // that the user is not at the keyboard. The refresh is the only pass that
+    // ever runs on those machines (`installAllDetected` skips them: they are
+    // already installed), so it has to be the pass that does it.
+    func testARefreshGrantsAVerbThisBuildAddedSinceTheLastOne() throws {
+        _ = try installer().install(.claudeCode)
+        // Wind the machine back to a pre-`ask` install: the four verbs of the
+        // day in settings.json, and no memory of `ask` ever being offered.
+        try writeAllow(try allowList().filter { !$0.contains(" ask:") })
+        defaults.removeObject(forKey: "agentOfferedVerbs")
+        XCTAssertFalse(try allowList().contains { $0.contains(" ask:") })
+
+        XCTAssertEqual(installer().refreshInstalled(), [.claudeCode])
+
+        let after = try allowList().filter { AgentVoiceInstructions.isPermissionEntry($0, style: .claudeSettings) }
+        XCTAssertEqual(after.count, AgentVoiceInstructions.verbs.count,
+                       "the new verb joins the four that were already there")
+        XCTAssertTrue(after.contains { $0.contains(" ask:") })
+        let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
+        XCTAssertTrue(skill.contains("ask --harness"),
+                      "and the skill that teaches it went out in the same pass")
+    }
+
+    // The other half of that rule, and the one it could easily break: once a
+    // verb has been offered, a refresh may never hand it back. Otherwise
+    // "grant what is new" quietly becomes "grant everything, every launch",
+    // and deleting a permission buys exactly one session of peace.
+    func testAVerbTheUserDeletesStaysDeletedOnceItHasBeenOffered() throws {
+        _ = try installer().install(.claudeCode)
+        try writeAllow(try allowList().filter { !$0.contains(" ask:") })
+
+        XCTAssertEqual(installer().refreshInstalled(), [],
+                       "nothing to do: the entry is missing because they removed it")
+        XCTAssertFalse(try allowList().contains { $0.contains(" ask:") },
+                       "a revoked verb is not resurrected by the new-verb path")
     }
 
     // A refresh must update the instructions even when the permissions file is
     // corrupt — the instruction update is the point of the refresh, and a
     // broken settings.json is not allowed to hold it hostage.
     func testRefreshUpdatesInstructionsEvenWhenSettingsJSONIsCorrupt() throws {
-        _ = try HarnessInstaller(home: home,
-                                 command: "/Applications/Aloud.app/Contents/MacOS/Aloud").install(.claudeCode)
+        _ = try installer(command: "/Applications/Aloud.app/Contents/MacOS/Aloud").install(.claudeCode)
         try write("{ this is not json", to: ".claude/settings.json")
         let new = "/opt/tools/Aloud.app/Contents/MacOS/Aloud"
-        _ = HarnessInstaller(home: home, command: new).refreshInstalled()
+        _ = installer(command: new).refreshInstalled()
         let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))
         XCTAssertTrue(skill.contains(new), "the skill followed the new path despite the broken settings file")
         XCTAssertEqual(read(".claude/settings.json"), "{ this is not json",
@@ -303,7 +379,7 @@ final class HarnessInstallerTests: XCTestCase {
         XCTAssertFalse(installer().isInstalled(.codex))
     }
 
-    // Uninstall removes our four entries and leaves the rest of the user's
+    // Uninstall removes every entry of ours and leaves the rest of the user's
     // settings — including their other permissions — exactly as they were.
     func testClaudeUninstallLeavesTheRestOfSettingsAlone() throws {
         try write("""
@@ -317,7 +393,10 @@ final class HarnessInstallerTests: XCTestCase {
         """, to: ".claude/settings.json")
 
         _ = try installer().install(.claudeCode)
-        XCTAssertEqual(try allowList().count, 6)
+        // Derived rather than written out: the count is "theirs plus ours", and
+        // a literal here only ever means editing this line every time a verb
+        // ships. What the test is actually about is the two below surviving.
+        XCTAssertEqual(try allowList().count, 2 + AgentVoiceInstructions.verbs.count)
 
         try installer().uninstall(.claudeCode)
 
@@ -534,7 +613,7 @@ final class HarnessInstallerTests: XCTestCase {
     // the assumption that would let the two drift.
     func testEveryCursorAllowlistEntryNamesACommandTheInstructionsTeach() {
         for command in [Self.command, "aloud", "/opt/my apps/Aloud.app/Contents/MacOS/Aloud"] {
-            let installer = HarnessInstaller(home: home, command: command)
+            let installer = installer(command: command)
             let body = AgentVoiceInstructions.body(harness: .cursor, command: command)
             XCTAssertEqual(installer.cursorPermissionEntries.count, AgentVoiceInstructions.verbs.count)
             for entry in installer.cursorPermissionEntries {
@@ -565,7 +644,7 @@ final class HarnessInstallerTests: XCTestCase {
     // files have to agree on the quoting or the entry matches nothing.
     func testCursorQuotesASpacedPathTheSameWayInBothPlaces() throws {
         let spaced = "/Users/someone/My Apps/Aloud.app/Contents/MacOS/Aloud"
-        let installer = HarnessInstaller(home: home, command: spaced)
+        let installer = installer(command: spaced)
         _ = try installer.install(.cursor)
 
         let skill = try XCTUnwrap(read(".cursor/skills/aloud-voice/SKILL.md"))
@@ -604,7 +683,7 @@ final class HarnessInstallerTests: XCTestCase {
         """, to: Self.cursorConfigPath)
 
         _ = try installer().install(.cursor)
-        XCTAssertEqual(try cursorAllowList().count, 8)
+        XCTAssertEqual(try cursorAllowList().count, 4 + AgentVoiceInstructions.verbs.count)
 
         try installer().uninstall(.cursor)
         XCTAssertEqual(try cursorAllowList(),
@@ -834,7 +913,7 @@ final class HarnessInstallerTests: XCTestCase {
             for marker in harness.detectionPaths {
                 let scratch = home.appendingPathComponent(UUID().uuidString, isDirectory: true)
                 try makeMarker(marker, under: scratch)
-                let found = HarnessInstaller(home: scratch, command: Self.command).detect().map(\.harness)
+                let found = installer(command: Self.command, home: scratch).detect().map(\.harness)
                 XCTAssertEqual(found, [harness], "\(marker) should mean \(harness.id) and nothing else")
             }
         }
@@ -897,7 +976,7 @@ final class HarnessInstallerTests: XCTestCase {
         for harness in [AgentHarness.openclaw, .hermes] {
             let scratch = home.appendingPathComponent(UUID().uuidString, isDirectory: true)
             try fm.createDirectory(at: scratch, withIntermediateDirectories: true)
-            let installer = HarnessInstaller(home: scratch, command: Self.command)
+            let installer = installer(command: Self.command, home: scratch)
             _ = try installer.install(harness)
             XCTAssertTrue(installer.isInstalled(harness), "the skill really was written")
             XCTAssertEqual(installer.detect(), [],
@@ -947,10 +1026,19 @@ final class HarnessInstallerTests: XCTestCase {
     // microphone silently, or that treats a refusal as a bug and retries, makes
     // the user turn voice off — so these points are pinned rather than trusted
     // to survive future edits of the copy.
-    func testInstructionsTellTheAgentTheFiveThingsThatMatter() {
+    func testInstructionsTellTheAgentTheFiveThingsThatMatter() throws {
         let body = AgentVoiceInstructions.body(harness: .claudeCode, command: "aloud")
-        XCTAssertTrue(body.contains("Speak before every listen"))
-        XCTAssertTrue(body.contains("Say the context, briefly"))
+        // "Speak before every listen" used to be a rule here because `listen`
+        // could be called on its own, and an agent that did opened the
+        // microphone on a question nobody knew had been asked. `ask` makes the
+        // ordering structural instead — it speaks and then listens, in one
+        // call — so what is pinned now is that the body leads with it rather
+        // than with the pair that can be got wrong.
+        XCTAssertTrue(body.contains("ask --harness"))
+        XCTAssertLessThan(try XCTUnwrap(body.range(of: "ask --harness")).lowerBound,
+                          try XCTUnwrap(body.range(of: "listen --start")).lowerBound,
+                          "the one-call form is what an agent should meet first")
+        XCTAssertTrue(body.contains("One or two sentences, question last"))
         XCTAssertTrue(body.contains("stop telling me every time"))
         XCTAssertTrue(body.contains("`disabled`"))
         XCTAssertTrue(body.contains("`denied`"))
@@ -993,7 +1081,7 @@ final class HarnessInstallerTests: XCTestCase {
 
     // A dev build must not tell agents to run the installed bundle.
     func testTheCommandIsInjectable() throws {
-        let custom = HarnessInstaller(home: home, command: "/opt/aloud/bin/aloud")
+        let custom = installer(command: "/opt/aloud/bin/aloud")
         _ = try custom.install(.codex)
         XCTAssertTrue(try XCTUnwrap(read(".codex/AGENTS.md")).contains("/opt/aloud/bin/aloud claim"))
     }
@@ -1008,7 +1096,7 @@ final class HarnessInstallerTests: XCTestCase {
     // nothing crashes, nothing logs, the demo just stalls.
     func testEveryAllowlistEntryIsAPrefixOfWhatTheInstructionsTellTheAgentToType() throws {
         for command in [Self.command, "aloud", "/opt/my apps/Aloud.app/Contents/MacOS/Aloud"] {
-            let installer = HarnessInstaller(home: home, command: command)
+            let installer = installer(command: command)
             let body = AgentVoiceInstructions.body(harness: .claudeCode, command: command)
             for entry in installer.claudePermissionEntries {
                 let typed = String(entry.dropFirst("Bash(".count).dropLast(":*)".count))
@@ -1045,7 +1133,7 @@ final class HarnessInstallerTests: XCTestCase {
     // allowlist stops matching — so one quoting decision, applied in both.
     func testAPathWithSpacesIsQuotedTheSameWayInBothPlaces() throws {
         let spaced = "/Users/someone/My Apps/Aloud.app/Contents/MacOS/Aloud"
-        let installer = HarnessInstaller(home: home, command: spaced)
+        let installer = installer(command: spaced)
         _ = try installer.install(.claudeCode)
 
         let skill = try XCTUnwrap(read(".claude/skills/aloud-voice/SKILL.md"))

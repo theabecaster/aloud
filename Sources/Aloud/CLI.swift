@@ -16,7 +16,12 @@ enum CLI {
         case "--version":
             print(Updater.currentVersion())
             return 0
-        case "claim", "release", "speak", "listen", "status":
+        // Matched against the operation table rather than a list written out
+        // here, for the same reason main.swift is: a verb this switch does not
+        // name falls through to the development branch, and in a distributed
+        // build that answers "unknown flag" for something the installed skill
+        // is actively telling agents to run.
+        case let verb? where BridgeOperation(rawValue: verb) != nil:
             return await agentVerb(args)
         default:
             return await runDevelopmentVerb(args)
@@ -60,21 +65,34 @@ enum CLI {
         request.wait = value(of: "--wait", in: args).flatMap(Double.init)
             .map { $0.isFinite ? min(max($0, 0), AgentBridgeService.maxQueueWait) : 0 }
         request.session = value(of: "--session", in: args)
+        // `ask --end` hangs up as soon as the answer is in, so a single
+        // question is a single command rather than a claim, an ask and a
+        // release. Absent rather than false when it is not asked for: the
+        // field is new, and an old app reading it should see nothing.
+        request.end = args.contains("--end") ? true : nil
         if op == .listen {
             for (flag, mode) in [("--start", BridgeRequest.ListenMode.start),
                                  ("--poll", .poll), ("--stop", .stop)] where args.contains(flag) {
                 request.mode = mode
             }
         }
-        if op == .speak {
+        if op == .speak || op == .ask {
             guard let text = firstPositional(after: 1, in: args) else {
-                usage("speak --lease <id> <text>")
+                usage(op == .ask ? "ask --harness <id> --name \"<two words>\" <question>"
+                                 : "speak --lease <id> <text>")
                 return 64
             }
             request.text = text
         }
         if op == .claim, value(of: "--harness", in: args) == nil {
             usage("claim --harness <id>")
+            return 64
+        }
+        // `ask` opens its own session when it is not handed one, so it needs
+        // what `claim` needs — and needs neither when continuing a session the
+        // lease already identifies.
+        if op == .ask, request.lease == nil, value(of: "--harness", in: args) == nil {
+            usage("ask --harness <id> --name \"<two words>\" <question>   (or --lease <id> to carry on)")
             return 64
         }
         if (op == .speak || op == .listen || op == .release), request.lease == nil {
@@ -87,7 +105,14 @@ enum CLI {
         // must not be cut off from this end.
         // Comfortably past whatever the app will spend waiting, so we never
         // hang up on our own request at the moment it is granted.
-        let timeout = max(90, (request.wait ?? 0) + 30)
+        //
+        // `ask` gets its own, larger allowance because it is three of these
+        // end to end: a consent prompt somebody has to answer, a sentence
+        // played to the end, and then however long they take to reply. Given
+        // the same 90 it would hang up mid-answer on the slow-but-ordinary
+        // case, and the agent would read that as the bridge being gone.
+        let timeout = op == .ask ? max(180, (request.wait ?? 0) + 90)
+                                 : max(90, (request.wait ?? 0) + 30)
         let response = BridgeClient.send(request, timeout: timeout)
         emit(response)
         return response.reason == .unavailable ? 1 : 0
@@ -102,16 +127,33 @@ enum CLI {
         FileHandle.standardError.write(Data("usage: Aloud \(line)\n".utf8))
     }
 
-    private static func value(of flag: String, in args: [String]) -> String? {
+    static func value(of flag: String, in args: [String]) -> String? {
         guard let index = args.firstIndex(of: flag), args.count > index + 1 else { return nil }
-        return args[index + 1]
+        // The mirror of the problem `valuelessFlags` solves in `firstPositional`:
+        // `--name --end` would otherwise read the switch as the name. Only
+        // switches are rejected, never anything that merely looks like a flag —
+        // the user's own text is allowed to start with dashes.
+        let next = args[index + 1]
+        guard !valuelessFlags.contains(next) else { return nil }
+        return next
     }
 
+    // The flags that are switches rather than settings — present or absent,
+    // never followed by a value. They have to be named, because `firstPositional`
+    // below skips a flag AND the word after it, and there is nothing about
+    // `--end` that says the next word belongs to somebody else.
+    //
+    // Getting this wrong is silent and total: `ask --end "<question>"` had the
+    // question read as `--end`'s value, so the call came back "usage: …" as if
+    // no question had been passed at all.
+    static let valuelessFlags: Set<String> = ["--end", "--start", "--poll", "--stop"]
+
     // The first argument that is neither a flag nor a flag's value — the text
-    // for `speak`, wherever the caller chose to put it.
-    private static func firstPositional(after start: Int, in args: [String]) -> String? {
+    // for `speak` and `ask`, wherever the caller chose to put it.
+    static func firstPositional(after start: Int, in args: [String]) -> String? {
         var index = start
         while index < args.count {
+            if valuelessFlags.contains(args[index]) { index += 1; continue }
             if args[index].hasPrefix("--") { index += 2; continue }
             return args[index]
         }
@@ -138,7 +180,7 @@ enum CLI {
     // installed instructions pass `--owner-pid $PPID`, which in every harness
     // we install into is the agent process itself rather than a per-call
     // shell — verified, not assumed.
-    private static func ownerProcessID(_ args: [String]) -> pid_t {
+    static func ownerProcessID(_ args: [String]) -> pid_t {
         guard let raw = value(of: "--owner-pid", in: args),
               let pid = pid_t(raw), pid > 0 else { return LeaseManager.noOwnerPid }
         return pid

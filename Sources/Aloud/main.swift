@@ -9,7 +9,14 @@ let cliArgs = Array(CommandLine.arguments.dropFirst())
 // visibly separate from the development tooling. They have to be matched
 // explicitly — anything unrecognised must still fall through to launching the
 // menu bar app, which is what a bare `open -a Aloud` relies on.
-let agentVerbs: Set<String> = ["claim", "release", "speak", "listen", "status"]
+//
+// Taken from `BridgeOperation` rather than written out. As a hand-kept list it
+// silently disagreed with `CLI.run` the moment a verb was added: `ask` reached
+// neither branch, so it fell through to the launch path below, found the app
+// already running, activated it and exited 0 — no output, no error, nothing to
+// debug from. Every unrecognised argument has to stay launchable, which is
+// exactly what makes a missing verb here invisible.
+let agentVerbs = Set(BridgeOperation.allCases.map(\.rawValue))
 
 if let first = cliArgs.first, first.hasPrefix("--") || agentVerbs.contains(first) {
     let code = await CLI.run(cliArgs)

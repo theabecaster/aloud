@@ -739,4 +739,140 @@ final class AgentBridgeServiceTests: XCTestCase {
         XCTAssertFalse(response.ok, "pulling the plug must not leave the agent hanging to its own timeout")
         XCTAssertEqual(response.reason, .denied)
     }
+
+    // MARK: ask
+    //
+    // `ask` is claim + speak + listen in one call. It exists because those
+    // three cost an agent three model turns to put one question to somebody,
+    // and an agent weighing that against ending its turn — which is free —
+    // chooses to end its turn. Nothing here is new policy, so what these tests
+    // are really pinning is that it is the *same* policy: the same refusals,
+    // the same ordering, and no lease left behind on any path out.
+
+    private func askRequest(lease: String? = nil,
+                            text: String? = "Roll it back, or fix it forward?",
+                            end: Bool = false) -> BridgeRequest {
+        var request = self.request(.ask, lease: lease, text: text)
+        request.end = end ? true : nil
+        return request
+    }
+
+    func testAskClaimsSpeaksAndListensInOneCall() async {
+        let service = makeService(mode: .open)
+        let response = await service.handle(askRequest(), peer: peer)
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.text, "roll it back")
+        XCTAssertEqual(host.spoken, ["Roll it back, or fix it forward?"])
+        XCTAssertEqual(host.listenCount, 1)
+        // The lease rides back so the next question is one more `ask --lease`
+        // rather than a second claim and a second consent prompt.
+        XCTAssertNotNil(response.lease)
+        XCTAssertEqual(service.holderHarnessForTesting, "claude-code")
+    }
+
+    // The ordering that used to be a written rule an agent could get wrong.
+    // Opening the microphone before saying anything asks a question nobody
+    // knows was asked; inside one verb it is structural instead of advisory.
+    func testAskAlwaysSpeaksBeforeItListens() async {
+        let service = makeService(mode: .open)
+        _ = await service.handle(askRequest(), peer: peer)
+        XCTAssertEqual(host.events.filter { $0 == "speak" }.count, 1)
+        XCTAssertTrue(host.spoken.count == 1 && host.listenCount == 1)
+        XCTAssertEqual(host.events.first, "speak", "nothing reaches the microphone first")
+    }
+
+    // The one-question shape: no claim before it, no release after it. This is
+    // what takes a question from four commands to one.
+    func testAskWithEndHangsUpOnTheWayOut() async {
+        let service = makeService(mode: .open)
+        let response = await service.handle(askRequest(end: true), peer: peer)
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.text, "roll it back")
+        XCTAssertNil(response.lease, "there is no session left to carry")
+        XCTAssertNil(service.holderHarnessForTesting, "the microphone is free again")
+        XCTAssertEqual(host.sessionsEnded, 1, "and the pill came off screen")
+    }
+
+    // Consent is per session, so a follow-up inside one costs the user nothing.
+    // Charging them a second prompt for the second half of a conversation is
+    // the fastest way to have the feature switched off.
+    func testAFollowUpAskOnTheSameLeaseAsksTheUserNothingAgain() async {
+        let service = makeService(mode: .confirmOnScreen)
+        let first = Task { await service.handle(self.askRequest(), peer: self.peer) }
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        host.acceptFromPill?()
+        let opened = await first.value
+        let lease = try? XCTUnwrap(opened.lease)
+        XCTAssertEqual(host.prompts.count, 1)
+
+        let second = await service.handle(askRequest(lease: lease), peer: peer)
+        XCTAssertTrue(second.ok)
+        XCTAssertEqual(host.prompts.count, 1, "the session was already consented to")
+        XCTAssertEqual(host.spoken.count, 2)
+    }
+
+    // A refusal at the claim is the claim's refusal, verbatim — an agent that
+    // has learned the reason codes must not meet a different vocabulary just
+    // because it used the one-call form.
+    func testAskPassesTheClaimsRefusalStraightBack() async {
+        let service = makeService(enabled: false)
+        let response = await service.handle(askRequest(), peer: peer)
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.reason, .disabled)
+        XCTAssertTrue(host.spoken.isEmpty, "a refused claim never reaches the speakers")
+    }
+
+    // The failure that would otherwise strand the microphone. Every refusal
+    // below the claim is one the skill teaches an agent to accept and move on
+    // from, so nobody is coming back with the `release` — the lease has to go
+    // with the refusal.
+    func testAskReleasesTheSessionItOpenedWhenNobodyAnswers() async {
+        let service = makeService(mode: .open)
+        host.listenError = AgentListenError.nothingHeard
+        let response = await service.handle(askRequest(), peer: peer)
+
+        XCTAssertEqual(response.reason, .timeout)
+        XCTAssertNil(service.holderHarnessForTesting,
+                     "a session opened by this call does not outlive its own refusal")
+        XCTAssertEqual(host.sessionsEnded, 1)
+    }
+
+    // …and the mirror image: a lease the caller already held is not this
+    // call's to hang up. Tearing it down on a failed question would end a
+    // conversation the agent is still in the middle of.
+    func testAskLeavesACallersOwnSessionAloneWhenItFails() async {
+        let service = makeService(mode: .open)
+        let claimed = await service.handle(request(.claim), peer: peer)
+        let lease = try? XCTUnwrap(claimed.lease)
+        host.listenError = AgentListenError.nothingHeard
+
+        let response = await service.handle(askRequest(lease: lease), peer: peer)
+        XCTAssertEqual(response.reason, .timeout)
+        XCTAssertEqual(service.holderHarnessForTesting, "claude-code",
+                       "the session belongs to the caller, not to this call")
+        XCTAssertEqual(host.sessionsEnded, 0)
+    }
+
+    func testAskWithNothingToSayIsARequestError() async {
+        let service = makeService(mode: .open)
+        for text in [nil, "", "   \n"] {
+            let response = await service.handle(askRequest(text: text), peer: peer)
+            XCTAssertEqual(response.reason, .badRequest)
+            XCTAssertNil(service.holderHarnessForTesting,
+                         "a malformed request must not take the microphone on its way out")
+        }
+    }
+
+    // Same rule `claim` enforces, reached through the other door: a session
+    // the user cannot see the name of is one they cannot make a decision about.
+    func testAskWithoutANameIsRefusedLikeAClaim() async {
+        let service = makeService(mode: .open)
+        var request = askRequest()
+        request.name = nil
+        let response = await service.handle(request, peer: peer)
+        XCTAssertEqual(response.reason, .badRequest)
+        XCTAssertTrue(host.spoken.isEmpty)
+    }
 }

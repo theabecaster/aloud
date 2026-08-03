@@ -360,12 +360,49 @@ enum AgentVoiceInstructions {
     // "Agent Speak" is the product name for this capability, and it belongs in
     // every word the user or the agent reads. The CLI verbs below are the wire
     // contract, not branding, and do not move with it.
-    static let summary = "Agent Speak: talk to the user through Aloud and hear their spoken answer, so you can ask a question mid-task instead of ending your turn."
+    //
+    // This one string does more work than the rest of the file. A skill body is
+    // only read once something decides the skill is relevant, and that decision
+    // is made on the description alone — so a description that *describes the
+    // feature* is a skill that never loads. It has to name the situations
+    // instead: the ones an agent is already in when it is about to end its turn
+    // and wait. That is why this reads as a list of triggers rather than a
+    // sentence about Aloud, and why the shape ("Use when…") is not decoration.
+    static let summary = "Ask the user a question out loud and hear their spoken answer. Use when you need a decision, a choice, an approval, or missing information from the user mid-task and they may not be watching the screen — instead of ending your turn to ask. Triggers: needing to ask the user anything, being blocked on their input, offering options, confirming before something irreversible."
+
+    // What a user says to their agent to get this without waiting for the agent
+    // to think of it.
+    //
+    // Everything else in this file is a nudge: a description shaped to be
+    // selected, a note shaped to be obeyed. Nudges are probabilistic, and the
+    // user is entitled to a way that simply works — one sentence at the top of
+    // a session, and the agent is instructed rather than encouraged. Onboarding
+    // shows it and Settings offers it on a Copy button.
+    //
+    // English, like the skill and the note, and for the same reason: it is read
+    // by something reasoning in English. The words *around* it in the UI are
+    // localized; this is not.
+    static let spokenReplyRequest =
+        "Use Aloud to ask me out loud whenever you need my input, instead of ending your turn."
 
     // The verbs a distributed build exposes (CLI.swift). Also the verbs Claude
     // Code's allowlist has to cover, which is why they live next to the text
     // that teaches them rather than in the installer.
-    static let verbs = ["claim", "listen", "speak", "release"]
+    static let verbs = ["ask", "claim", "listen", "speak", "release"]
+
+    // What every Aloud before `ask` put in front of a user. A machine whose
+    // allowlist we have written but whose *offered* set we never recorded was
+    // installed by one of those versions, so this is what it was shown — and
+    // the difference between it and `verbs` is exactly the set that has never
+    // been offered to that user at all.
+    //
+    // Without this the two rules that guard the allowlist contradict each
+    // other. "Never re-grant what the user deleted" says a missing entry stays
+    // missing; "a skill that teaches a verb the harness will stop and ask
+    // about stalls on turn one" says a newly shipped verb must be granted. The
+    // entries are identical on disk, so only a record of what was offered can
+    // tell a deletion from a verb that did not exist yet.
+    static let verbsOfferedBeforeAsk = ["claim", "listen", "speak", "release"]
 
     // MARK: how the agent types our name
     //
@@ -482,119 +519,98 @@ enum AgentVoiceInstructions {
         let id = harness.id
         let command = invocation(command: command)
         return #"""
-        # Agent Speak — talking to the user out loud
+        # Agent Speak — asking the user out loud
 
-        Agent Speak is Aloud's voice channel to the person you are working for. You
-        can say something through their speakers and hear their spoken answer, which
-        means you can ask a question in the middle of a task instead of stopping
-        and waiting for them to come back to the keyboard.
+        Aloud puts a question through the user's speakers and hands you back
+        their spoken answer. Reach for it the moment you need a decision you
+        cannot make yourself and they may not be watching the screen — instead
+        of ending your turn and leaving them to find out at the keyboard.
 
-        Reach for it when you need a short decision from the user and they are
-        unlikely to be watching the screen. Do not narrate your work with it.
+        ## One call
+
+        ```sh
+        \#(command) ask --harness \#(id) --owner-pid $PPID --name "fixing tests" --end \
+          "The migration test is failing. Roll it back, or fix it forward?"
+        # {"text":"fix it forward","cleanup":"concise","ok":true}
+        ```
+
+        That is the whole thing. `--end` speaks, listens and hangs up in one
+        command. Leave it off and the answer comes back with a `lease` to carry:
+
+        ```sh
+        \#(command) ask --lease L1 "Same for the staging migration?"   # no second prompt
+        \#(command) release --lease L1                                 # when you are done
+        ```
+
+        - `--harness \#(id)` and `--name "<two words>"` open a session and are
+          both required to; a claim without a name is refused. The name says
+          what you are *doing* — "fixing tests", "release notes" — because the
+          user reads it on the indicator, hears it in the spoken prompt, and
+          picks from it when two windows of the same tool both want the
+          microphone. Neither is needed once you hold a lease; re-send
+          `--name` if the job has moved on.
+        - `--owner-pid $PPID`, exactly as written, whenever you open a session.
+          It tells your window apart from another window of the same tool, and
+          frees the microphone the moment you exit rather than at the timeout.
+        - **`ask` blocks** — on the user's consent, then on their answer. Give
+          it a generous timeout and do not race it.
 
         ## How to behave
 
-        **Speak before every listen.** The whole point of this feature is that the
-        user is not looking at the screen. Opening the microphone without saying
-        anything asks a question nobody knows was asked. Always `speak` first, then
-        `listen`.
+        **One or two sentences, question last.** Not "what do you think?" —
+        "the migration test is failing, should I roll it back or fix it
+        forward?" Enough to answer without switching windows. Everything you
+        send is also on screen word for word, so send the finished sentence,
+        not the reasoning that got you there.
 
-        **Say the context, briefly.** Not "what do you think?" — say "the migration
-        test is failing, should I roll it back or fix it forward?" Give them enough
-        to answer without switching windows, in one or two sentences. It is a
-        prompt, not a status report.
+        **Never narrate.** This is for decisions, not progress reports.
 
-        **Everything you say is on screen, word for word.** Aloud shows the
-        conversation next to its recording indicator: what you `speak` appears as
-        your message, and what the user said appears as theirs the moment it is
-        sent to you. So send the finished sentence, not your reasoning on the way
-        to it — a paragraph of preamble is a paragraph they have to read, and it
-        is tokens on every turn for both of us. One or two sentences, the
-        question last.
+        **Honour "stop telling me every time."** If the user asks you to drop
+        the preamble, drop it for the rest of the session and do not drift back.
 
-        **Honour "stop telling me every time."** If the user asks you to skip the
-        preamble, stop speaking context before each listen for the rest of the
-        session and just listen. Do not go back to it later in the same session.
-
-        **Agent Speak can be unavailable, and that is not an error.** The user can
-        switch it off at any moment, or decline a single request. A refusal is a
-        normal answer, not a bug: fall back to asking in text and carry on. Never
-        retry in a loop.
+        **A refusal is an answer, not a bug.** The user can switch this off or
+        decline at any moment. Fall back to text and carry on — never retry in
+        a loop.
 
         | refusal | what it means | what to do |
         |---|---|---|
-        | `disabled` | Agent Speak is switched off in Aloud | stop asking for the rest of the session; use text |
-        | `denied` | the user declined this request | use text now; asking again later is fine |
-        | `timeout` | nobody answered, or nobody spoke | use text; do not immediately ask again |
-        | `queued` | somebody else has the microphone, or it is settling — `message` and `retryAfter` say which | if `queuedBehind` names another agent, ask in text; otherwise wait `retryAfter` seconds and try once |
-        | `notHolder` | the lease ended — released, reaped, or superseded | claim again if you still need to ask |
-        | `unavailable` | Aloud isn't running, isn't set up, or couldn't answer — read `message` | use text; this is the one refusal that also exits non-zero |
-        | `badRequest` | a flag is missing or invalid — `message` says which | fix the arguments and call again; this one is your bug, not a refusal |
+        | `disabled` | switched off in Aloud | stop asking for the rest of the session |
+        | `denied` | the user declined this request | text now; later is fine |
+        | `timeout` | nobody answered, or nobody spoke | text; do not immediately re-ask |
+        | `queued` | somebody else has the microphone, or it is settling | if `queuedBehind` names another agent, use text; else wait `retryAfter` seconds and try once |
+        | `notHolder` | the lease ended — released, reaped, superseded | open a new session if you still need to ask |
+        | `unavailable` | Aloud isn't running or couldn't answer — read `message` | text; the one refusal that also exits non-zero |
+        | `badRequest` | a flag is missing or invalid — `message` says which | fix it and call again; your bug, not a refusal |
 
-        ## Mechanics
+        `text` is the answer and the only text you get: the best cleanup this
+        Mac can do, at the tier `cleanup` names (`"basic"` is closer to a raw
+        transcript than a tidied sentence). There is deliberately no verbatim
+        copy beside it — the same sentence twice is double the tokens for
+        something you would not act on differently.
 
-        Claim a lease before using the microphone or the speakers, hold it for the
-        whole conversation, and release it when you are done. Consent is granted
-        once per lease, so a follow-up question inside the same lease costs the user
-        nothing.
+        ## The rest of the surface
+
+        `ask` is `claim` + `speak` + `listen` in one call. The three still exist
+        for the one case that needs them: cutting in before the user has
+        finished talking. Every poll costs you a turn, so use it deliberately.
 
         ```sh
-        \#(command) claim   --harness \#(id) --owner-pid $PPID --name "fixing tests"
+        \#(command) claim  --harness \#(id) --owner-pid $PPID --name "code review"
         # {"lease":"L1","ok":true}
-        \#(command) speak   --harness \#(id) --lease L1 "The migration test is failing. Roll it back, or fix it forward?"
-        \#(command) listen  --harness \#(id) --lease L1        # blocks, returns {"text":"..."}
-        \#(command) release --harness \#(id) --lease L1        # always, even after an error
+        \#(command) speak  --lease L1 "Which of the two should I take first?"
+        \#(command) listen --start --lease L1                        # {"session":"S1"}
+        \#(command) listen --poll  --lease L1 --session S1 --wait 5
+        # {"text":"…","speaking":true,"silentFor":0.4,"ok":true}
+        \#(command) listen --stop  --lease L1 --session S1
         ```
 
-        - Pass `--harness \#(id)` on every call.
-        - `--name "<two words>"` is **required** on `claim` — a claim without it
-          is refused with `badRequest`. Say what you are *doing*: "fixing
-          tests", "release notes", "code review". The user reads it on the
-          indicator, hears it in the spoken prompt ("Let fixing tests agent
-          listen?"), and picks from it when more than one session wants the
-          microphone — two windows of the same tool cannot be told apart any
-          other way. Two words at most, and re-send `--name` on any later call
-          if what you are doing has changed.
-        - Pass `--owner-pid $PPID` on `claim`, exactly as written. It is how Aloud
-          tells your session apart from another session of the same tool, so the
-          two queue for the microphone instead of sharing one lease — and it lets
-          Aloud release your session the moment you exit, rather than leaving the
-          microphone held until the lease times out. Without it you are anonymous
-          and simply wait your turn.
-        - **`claim` can block.** Depending on the user's settings it is the call
-          that asks their permission — on screen, or out loud — so it may take
-          as long as they take to answer, up to about twenty seconds. Give it a
-          generous timeout and do not race it. If it comes back
-          `{"ok":false,"reason":"queued"}` somebody else has the microphone: ask
-          your question in text instead — never spin, and never sleep and retry
-          in a loop. If you genuinely have to wait, pass `--wait <seconds>` (up
-          to 300) and `claim` blocks until the microphone is yours; that is the
-          only supported way to queue, and it costs you no turns.
-        - `listen` blocks and ends on silence, returning the final transcript.
-          That is the mode you want almost always, and it costs one turn.
-        - The streaming mode is for the one case that needs it: cutting in as
-          soon as you have heard enough. Every poll costs a full turn, so use it
-          deliberately. It carries a session id you have to pass back:
-
-          ```sh
-          \#(command) listen --start --harness \#(id) --lease L1
-          # {"session":"S1","ok":true}
-          \#(command) listen --poll  --harness \#(id) --lease L1 --session S1 --wait 5
-          # {"text":"…","speaking":true,"silentFor":0.4,"ok":true}
-          \#(command) listen --stop  --harness \#(id) --lease L1 --session S1
-          # {"text":"…","cleanup":"concise","ok":true}
-          ```
-
-          `--wait` is the long-poll ceiling in seconds (30 at most); the call
-          returns early the moment the transcript changes. `speaking` and
-          `silentFor` are what you judge "heard enough" on.
-        - `release` when the conversation is over. A lease nobody releases keeps the
-          microphone away from everyone else until it times out.
-        - `text` is the answer, and the only text you get: the best cleanup this
-          Mac can do, at the tier named by `cleanup` (`"basic"` means closer to
-          a raw transcript than a tidied sentence). There is deliberately no
-          verbatim copy alongside it — the same sentence twice is double the
-          tokens on every turn for something you would not act on differently.
+        `listen` with no mode blocks and ends on silence. `--wait` is the
+        long-poll ceiling in seconds (30 at most) and returns early the moment
+        the transcript changes; `speaking` and `silentFor` are what you judge
+        "heard enough" on. `claim --wait <seconds>` (300 at most) blocks until
+        the microphone is free — the only supported way to queue, and it costs
+        no turns. Always `release`: a lease nobody releases keeps the
+        microphone from everyone else until it times out.
         """#
     }
 
@@ -632,19 +648,38 @@ enum AgentVoiceInstructions {
     // agent's default when it needs a decision is to stop and hand the turn
     // back, and someone who has walked away from the keyboard doesn't find out
     // for ten minutes. This is the line that changes that default.
-    static func globalNote(command: String) -> String {
+    // `harness` for the same reason `body` takes one: the note now carries a
+    // runnable command, and a command carrying the wrong `--harness` labels the
+    // session on the user's own indicator with the name of a tool they are not
+    // running.
+    static func globalNote(harness: AgentHarness, command: String) -> String {
+        let id = harness.id
         let command = invocation(command: command)
+        // Written as an instruction, not a description. The earlier version
+        // said what Aloud could do and left the agent to infer that it should;
+        // an agent reading a global instructions file acts on directives and
+        // skims capabilities. So: the rule first, in the imperative, and the
+        // command it takes right there — a note that costs a lookup to act on
+        // is a note that gets deferred until after the turn has ended, which is
+        // the exact failure it exists to prevent.
         return """
         ## Asking the user out loud (Aloud)
 
-        This Mac runs Aloud, which can speak a question through the user's \
-        speakers and hear their spoken answer — `\(command) claim` / `speak` / \
-        `listen` / `release`, described in full in the `aloud-voice` skill.
+        **When you need something from the user mid-task — a decision, a \
+        choice between options, an approval, a missing detail — ask them out \
+        loud instead of ending your turn.** They are often not at the screen, \
+        and a turn that ends with a question can sit unread for an hour.
 
-        When you need a decision from the user mid-task, ask them out loud \
-        rather than ending your turn and leaving them to notice at the \
-        keyboard. Keep it to a sentence or two, and fall back to text whenever \
-        Aloud refuses.
+        ```sh
+        \(command) ask --harness \(id) --owner-pid $PPID --name "<two words>" --end "<your question>"
+        # {"text":"their answer","ok":true}
+        ```
+
+        One command: it speaks, listens, and returns what they said. Keep the \
+        question to a sentence or two. If it comes back `"ok":false`, that is a \
+        normal answer — ask in text and carry on, never retry in a loop. Full \
+        details, including follow-up questions in the same session, are in the \
+        `aloud-voice` skill.
         """
     }
 
@@ -849,6 +884,12 @@ struct HarnessInstaller {
                         try write(data, to: allowlist)
                         changed.append(allowlist)
                     }
+                    // Recorded on the success path only, and after the write
+                    // rather than before: this is the memory that stops the
+                    // next refresh re-offering a verb the user has now had the
+                    // chance to delete. Set on a no-op write too — "nothing to
+                    // change" still means the entries are in front of them.
+                    recordOffered(AgentVoiceInstructions.verbs, for: harness)
                 } catch {
                     if permissions != .migrate { throw error }
                 }
@@ -901,7 +942,7 @@ struct HarnessInstaller {
             else { return [] }
         }
         let note = AgentVoiceInstructions.markedNote(
-            AgentVoiceInstructions.globalNote(command: command))
+            AgentVoiceInstructions.globalNote(harness: harness, command: command))
         do {
             let changed = try upsertBlock(note,
                                           in: url,
@@ -927,6 +968,38 @@ struct HarnessInstaller {
         var written = Set(defaults.stringArray(forKey: Self.noteWrittenKey) ?? [])
         guard written.insert(harness.id).inserted else { return }
         defaults.set(Array(written).sorted(), forKey: Self.noteWrittenKey)
+    }
+
+    // MARK: which verbs this harness has been offered
+    //
+    // The companion to `declinedHarnesses`, one level down: that remembers a
+    // whole harness the user took away, this remembers which individual
+    // permission entries they have ever been given the chance to keep. Stored
+    // as "<harness>/<verb>" so one flat list covers every row.
+    private static let offeredVerbsKey = "agentOfferedVerbs"
+
+    // Falls back to the pre-`ask` set rather than to empty. Empty would mean
+    // "offer them everything", which on the first launch after this change is
+    // precisely the machine where the user's deletions are invisible to us —
+    // so it would hand back every entry anyone had ever removed.
+    private func offeredVerbs(for harness: AgentHarness) -> Set<String> {
+        let stored = defaults.stringArray(forKey: Self.offeredVerbsKey) ?? []
+        let prefix = "\(harness.id)/"
+        let recorded = stored.filter { $0.hasPrefix(prefix) }
+            .map { String($0.dropFirst(prefix.count)) }
+        return recorded.isEmpty ? Set(AgentVoiceInstructions.verbsOfferedBeforeAsk)
+                                : Set(recorded)
+    }
+
+    // Called only where the allowlist was actually dealt with successfully. A
+    // corrupt settings.json we skipped must not be recorded as "they have seen
+    // `ask`" — the next launch is the retry, and this is what would stop it.
+    private func recordOffered(_ verbs: [String], for harness: AgentHarness) {
+        var stored = Set(defaults.stringArray(forKey: Self.offeredVerbsKey) ?? [])
+        let before = stored.count
+        for verb in verbs { stored.insert("\(harness.id)/\(verb)") }
+        guard stored.count != before else { return }
+        defaults.set(Array(stored).sorted(), forKey: Self.offeredVerbsKey)
     }
 
     // Delete a skill file we wrote, and the directory it sat in if that leaves
@@ -1147,6 +1220,27 @@ struct HarnessInstaller {
                 }
                 allow.append(contentsOf: migrated)
                 changed = true
+            }
+            // A verb this Aloud ships that the last one did not. The user has
+            // never seen it, so there is nothing of theirs to overrule — and
+            // the refresh has just rewritten their skill file to teach it. A
+            // verb taught and not permitted is the turn-one permission prompt
+            // the whole allowlist exists to avoid, and it would land on the
+            // one call the feature is now built around.
+            //
+            // Scoped to genuinely-new verbs by `offeredVerbs`, so this can
+            // never become a back door that hands back `speak` to somebody who
+            // deleted it.
+            let neverOffered = Set(AgentVoiceInstructions.verbs)
+                .subtracting(offeredVerbs(for: harness))
+            if !neverOffered.isEmpty {
+                let present = Set(allow.compactMap { $0 as? String })
+                for entry in currentEntries where !present.contains(entry) {
+                    guard let verb = AgentVoiceInstructions.verb(of: entry, style: style),
+                          neverOffered.contains(verb) else { continue }
+                    allow.append(entry)
+                    changed = true
+                }
             }
         }
         guard changed else { return nil }

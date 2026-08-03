@@ -70,14 +70,14 @@ final class UninstallerHarnessTests: XCTestCase {
     }
 
     // The whole point: a full install, then a full uninstall, leaves nothing of
-    // ours anywhere — instruction files, skill directories, and the four
-    // allowlist entries alike.
+    // ours anywhere — instruction files, skill directories, and every
+    // allowlist entry alike.
     func testUninstallUnwritesEveryHarnessWeInstalledTo() throws {
         for harness in globalHarnesses {
             _ = try installer().install(harness)
         }
-        XCTAssertEqual(try allowList().count, 4)
-        XCTAssertEqual(try allowList(Self.cursorConfigPath).count, 4)
+        XCTAssertEqual(try allowList().count, AgentVoiceInstructions.verbs.count)
+        XCTAssertEqual(try allowList(Self.cursorConfigPath).count, AgentVoiceInstructions.verbs.count)
 
         XCTAssertEqual(sweep(), [])
 
@@ -120,7 +120,7 @@ final class UninstallerHarnessTests: XCTestCase {
         for harness in AgentHarness.allCases {
             guard let url = installer().allowlistURL(for: harness) else { continue }
             let relative = url.path.replacingOccurrences(of: home.path + "/", with: "")
-            XCTAssertEqual(try allowList(relative).count, 4, "\(harness.id) never wrote its allowlist")
+            XCTAssertEqual(try allowList(relative).count, AgentVoiceInstructions.verbs.count, "\(harness.id) never wrote its allowlist")
         }
 
         XCTAssertEqual(sweep(), [])

@@ -153,7 +153,7 @@ final class AgentAutoInstallTests: XCTestCase {
     // mechanics. Held as a ratio against the skill body so a reworded note
     // stays honest and a note that quietly grew into a second manual does not.
     func testTheNoteIsAPointerRatherThanASecondCopyOfTheManual() {
-        let note = AgentVoiceInstructions.globalNote(command: Self.command)
+        let note = AgentVoiceInstructions.globalNote(harness: .claudeCode, command: Self.command)
         let body = AgentVoiceInstructions.body(harness: .claudeCode, command: Self.command)
         XCTAssertFalse(note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         XCTAssertTrue(note.contains("Aloud"), "the note has to name the app doing the talking")
@@ -170,7 +170,7 @@ final class AgentAutoInstallTests: XCTestCase {
     // does not find out about for ten minutes — so the note has to say so
     // explicitly, not merely advertise that a voice channel exists.
     func testTheNoteArguesAgainstEndingTheTurn() {
-        let flowed = AgentVoiceInstructions.globalNote(command: Self.command)
+        let flowed = AgentVoiceInstructions.globalNote(harness: .claudeCode, command: Self.command)
             .lowercased()
             .replacingOccurrences(of: "\n", with: " ")
         XCTAssertTrue(flowed.contains("turn"),
@@ -203,7 +203,7 @@ final class AgentAutoInstallTests: XCTestCase {
         let text = try XCTUnwrap(read(".claude/CLAUDE.md"))
         XCTAssertTrue(text.contains(AgentVoiceInstructions.noteMarkerStart))
         XCTAssertTrue(text.contains(AgentVoiceInstructions.noteMarkerEnd))
-        XCTAssertTrue(text.contains(AgentVoiceInstructions.globalNote(command: Self.command)))
+        XCTAssertTrue(text.contains(AgentVoiceInstructions.globalNote(harness: .claudeCode, command: Self.command)))
         XCTAssertTrue(exists(".claude/skills/aloud-voice/SKILL.md"), "the skill still gets written")
     }
 

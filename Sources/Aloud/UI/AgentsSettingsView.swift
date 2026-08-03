@@ -39,6 +39,8 @@ struct AgentsSettings: View {
     @State private var failures: [AgentHarness: InstallFailure] = [:]
     // Which row's Copy button is showing its confirmation right now.
     @State private var copied: AgentHarness?
+    // The same beat for the phrase, which belongs to no row.
+    @State private var copiedPhrase = false
 
     // A refusal we have to show honestly, with whatever the user can paste in
     // our place when there is something to paste.
@@ -115,6 +117,36 @@ struct AgentsSettings: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Setting a tool up teaches its agent that Aloud exists; whether
+            // the agent then *reaches* for it on any given turn is a judgement
+            // it makes. This is the way that does not depend on that judgement,
+            // and it belongs here rather than in the documentation because the
+            // moment the user wants it is the moment they notice an agent went
+            // quiet. Shown only once something is actually set up — offered
+            // before that, it is a phrase that would do nothing.
+            if detected.contains(where: \.isInstalled) {
+                SwiftUI.Section {
+                    HStack(alignment: .top, spacing: 12) {
+                        Text(AgentVoiceInstructions.spokenReplyRequest)
+                            .font(.callout)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        copyButton(done: copiedPhrase) {
+                            copyPhrase()
+                        }
+                        .help(loc("Copy this to paste into an agent"))
+                    }
+                } header: {
+                    Text(loc("Tell Your Agent"))
+                } footer: {
+                    Text(loc("Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain."))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .formStyle(.grouped)
@@ -215,8 +247,13 @@ struct AgentsSettings: View {
     // The app's copy affordance: the label becomes its own confirmation for a
     // beat, so nothing has to be said about it.
     private func copyButton(_ harness: AgentHarness, action: @escaping () -> Void) -> some View {
-        let done = copied == harness
-        return Button(action: action) {
+        copyButton(done: copied == harness, action: action)
+    }
+
+    // Same button, for the one thing on this pane that is copied without
+    // belonging to a row.
+    private func copyButton(done: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             Label(done ? loc("Copied") : loc("Copy"),
                   systemImage: done ? "checkmark" : "doc.on.doc")
                 .contentTransition(.symbolEffect(.replace))
@@ -304,6 +341,16 @@ struct AgentsSettings: View {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(1.2))
             if copied == harness { copied = nil }
+        }
+    }
+
+    private func copyPhrase() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(AgentVoiceInstructions.spokenReplyRequest, forType: .string)
+        copiedPhrase = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            copiedPhrase = false
         }
     }
 }

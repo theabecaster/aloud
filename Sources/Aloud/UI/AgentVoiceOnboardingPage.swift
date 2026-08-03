@@ -33,6 +33,7 @@ struct AgentVoiceOnboardingPage: View {
                message: loc("A coding agent can ask you a question out loud and hear your answer, so you can keep working instead of switching to its window.")) {
             VStack(spacing: 14) {
                 grants
+                howToStart
                 Text(loc("This is experimental. You can turn it on or off any time in Settings."))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -66,6 +67,38 @@ struct AgentVoiceOnboardingPage: View {
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10)
             .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+    }
+
+    // The one thing a user can do that does not depend on an agent deciding,
+    // on its own, that a voice question is warranted. Aloud writes instructions
+    // into every agent tool it finds, and they work — but "works most of the
+    // time" is a poor first impression of a feature somebody just switched on,
+    // and the first session is exactly when they are deciding whether it does
+    // anything at all. So the sentence is on the screen where they opt in,
+    // before they go looking for a reason it seems quiet.
+    //
+    // Deliberately below the grants and above the buttons: it is the answer to
+    // "and then what", which is the question the grants leave you with.
+    private var howToStart: some View {
+        VStack(spacing: 6) {
+            Text(loc("Agent tools on this Mac are set up automatically. To be sure, tell your agent:"))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            // Quoted and set apart because it is something to say, not
+            // something to read: the user has to recognise it again later, in
+            // their own terminal, as a thing they type.
+            Text("“\(AgentVoiceInstructions.spokenReplyRequest)”")
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+        }
     }
 
     private func grantRow(symbol: String, title: String, detail: String) -> some View {
