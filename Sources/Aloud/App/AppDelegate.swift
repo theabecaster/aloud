@@ -75,6 +75,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // who finds it, and the probe is a slower path than not needing one.
     func applicationWillTerminate(_ notification: Notification) {
         bridge?.stop()
+        // The system-wide default input, if a session was still holding it.
+        //
+        // Picking a microphone in Settings switches the OS default for the
+        // length of a session, and only `stop()` puts it back — which never
+        // runs when the user quits mid-session from the status menu. Every
+        // other app on the Mac was then left on Aloud's chosen input until
+        // Aloud was launched again, since the launch-time repair was the only
+        // thing that restored it.
+        AudioRecorder.restoreDefaultInputIfInterrupted()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

@@ -139,8 +139,25 @@ final class RecordingIndicatorPanel {
     // window that no longer exists.
     private var moveObserver: NSObjectProtocol?
 
+    // A repeating timer that keeps running while a menu is being tracked.
+    static func repeatingOnCommonModes(every interval: TimeInterval,
+                                       _ body: @escaping () -> Void) -> Timer {
+        let timer = Timer(timeInterval: interval, repeats: true) { _ in body() }
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
+    }
+
+
     deinit {
         if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
+        // The run loop holds the timer, and the timer holds closures that hold
+        // the audio engine and the pooled speaker — so without this a panel
+        // that went away would go on polling both, thirty times a second, for
+        // the life of the process. The app's own indicator lives as long as the
+        // app, but this type is deliberately not a singleton.
+        levelTimer?.invalidate()
+        levelTimer = nil
+        announceTask?.cancel()
     }
 
     // Basic dictation (fallback engine) in use: the pill carries a small tag
@@ -188,7 +205,12 @@ final class RecordingIndicatorPanel {
         // states below stay click-through.
         panel?.ignoresMouseEvents = false
         levelTimer?.invalidate()
-        levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        // `.common` rather than the default mode: opening the pill's own
+        // context menu spins the run loop in event-tracking mode, and a
+        // default-mode timer simply stops there — the meter freezes
+        // mid-motion and the still-listening clock stops advancing while
+        // the menu is up.
+        levelTimer = Self.repeatingOnCommonModes(every: 1.0 / 30.0) { [weak self] in
             let level = levelProvider()
             // No spectrum available (a caller that only has a level): every bar
             // follows the one number, which is the old meter's behaviour.
@@ -392,6 +414,12 @@ final class RecordingIndicatorPanel {
     // for a wait rather than on every keep-alive tick.
     var isShowingAgentWaiting: Bool { model.agentWaiting }
 
+    /// Is an agent's pill actually on screen right now? Asked when a session
+    /// ends, because the pill can be the only thing left of it: an accepted
+    /// consent prompt leaves it standing with no capture, no playback and no
+    /// prompt behind it, and something has to be able to take it down.
+    var isShowingAgentSession: Bool { isShowing && model.mode == .agent }
+
     func noteAgentWaiting() {
         if !model.agentWaiting {
             withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) {
@@ -483,7 +511,12 @@ final class RecordingIndicatorPanel {
         model.micIsLive = micIsLive
         model.voiceIsPlaying = playingProvider?() ?? true
         levelTimer?.invalidate()
-        levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        // `.common` rather than the default mode: opening the pill's own
+        // context menu spins the run loop in event-tracking mode, and a
+        // default-mode timer simply stops there — the meter freezes
+        // mid-motion and the still-listening clock stops advancing while
+        // the menu is up.
+        levelTimer = Self.repeatingOnCommonModes(every: 1.0 / 30.0) { [weak self] in
             let level = levelProvider()
             let bands = bandsProvider?() ?? [Float](repeating: level, count: SpectrumAnalyzer.bandCount)
             let playing = playingProvider?()
@@ -1178,11 +1211,20 @@ final class IndicatorModel: ObservableObject {
     func appendChatMessage(author: AgentChatMessage.Author, text: String) {
         chatNextID += 1
         chatMessages.append(AgentChatMessage(id: chatNextID, author: author, text: text))
+        // The thread is reset when the lease changes, not when the pill hides —
+        // so one agent working through a long session adds two entries a turn
+        // and nothing ever takes any out. Far more than fits on screen, kept
+        // only so scrolling back has something to show.
+        if chatMessages.count > Self.maxChatMessages {
+            chatMessages.removeFirst(chatMessages.count - Self.maxChatMessages)
+        }
         if author == .user { lastSentMessageID = chatNextID }
     }
 
     // The turn has been sent and the pill is closing on its checkmark.
     var agentIsDone: Bool { mode == .agent && agentPhase == .done }
+
+    static let maxChatMessages = 200
 
     func resetChat() {
         chatMessages = []
@@ -1724,7 +1766,14 @@ struct IndicatorView: View {
     // during any of them.
     @ViewBuilder
     private var agentWaitingBubble: some View {
-        if model.agentWaiting, model.mode == .recording {
+        // `.transcribing` as well as `.recording`, because both are "the user
+        // is mid-dictation" as far as an agent is concerned — that is exactly
+        // what `userDictationInProgress` reports, and it is what makes the
+        // bridge play the waiting cue. Drawn only in `.recording`, the tail of
+        // a dictation gave the user a chime and a window that silently grew by
+        // the height of a bubble that was never rendered, with nothing on
+        // screen to explain either.
+        if model.agentWaiting, model.mode == .recording || model.mode == .transcribing {
             AgentWaitingBubble()
                 // Rises out of the pill, the way the chat panel does, so it
                 // reads as belonging to it rather than floating over it.

@@ -74,7 +74,10 @@ fi
 # sockaddr_un.sun_path is a fixed 104-byte field: a $TMPDIR path (which on macOS
 # is /var/folders/xx/……/T/) blows straight past it, and the failure is a bridge
 # that silently never comes up. Asserted below rather than trusted.
-STATE="/tmp/aloud-agent-check.$$"
+# Named by mktemp rather than by pid: /tmp is world-writable and sticky, so a
+# predictable name is one another user can create first — and the 0700 the app
+# then tries to set on a directory it does not own fails silently.
+STATE="$(mktemp -d /tmp/aloud-check.XXXXXX)"
 SUITE="com.abrahamgonzalez.aloud.agentcheck.$$"
 SOCK="$STATE/bridge.sock"
 APPLOG="$STATE/app.log"

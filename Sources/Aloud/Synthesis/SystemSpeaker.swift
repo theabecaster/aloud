@@ -189,9 +189,19 @@ final class SystemSpeaker: NSObject, Speaker {
     var isPlaying: Bool { synthesizer.isSpeaking }
 
     func stop() {
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
-        }
+        // Unguarded on purpose. `isSpeaking` is false for the window between
+        // handing an utterance over and the first sample leaving the speakers,
+        // and a stop arriving in that window used to do nothing at all — so
+        // ending a session while the question was still being queued let the
+        // Mac read it out to a screen with no pill on it. The enhanced voice
+        // has an explicit fix for the same race; the system voice is what every
+        // user hears until the download lands, and what non-English users hear
+        // permanently, so it needs one at least as much.
+        //
+        // `stopSpeaking(at:)` is safe on an idle synthesizer and also flushes
+        // anything still queued behind the current utterance, which is exactly
+        // what the guard was preventing.
+        synthesizer.stopSpeaking(at: .immediate)
     }
 }
 

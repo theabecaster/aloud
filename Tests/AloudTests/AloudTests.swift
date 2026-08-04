@@ -6,6 +6,42 @@ import Carbon.HIToolbox
 // tests; the shipping default is now the ⌃⌥ chord, covered by HotkeyChordTests.
 private let loneOption = Hotkey(keyCode: UInt16(kVK_Option), modifiers: 0, isModifierKey: true)
 
+extension XCTestCase {
+    // Empty a test's UserDefaults suite and take its plist with it, as far as
+    // that is possible from inside the test process.
+    //
+    // Three steps:
+    //
+    //  1. `removePersistentDomain` empties the domain. It leaves the plist on
+    //     disk, which is the reason every suite in these tests is a fixed name
+    //     rather than a UUID per run: a random name drops a *new* file every
+    //     single time, and thousands of them had piled up in the developer's
+    //     ~/Library/Preferences before anybody looked.
+    //  2. `CFPreferencesAppSynchronize` writes the (now empty) domain out and
+    //     drops what cfprefsd was holding, so step 3 is deleting a settled file
+    //     rather than racing a write.
+    //  3. Delete it.
+    //
+    // What this does NOT achieve — and what the comments scattered across these
+    // test classes used to claim it did — is that the file stays gone. cfprefsd
+    // is a separate process that owns the domain, and it writes an empty 42-byte
+    // plist back out for each of these suites a few seconds after the test
+    // process exits, well after any assertion could see it. Nothing running in
+    // here can stop that.
+    //
+    // So the guarantee is the bounded one: a whole `swift test` run adds at most
+    // one file per fixed suite name — a handful, the same handful every time,
+    // never growing. That is what the stable names buy, and it is the part that
+    // actually mattered.
+    func forgetTestDefaults(_ suite: String) {
+        UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+        CFPreferencesAppSynchronize(suite as CFString)
+        let plist = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/\(suite).plist")
+        try? FileManager.default.removeItem(at: plist)
+    }
+}
+
 final class HotkeyNameTests: XCTestCase {
     // Regression: a saved hotkey on a plain letter key (e.g. X, keyCode 7) crashed
     // keyName(for:) via an invalid F-key range pattern, killing the menu on open.
@@ -747,8 +783,14 @@ final class SettingsStoreTests: XCTestCase {
     // removePersistentDomain empties the domain but cfprefsd rewrites the plist
     // asynchronously afterwards, so a random name leaves a file in
     // ~/Library/Preferences every time that race is lost. A stable name still
-    // isolates and can leave at most one.
+    // isolates and can leave at most one, which `forgetTestDefaults` clears up
+    // as far as a test process can.
     private static let suite = "aloud-tests-settings-store"
+
+    override func tearDown() {
+        forgetTestDefaults(Self.suite)
+        super.tearDown()
+    }
 
     private func freshDefaults() -> UserDefaults {
         let defaults = UserDefaults(suiteName: Self.suite)!

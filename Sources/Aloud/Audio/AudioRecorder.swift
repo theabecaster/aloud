@@ -14,7 +14,6 @@ final class AudioRecorder {
     // engineQueue — start() blocks main inside an engineQueue.sync for
     // everything it does with it.
     private var engine = AVAudioEngine()
-    private var converter: AVAudioConverter?
     private var samples: [Float] = []
     private let lock = NSLock()
     // Every touch of `engine` (start, stop, a mid-session rebuild, a device
@@ -583,7 +582,11 @@ final class AudioRecorder {
         if let map = Self.channelMap(forInputChannels: hwFormat.channelCount) {
             converter.channelMap = map
         }
-        self.converter = converter
+        // Deliberately not stored on `self`. The tap closure below captures the
+        // one it needs, and nothing else ever read the property — it was
+        // assigned on `engineQueue` here and cleared on the main thread in
+        // `stop()`, which is an unsynchronised store to a class reference and
+        // therefore an ARC retain/release race, for a value with no readers.
         // AVAudioEngine raises (and so aborts the app) if a tap is already on
         // the bus. A previous start that got as far as the tap and then failed
         // to start the engine — another app holding the input, a device
@@ -680,7 +683,6 @@ final class AudioRecorder {
             restoreDefaultInputAfterSession()
         }
         isRecording = false
-        converter = nil
         onChunk = nil
         onMonitorChunk = nil
         resetSpectrum()
@@ -722,9 +724,26 @@ final class AudioRecorder {
 
     func discardBuffered(keepingLast seconds: TimeInterval) {
         lock.lock(); defer { lock.unlock() }
-        let keep = max(0, Int(seconds * Self.targetSampleRate))
-        guard samples.count > keep else { return }
-        samples.removeFirst(samples.count - keep)
+        samples = Self.keepingTail(samples, seconds: seconds)
+    }
+
+    // The arithmetic on its own, so the trim that keeps a ten-minute hold from
+    // handing ten minutes of room tone to the transcriber can actually be
+    // tested. Reaching it through the recorder needs a live microphone: the
+    // buffer is private and its only writer is the audio tap.
+    //
+    // `isFinite` first, and not for tidiness: `Int(_: Double)` traps on
+    // infinity and NaN, and it converts before `max(0,…)` can clamp anything —
+    // so an infinite `seconds` took the process down rather than keeping
+    // everything, which is what asking to keep an infinite tail obviously means.
+    // Both callers pass constants today; this is the trap closed before one of
+    // them stops being a constant.
+    static func keepingTail(_ samples: [Float], seconds: TimeInterval,
+                            sampleRate: Double = targetSampleRate) -> [Float] {
+        guard seconds.isFinite else { return samples }
+        let keep = max(0, Int(seconds * sampleRate))
+        guard samples.count > keep else { return samples }
+        return Array(samples.suffix(keep))
     }
 
     // Whether the audio hardware has actually been let go: engine idle and

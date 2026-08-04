@@ -26,8 +26,7 @@ final class ConsentPolicyTests: XCTestCase {
     // state, and the stream starts immediately.
     func testOpenModeGrantsWithoutAsking() {
         let p = policy(.open)
-        guard case .granted(let grant) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests",
-                                                   installedHarnesses: 1, now: t0) else {
+        guard case .granted(let grant) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0) else {
             return XCTFail("open mode must not prompt")
         }
         XCTAssertEqual(grant.lease, "L1")
@@ -39,8 +38,7 @@ final class ConsentPolicyTests: XCTestCase {
 
     func testConfirmOnScreenWaitsForTheClickAndOnlyThenGrants() {
         let p = policy(.confirmOnScreen)
-        guard case .awaiting(let prompt) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests",
-                                                     installedHarnesses: 1, now: t0) else {
+        guard case .awaiting(let prompt) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0) else {
             return XCTFail("mode 2 must hold the request until the user answers")
         }
         // The microphone stays shut until the user says so — mode 2 has a
@@ -61,10 +59,8 @@ final class ConsentPolicyTests: XCTestCase {
     // a retrying agent could otherwise keep a question alive indefinitely.
     func testRepeatedRequestReturnsTheSamePromptWithTheSameDeadline() {
         let p = policy(.confirmOnScreen)
-        guard case .awaiting(let first) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests",
-                                                    installedHarnesses: 1, now: t0),
-              case .awaiting(let again) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests",
-                                                    installedHarnesses: 1, now: t0.addingTimeInterval(5)) else {
+        guard case .awaiting(let first) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0),
+              case .awaiting(let again) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0.addingTimeInterval(5)) else {
             return XCTFail("expected the same pending prompt")
         }
         XCTAssertEqual(first, again)
@@ -74,8 +70,7 @@ final class ConsentPolicyTests: XCTestCase {
 
     func testConfirmByVoiceCapturesForTheAnswerAndGrantsOnTheAcceptWord() {
         let p = policy(.confirmByVoice)
-        guard case .awaiting(let prompt) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests",
-                                                     installedHarnesses: 1, now: t0) else {
+        guard case .awaiting(let prompt) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0) else {
             return XCTFail("mode 3 must hold the request until the user answers")
         }
         // Capture starts with the prompt so the answer is not clipped — and the
@@ -105,7 +100,7 @@ final class ConsentPolicyTests: XCTestCase {
     // mode 2 the mic is not even open, so speech arriving here is not consent.
     func testSpokenAnswerIsIgnoredInConfirmOnScreenMode() {
         let p = policy(.confirmOnScreen)
-        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", installedHarnesses: 1, now: t0)
+        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0)
         XCTAssertEqual(p.heard("yes", lease: "L1", now: t0.addingTimeInterval(1)), .ignored)
         XCTAssertNotNil(p.pending, "the prompt is still waiting for a real click")
         XCTAssertFalse(p.isGranted(lease: "L1"))
@@ -119,7 +114,7 @@ final class ConsentPolicyTests: XCTestCase {
     func testPreConsentAudioIsDiscardedOnAcceptDeclineAndTimeout() {
         for outcome in ["accept", "decline", "timeout"] {
             let p = policy(.confirmByVoice, timeout: 10)
-            _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", installedHarnesses: 1, now: t0)
+            _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0)
 
             let resolution: ConsentResolution
             switch outcome {
@@ -144,13 +139,12 @@ final class ConsentPolicyTests: XCTestCase {
     // user every single time.
     func testConsentPersistsAcrossEveryListenInTheSameLease() {
         let p = policy(.confirmByVoice)
-        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", installedHarnesses: 1, now: t0)
+        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0)
         _ = p.heard("go ahead", lease: "L1", now: t0.addingTimeInterval(1))
 
         for step in 1...10 {
             let now = t0.addingTimeInterval(Double(step) * 30)
-            guard case .granted(let grant) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests",
-                                                       installedHarnesses: 1, now: now) else {
+            guard case .granted(let grant) = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: now) else {
                 return XCTFail("listen \(step) inside a consented lease must not re-prompt")
             }
             XCTAssertEqual(grant.streamStartsAt, now)
@@ -163,11 +157,10 @@ final class ConsentPolicyTests: XCTestCase {
     // agent run on the machine.
     func testConsentDoesNotCarryOverToADifferentLease() {
         let p = policy(.confirmOnScreen)
-        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", installedHarnesses: 1, now: t0)
+        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0)
         _ = p.accept(lease: "L1", now: t0)
 
-        guard case .awaiting = p.request(lease: "L2", harness: "claude-code", name: "fixing tests",
-                                         installedHarnesses: 1, now: t0.addingTimeInterval(1)) else {
+        guard case .awaiting = p.request(lease: "L2", harness: "claude-code", name: "fixing tests", now: t0.addingTimeInterval(1)) else {
             return XCTFail("a second lease must ask again")
         }
         XCTAssertFalse(p.isGranted(lease: "L2"))
@@ -175,14 +168,13 @@ final class ConsentPolicyTests: XCTestCase {
 
     func testEndingTheLeaseRevokesConsent() {
         let p = policy(.confirmOnScreen)
-        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", installedHarnesses: 1, now: t0)
+        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0)
         _ = p.accept(lease: "L1", now: t0)
         XCTAssertTrue(p.isGranted(lease: "L1"))
 
         p.endLease("L1")
         XCTAssertFalse(p.isGranted(lease: "L1"))
-        guard case .awaiting = p.request(lease: "L1", harness: "claude-code", name: "fixing tests",
-                                         installedHarnesses: 1, now: t0.addingTimeInterval(1)) else {
+        guard case .awaiting = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0.addingTimeInterval(1)) else {
             return XCTFail("a reissued lease id must not inherit the old session's consent")
         }
     }
@@ -194,13 +186,13 @@ final class ConsentPolicyTests: XCTestCase {
     // agent that retries those forever is worse than one that gives up.
     func testDeclineIsDeniedAndSilenceIsTimedOut() {
         let declined = policy(.confirmOnScreen)
-        _ = declined.request(lease: "L1", harness: "claude-code", name: "fixing tests", installedHarnesses: 1, now: t0)
+        _ = declined.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0)
         XCTAssertEqual(declined.decline(lease: "L1", now: t0.addingTimeInterval(1)),
                        .denied(preConsentAudio: .neverCaptured))
         XCTAssertFalse(declined.isGranted(lease: "L1"))
 
         let silent = policy(.confirmByVoice, timeout: 15)
-        _ = silent.request(lease: "L1", harness: "claude-code", name: "fixing tests", installedHarnesses: 1, now: t0)
+        _ = silent.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0)
         XCTAssertNil(silent.check(now: t0.addingTimeInterval(14)), "still inside the window")
         XCTAssertEqual(silent.check(now: t0.addingTimeInterval(15)),
                        .timedOut(preConsentAudio: .discarded),
@@ -212,7 +204,7 @@ final class ConsentPolicyTests: XCTestCase {
     // request — by then the harness command has likely gone too.
     func testAcceptingAfterTheDeadlineDoesNothing() {
         let p = policy(.confirmOnScreen, timeout: 5)
-        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", installedHarnesses: 1, now: t0)
+        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0)
         XCTAssertEqual(p.accept(lease: "L1", now: t0.addingTimeInterval(6)), .ignored)
         XCTAssertFalse(p.isGranted(lease: "L1"))
     }
@@ -221,7 +213,7 @@ final class ConsentPolicyTests: XCTestCase {
     // full of conversation still runs out the clock and times out.
     func testUnrecognisedSpeechKeepsWaitingAndStillTimesOut() {
         let p = policy(.confirmByVoice, timeout: 10)
-        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", installedHarnesses: 1, now: t0)
+        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0)
 
         guard case .unrecognized(let prompt) = p.heard("what was that about the invoice",
                                                        lease: "L1", now: t0.addingTimeInterval(2)) else {
@@ -310,7 +302,7 @@ final class ConsentPolicyTests: XCTestCase {
     // prompt exactly where it was.
     func testOverheardSentenceDoesNotGrantConsentEndToEnd() {
         let p = policy(.confirmByVoice)
-        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", installedHarnesses: 1, now: t0)
+        _ = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0)
         guard case .unrecognized = p.heard("yes I'll call them back after lunch",
                                            lease: "L1", now: t0.addingTimeInterval(1)) else {
             return XCTFail("a stray 'yes' must not turn on the microphone")
@@ -358,8 +350,7 @@ final class ConsentPolicyTests: XCTestCase {
     // the session's name has to reach it through the request.
     func testPendingPromptCarriesTheSessionName() {
         let p = policy(.confirmByVoice)
-        guard case .awaiting(let prompt) = p.request(lease: "L1", harness: "codex", name: "release notes",
-                                                     installedHarnesses: 2, now: t0) else {
+        guard case .awaiting(let prompt) = p.request(lease: "L1", harness: "codex", name: "release notes", now: t0) else {
             return XCTFail("expected a prompt")
         }
         XCTAssertEqual(prompt.name, "release notes")
@@ -380,14 +371,12 @@ final class ConsentPolicyTests: XCTestCase {
     // to a confirm mode.
     func testSwitchingToAStricterModeRevokesOutstandingConsent() {
         let p = policy(.open)
-        guard case .granted = p.request(lease: "L1", harness: "claude-code", name: "fixing tests",
-                                        installedHarnesses: 1, now: t0) else {
+        guard case .granted = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0) else {
             return XCTFail("expected a grant")
         }
         p.mode = .confirmByVoice
         XCTAssertFalse(p.isGranted(lease: "L1"))
-        guard case .awaiting = p.request(lease: "L1", harness: "claude-code", name: "fixing tests",
-                                         installedHarnesses: 1, now: t0.addingTimeInterval(1)) else {
+        guard case .awaiting = p.request(lease: "L1", harness: "claude-code", name: "fixing tests", now: t0.addingTimeInterval(1)) else {
             return XCTFail("the new mode must apply to the session already running")
         }
     }

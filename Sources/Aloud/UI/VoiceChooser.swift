@@ -276,7 +276,13 @@ final class VoiceSample: ObservableObject {
                 // Someone switched sides while this was asleep; the watcher
                 // that replaced it owns the answer now.
                 guard self.watchedGender == gender else { return }
-                if !VoiceCatalog.isStandingIn(gender) {
+                // Asked off the main actor: the answer is a directory listing,
+                // and this repeats for as long as the pane is open.
+                let stillStandingIn = await Task.detached(priority: .utility) {
+                    VoiceCatalog.isStandingIn(gender)
+                }.value
+                guard self.watchedGender == gender, !Task.isCancelled else { return }
+                if !stillStandingIn {
                     self.standingIn = false
                     self.watch = nil
                     self.watchedGender = nil

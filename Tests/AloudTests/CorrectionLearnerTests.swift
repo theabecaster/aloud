@@ -23,7 +23,7 @@ final class CorrectionLearnerTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: suite)
+        forgetTestDefaults(suite)
         try? FileManager.default.removeItem(at: dir)
     }
 

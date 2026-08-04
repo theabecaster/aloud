@@ -44,13 +44,7 @@ final class AgentAutoInstallTests: XCTestCase {
     override func tearDown() {
         try? fm.removeItem(at: home)
         for suite in [Self.suiteName, Self.otherSuiteName] {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
-            // removePersistentDomain empties the domain but leaves the plist
-            // behind, so it is deleted by hand or the test litters the
-            // developer's Preferences directory once per suite.
-            let plist = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Preferences/\(suite).plist")
-            try? FileManager.default.removeItem(at: plist)
+            forgetTestDefaults(suite)
         }
         super.tearDown()
     }

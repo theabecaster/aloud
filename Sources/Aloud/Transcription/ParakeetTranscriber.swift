@@ -32,10 +32,26 @@ final class ParakeetTranscriber: Transcriber {
     // tokens from other scripts (SDK script filtering) — a mild guard against
     // drifting into the wrong alphabet. Several declared languages (or one
     // the SDK's filter doesn't know) mean full auto-detection, the default.
+    // Read on the main actor, because that is the only place it is written.
+    //
+    // `SettingsStore` is a plain ObservableObject whose arrays are mutated from
+    // the main actor — the Vocabulary pane, an accepted correction — while this
+    // is a nonisolated `async` method running on the cooperative pool. Reading
+    // an Array while another thread reassigns it is a torn read or an
+    // over-release of the old buffer: the once-a-month crash with no repro, in
+    // a process that stays up for weeks.
     private var languageHint: Language? {
-        let declared = SettingsStore.shared.declaredLanguages
-        guard declared.count == 1, let code = declared.first else { return nil }
-        return Language(rawValue: code)
+        get async {
+            let declared = await MainActor.run { SettingsStore.shared.declaredLanguages }
+            guard declared.count == 1, let code = declared.first else { return nil }
+            return Language(rawValue: code)
+        }
+    }
+
+    // Same reasoning: snapshot the terms on the main actor before handing them
+    // to anything running off it.
+    private static var replacements: [Replacement] {
+        get async { await MainActor.run { SettingsStore.shared.replacements } }
     }
 
     func prepare(onProgress: @escaping @Sendable (Double) -> Void) async throws {
@@ -61,7 +77,8 @@ final class ParakeetTranscriber: Transcriber {
                 // dictation can already benefit from it.
                 let booster = booster
                 Task.detached(priority: .utility) {
-                    await booster.warm(terms: SettingsStore.shared.replacements)
+                    let terms = await Self.replacements
+                    await booster.warm(terms: terms)
                 }
             } catch {
                 state = .failed(error.localizedDescription)
@@ -98,7 +115,7 @@ final class ParakeetTranscriber: Transcriber {
         let spokenSeconds = Double(samples.count) / Self.sampleRate
         let result = try await manager.transcribe(Self.decodeWindow(samples),
                                                   decoderState: &decoderState,
-                                                  language: languageHint)
+                                                  language: await languageHint)
         // Vocabulary biasing runs on the dictation (samples) path only: once
         // per committed dictation, and never on transcribe(file:) — that's the
         // CLI/eval surface, which must stay pure engine output the same way
@@ -107,7 +124,7 @@ final class ParakeetTranscriber: Transcriber {
         if let timings = result.tokenTimings,
            let boosted = await booster.rescore(text: text, tokenTimings: timings,
                                                samples: samples,
-                                               terms: SettingsStore.shared.replacements) {
+                                               terms: await Self.replacements) {
             text = boosted
         }
         return Transcription(text: text,
@@ -123,7 +140,7 @@ final class ParakeetTranscriber: Transcriber {
         guard let manager else { throw TranscriberError.notReady }
         var decoderState = TdtDecoderState.make(decoderLayers: decoderLayers)
         let result = try await manager.transcribe(file, decoderState: &decoderState,
-                                                  language: languageHint)
+                                                  language: await languageHint)
         return Transcription(text: result.text,
                              confidence: result.confidence,
                              audioDuration: result.duration,
@@ -142,7 +159,7 @@ final class ParakeetTranscriber: Transcriber {
             var decoderState = TdtDecoderState.make(decoderLayers: self.decoderLayers)
             return try await manager.transcribe(Self.decodeWindow(samples),
                                                 decoderState: &decoderState,
-                                                language: self.languageHint).text
+                                                language: await self.languageHint).text
         }
     }
 }

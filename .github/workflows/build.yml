@@ -100,6 +100,24 @@ jobs:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
         run: bash scripts/notarize.sh
 
+      # A release that is not Developer ID signed must not be published.
+      #
+      # Packaging and publishing are not gated on the certificate, only signing
+      # and notarization are — so a secret that expires or goes missing does not
+      # fail the build, it quietly produces an ad-hoc bundle and ships it.
+      # Gatekeeper then refuses the DMG, and every existing user's in-app
+      # updater rejects the zip on its Developer ID check: a release that is
+      # worse than no release, and nothing in the log says why.
+      - name: Verify the release is really signed
+        if: ${{ inputs.release }}
+        run: |
+          codesign -dv dist/Aloud.app 2>&1 | grep -q "TeamIdentifier=R2PVQ496X7" || {
+            echo "::error::Aloud.app is not signed with the Developer ID team — refusing to publish."
+            codesign -dv dist/Aloud.app 2>&1 || true
+            exit 1
+          }
+          spctl -a -vv -t install dist/Aloud.app
+
       - name: Zip update asset
         if: ${{ inputs.release }}
         run: |

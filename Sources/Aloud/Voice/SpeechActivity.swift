@@ -47,6 +47,14 @@ final class SpeechActivity: @unchecked Sendable {
         return running && lastSpeechUptime != nil
     }
 
+    /// Is the detector actually watching the room? False when its models never
+    /// loaded, which is what tells a caller that "nobody has spoken" is an
+    /// absence of evidence rather than evidence of absence.
+    var isRunning: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return running
+    }
+
     // Begin a session. No-op (and `secondsSinceSpeech` stays nil) when the
     // detector isn't loaded, so this is always safe to call.
     func start() {

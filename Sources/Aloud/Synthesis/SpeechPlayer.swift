@@ -39,15 +39,34 @@ final class SpeechPlayer {
         return envelope.level(at: ProcessInfo.processInfo.systemUptime - startedAt)
     }
 
-    private func beginLevels(_ speech: Speech) -> Int {
-        let built = SpeechEnvelope(samples: speech.samples, sampleRate: speech.sampleRate)
+    // Take the engine for the utterance that is about to be set up.
+    //
+    // Claimed here rather than in `beginLevels`, and this is the whole point:
+    // `beginLevels` runs *after* the wiring and `engine.start()`, so between
+    // those two an idle timer armed by the previous utterance was still live
+    // and still believed nothing was playing. Firing there stopped the engine
+    // underneath a `play` that had just started it — and a buffer scheduled on
+    // a stopped engine never reports `.dataPlayedBack`, so `play` never
+    // returns, `speak` never returns, and `agentSpeaking` latches true: every
+    // later speak and listen refused, and the user's own hotkey with them,
+    // until the app is relaunched. Bumping the run first makes the pending
+    // work item's `run == levelRun` check fail before it can touch anything.
+    private func claimEngine() -> Int {
         levelLock.lock(); defer { levelLock.unlock() }
         idleWork?.cancel()
         idleWork = nil
-        envelope = built
-        startedAt = ProcessInfo.processInfo.systemUptime
         levelRun += 1
         return levelRun
+    }
+
+    private func beginLevels(_ speech: Speech, run: Int) {
+        let built = SpeechEnvelope(samples: speech.samples, sampleRate: speech.sampleRate)
+        levelLock.lock(); defer { levelLock.unlock() }
+        // A newer utterance has already taken the engine; this one is finished
+        // with, and must not put its own clock back on top.
+        guard run == levelRun else { return }
+        envelope = built
+        startedAt = ProcessInfo.processInfo.systemUptime
     }
 
     // Only the utterance that owns the clock may stop it.
@@ -148,6 +167,10 @@ final class SpeechPlayer {
     func play(_ unpadded: Speech) async throws {
         let speech = Self.trimmingTrailingSilence(unpadded)
         guard !speech.samples.isEmpty else { return }
+        // Before anything touches the engine — including the `isRunning` read
+        // that decides the lead-in — so a teardown armed by the last utterance
+        // cannot fire between here and the buffer being scheduled.
+        let run = claimEngine()
         guard let format = AVAudioFormat(standardFormatWithSampleRate: Double(speech.sampleRate),
                                          channels: 1)
         else { throw SpeakerError.playbackFailed("couldn't build an output buffer") }
@@ -181,11 +204,24 @@ final class SpeechPlayer {
         // resamples for us as long as the connection describes what we feed it.
         // Engines differ (22.05 kHz system voice, 24 kHz enhanced), so rewire
         // whenever the rate changes.
-        if !wired || currentFormat?.sampleRate != format.sampleRate {
-            if wired { engine.disconnectNodeOutput(node) } else { engine.attach(node) }
-            engine.connect(node, to: engine.mainMixerNode, format: format)
-            currentFormat = format
-            wired = true
+        // Inside the exception guard, for the same reason `scheduleBuffer`
+        // below is. `mainMixerNode` is not a property read — it builds and
+        // connects the mixer on first touch, and on a machine with no output
+        // device at all it raises `NSInternalInconsistencyException` right
+        // here, before `engine.start()` is ever reached. An Objective-C raise
+        // is an uncatchable SIGABRT in Swift: not a failed utterance but the
+        // whole process gone, which on a CI runner with no audio device takes
+        // the entire test run with it, and for a user is the app vanishing
+        // because their headphones were unplugged at the wrong moment.
+        if let raised = AloudCatchException({
+            if !wired || currentFormat?.sampleRate != format.sampleRate {
+                if wired { engine.disconnectNodeOutput(node) } else { engine.attach(node) }
+                engine.connect(node, to: engine.mainMixerNode, format: format)
+                currentFormat = format
+                wired = true
+            }
+        }) {
+            throw SpeakerError.playbackFailed(raised.reason ?? raised.name.rawValue)
         }
         if !engine.isRunning {
             do { try engine.start() }
@@ -207,7 +243,7 @@ final class SpeechPlayer {
         // Started here rather than at the top: everything above can still
         // throw, and a level clock running for audio that never played would
         // draw a voice nobody heard.
-        let run = beginLevels(padded)
+        beginLevels(padded, run: run)
         defer {
             endLevels(run)
             scheduleIdleShutdown(after: run)

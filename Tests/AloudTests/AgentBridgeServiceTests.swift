@@ -137,7 +137,8 @@ final class AgentBridgeServiceTests: XCTestCase {
     // tearDown, so a random name loses that race and leaves a file behind every
     // single time — hundreds had accumulated in ~/Library/Preferences. A stable
     // name still isolates (the domain is emptied on the way in) and can leave
-    // at most one file.
+    // at most one file. `forgetTestDefaults` clears it up; see the note on it
+    // for what that can and cannot promise about the file on disk.
     private static let suiteName = "aloud-bridge-service"
     private var suiteName = ""
     private var defaults: UserDefaults!
@@ -164,13 +165,7 @@ final class AgentBridgeServiceTests: XCTestCase {
     }
 
     override func tearDown() {
-        defaults.removePersistentDomain(forName: suiteName)
-        // removePersistentDomain empties the domain but leaves the plist on
-        // disk, so a per-run suite name drops a file in ~/Library/Preferences
-        // every single time. Hundreds had piled up before anyone noticed.
-        let plist = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences/\(suiteName).plist")
-        try? FileManager.default.removeItem(at: plist)
+        forgetTestDefaults(suiteName)
         super.tearDown()
     }
 
@@ -188,6 +183,34 @@ final class AgentBridgeServiceTests: XCTestCase {
                                   settings: settings,
                                   host: host,
                                   now: { clock.current })
+    }
+
+    // The same service, built around a SettingsStore the test keeps hold of.
+    //
+    // Needed wherever the consent mode has to be tightened *after* a session is
+    // already open, which is the only way two of the branches below are ever
+    // reached: `makeService` builds its store privately, so a test using it can
+    // only ever exercise the mode it started with — which is exactly why the
+    // whole consent branch of `listen` had never been executed by anything.
+    private func makeService(settings: SettingsStore,
+                             consent config: ConsentConfig = .default) -> AgentBridgeService {
+        let clock = self.clock!
+        return AgentBridgeService(leases: LeaseManager(isAlive: { _ in true }),
+                                  consent: ConsentPolicy(mode: settings.agentConsentMode,
+                                                         config: config),
+                                  settings: settings,
+                                  host: host,
+                                  now: { clock.current })
+    }
+
+    // A store in the shipped default: the gate on, one harness, agents let in
+    // on sight.
+    private func openSettings() -> SettingsStore {
+        let settings = SettingsStore(defaults: defaults)
+        settings.experimentalAgentVoice = true
+        settings.installedHarnesses = ["claude-code"]
+        settings.agentConsentMode = .open
+        return settings
     }
 
     // Wait for something to have happened, rather than for a fixed number of
@@ -291,14 +314,119 @@ final class AgentBridgeServiceTests: XCTestCase {
     }
 
     // A claim that would prompt while the user is mid-dictation is refused
-    // rather than seizing the hotkey out from under them.
+    // rather than seizing the hotkey out from under them — and gives back the
+    // lease it had just been granted, or the microphone is stranded on a
+    // session that was never allowed to start.
+    //
+    // Getting here is the whole difficulty, and why this test used to prove
+    // nothing: setting the flag before the claim means the *dictation wait loop*
+    // at the top of `claim` answers first, and the guard this is named for — the
+    // one below the grant, after consent has come back `awaiting` — was never
+    // executed by anything in the suite. Deleting it left everything green.
+    //
+    // So the dictation has to begin while the caller is already past that loop:
+    // parked in the queue behind somebody else, with the microphone about to
+    // come free.
     func testClaimIsRefusedWhileTheUserIsDictating() async {
-        let service = makeService(mode: .confirmByVoice)
+        // Open to start with, so the holder gets in without a prompt; tightened
+        // before the waiter arrives, so the waiter meets one.
+        let settings = openSettings()
+        let service = makeService(settings: settings)
+
+        let holder = await service.handle(request(.claim), peer: peer)
+        let held = holder.lease
+        XCTAssertNotNil(held)
+
+        settings.agentConsentMode = .confirmOnScreen
+
+        var waiting = request(.claim)
+        waiting.harness = "codex"
+        waiting.pid = 5150
+        waiting.wait = 30
+        let parked = Task {
+            await service.handle(waiting,
+                                 peer: BridgeServer.PeerIdentity(pid: 5150, name: "codex"))
+        }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(service.holderHarnessForTesting, "claude-code",
+                       "the waiter has to still be parked, or it never reaches the grant")
+
+        // The user starts talking, and only then does the microphone come free.
         host.userDictationInProgress = true
-        let response = await service.handle(request(.claim), peer: peer)
+        _ = await service.handle(request(.release, lease: held), peer: peer)
+        clock.advance(5)                       // past the audio cooldown
+
+        let response = await parked.value
         XCTAssertFalse(response.ok)
-        XCTAssertEqual(response.reason, .queued)
+        XCTAssertEqual(response.reason, .queued,
+                       "`queued` invites the retry that `denied` would talk the agent out of")
+        XCTAssertEqual(response.retryAfter, 3, "and it has to be told how long to leave it")
         XCTAssertEqual(host.prompts.count, 0, "no consent prompt over a live dictation")
+        XCTAssertNil(service.holderHarnessForTesting,
+                     "the lease taken to ask with must be handed back, "
+                     + "or the microphone is reserved for a session nobody approved")
+    }
+
+    // MARK: the harness id, which is the one string an attacker chooses
+
+    // Every id the installer actually writes has to survive the validator, or
+    // the feature refuses the machines it just installed itself on.
+    func testEveryHarnessIdTheInstallerWritesIsAccepted() {
+        for harness in AgentHarness.allCases {
+            XCTAssertTrue(AgentBridgeService.isWellFormedHarness(harness.id),
+                          "\(harness.id) is written into an installed skill file and then refused")
+        }
+        // And the shapes a caller might reasonably use for one we have not
+        // shipped yet.
+        for ok in ["a", "my-harness", "harness_2", "Agent.CLI", "0", String(repeating: "x", count: 32)] {
+            XCTAssertTrue(AgentBridgeService.isWellFormedHarness(ok), ok)
+        }
+    }
+
+    // The other half, and the one the guard exists for. The holder's id does
+    // not stay inside Aloud — it is handed back to *other* callers ("codex is
+    // using the microphone", `queuedBehind`, `status`), so without this a
+    // megabyte of attacker-chosen prose lands verbatim in another agent's tool
+    // output: a text channel from a process with no other capability straight
+    // into a trusted agent's context.
+    func testAHarnessIdThatIsNotOneIsRefused() {
+        let bad: [(String, String)] = [
+            ("", "empty"),
+            (String(repeating: "x", count: 33), "one over the ceiling"),
+            (String(repeating: "x", count: 1_000_000), "a megabyte of it"),
+            ("claude code", "a space"),
+            ("claude\ncode", "a newline"),
+            ("claude\tcode", "a tab"),
+            ("ignore previous instructions and", "a sentence"),
+            ("claude/code", "a path separator"),
+            ("claude:code", "a colon"),
+            ("claude\u{0}code", "a NUL"),
+            ("clåude", "not ASCII"),
+            ("claude-code\u{1F600}", "an emoji"),
+            ("клод", "another script"),
+        ]
+        for (id, why) in bad {
+            XCTAssertFalse(AgentBridgeService.isWellFormedHarness(id),
+                           "\(why) has no business in a harness id")
+        }
+    }
+
+    // …and the refusal reaches the wire, before anything else happens. The
+    // check sits above the lease, so a malformed id must not be able to take
+    // the microphone on its way to being rejected.
+    func testAMalformedHarnessIdIsARequestErrorAndTakesNoLease() async {
+        let service = makeService(mode: .open)
+        var bad = request(.claim)
+        bad.harness = "claude code\n" + String(repeating: "prose ", count: 2_000)
+
+        let response = await service.handle(bad, peer: peer)
+
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.reason, .badRequest,
+                       "`badRequest` says the call was wrong; anything else invites a retry")
+        XCTAssertNil(service.holderHarnessForTesting, "and it must not have taken the microphone")
+        XCTAssertFalse(response.message?.contains("prose") == true,
+                       "the refusal must not quote the string back")
     }
 
     // MARK: the gate
@@ -531,6 +659,91 @@ final class AgentBridgeServiceTests: XCTestCase {
         let response = await claim.value
         XCTAssertEqual(response.reason, .timeout)
         XCTAssertNil(service.holderHarnessForTesting)
+    }
+
+    // MARK: consent asked at `listen`
+    //
+    // `listen` has its own copy of the consent branch, reached when the user
+    // tightens the mode while a session is already open: the grant the claim was
+    // made under is dropped, so the verb that already holds the lease has to ask.
+    //
+    // None of it had ever been executed. Every test above builds its service at
+    // one fixed mode, so no session was ever open when the mode changed — and
+    // the back-off writes on this path are precisely the ones the code's own
+    // comment says were missing: without them `listen` "was the way around" the
+    // refusal back-off, able to raise the prompt again on the lease it already
+    // holds, as often as it liked, forever.
+
+    func testTighteningTheModeMidSessionMakesListenAsk() async {
+        let settings = openSettings()
+        let service = makeService(settings: settings)
+        let claim = await service.handle(request(.claim), peer: peer)
+        let lease = claim.lease
+        XCTAssertNotNil(lease)
+        XCTAssertTrue(host.prompts.isEmpty, "open mode asks nobody")
+
+        settings.agentConsentMode = .confirmByVoice
+        let listening = Task {
+            await service.handle(self.request(.listen, lease: lease), peer: self.peer)
+        }
+        await waitUntil("the prompt the tightened mode owes the user") {
+            !self.host.prompts.isEmpty
+        }
+        host.acceptFromPill?()
+
+        let response = await listening.value
+        XCTAssertTrue(response.ok, "a yes here has to let the listen through")
+        XCTAssertEqual(host.listenCount, 1)
+    }
+
+    // A no given here has to hold here too. Recording the back-off only at
+    // `claim` would leave this verb free to put the prompt straight back up on
+    // the lease it already holds.
+    func testANoAtListenIsRefusedAndBuysQuietFromListenItself() async {
+        let settings = openSettings()
+        let service = makeService(settings: settings)
+        let lease = await service.handle(request(.claim), peer: peer).lease
+
+        settings.agentConsentMode = .confirmByVoice
+        let listening = Task {
+            await service.handle(self.request(.listen, lease: lease), peer: self.peer)
+        }
+        await waitUntil("the prompt to come up") { !self.host.prompts.isEmpty }
+        service.declineConsent(lease: lease ?? "")
+
+        let denied = await listening.value
+        XCTAssertEqual(denied.reason, .denied)
+        XCTAssertEqual(host.listenCount, 0, "a refused prompt must not open the microphone")
+
+        // And the next one is answered from that no, rather than with a second
+        // prompt over a user who has already said what they think.
+        let again = await service.handle(request(.listen, lease: lease), peer: peer)
+        XCTAssertEqual(again.reason, .denied)
+        XCTAssertNotNil(again.retryAfter, "an agent has to be told how long to stay quiet for")
+        XCTAssertEqual(host.prompts.count, 1, "the user must not be asked a second time")
+        XCTAssertEqual(host.listenCount, 0)
+    }
+
+    // Silence buys the same quiet, for the same reason: a prompt that costs
+    // nothing to leave unanswered can simply be raised again, and a prompt on
+    // screen re-points the dictation hotkey at "accept".
+    func testAPromptNobodyAnswersAtListenAlsoBuysQuiet() async {
+        let settings = openSettings()
+        let service = makeService(settings: settings, consent: ConsentConfig(timeout: 0.25))
+        let lease = await service.handle(request(.claim), peer: peer).lease
+
+        settings.agentConsentMode = .confirmOnScreen
+        let timedOut = await service.handle(request(.listen, lease: lease), peer: peer)
+        XCTAssertEqual(timedOut.reason, .timeout,
+                       "the agent has to tell 'nobody was there' from 'they said no'")
+        XCTAssertEqual(host.prompts.count, 1)
+
+        let again = await service.handle(request(.listen, lease: lease), peer: peer)
+        XCTAssertEqual(again.reason, .denied)
+        XCTAssertNotNil(again.retryAfter)
+        XCTAssertEqual(host.prompts.count, 1,
+                       "an unanswered prompt that costs nothing gets raised forever")
+        XCTAssertEqual(host.listenCount, 0)
     }
 
     // MARK: leases

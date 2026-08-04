@@ -806,6 +806,23 @@ struct HarnessInstaller {
         self.defaults = defaults
     }
 
+    // Every installer operation runs one at a time, whichever thread asks.
+    //
+    // Two can now genuinely overlap: the launch and gate-toggle refresh was
+    // moved off the main thread, while the Settings pane drives the same
+    // installer from the main one. They share the user's config files *and*
+    // the UserDefaults lists that decide what may be written — and those lists
+    // are read-modify-write, so a lost update means a harness the user removed
+    // is quietly reinstalled by the next update, which is the one thing the
+    // record of removals exists to prevent. Recursive because these entry
+    // points call one another.
+    private static let sequencing = NSRecursiveLock()
+
+    private func serialized<T>(_ body: () throws -> T) rethrows -> T {
+        Self.sequencing.lock(); defer { Self.sequencing.unlock() }
+        return try body()
+    }
+
     // MARK: what the user took away
     //
     // Installing on every update is what gets the feature to people who never
@@ -821,15 +838,19 @@ struct HarnessInstaller {
     }
 
     func recordDeclined(_ harness: AgentHarness) {
-        var declined = declinedHarnesses
-        declined.insert(harness.id)
-        defaults.set(Array(declined).sorted(), forKey: Self.declinedKey)
+        serialized {
+            var declined = declinedHarnesses
+            declined.insert(harness.id)
+            defaults.set(Array(declined).sorted(), forKey: Self.declinedKey)
+        }
     }
 
     func clearDeclined(_ harness: AgentHarness) {
-        var declined = declinedHarnesses
-        guard declined.remove(harness.id) != nil else { return }
-        defaults.set(Array(declined).sorted(), forKey: Self.declinedKey)
+        serialized {
+            var declined = declinedHarnesses
+            guard declined.remove(harness.id) != nil else { return }
+            defaults.set(Array(declined).sorted(), forKey: Self.declinedKey)
+        }
     }
 
     // MARK: detection
@@ -873,14 +894,16 @@ struct HarnessInstaller {
     // refresh is really for.
     @discardableResult
     func refreshInstalled() -> [AgentHarness] {
-        // Before anything is refreshed, so an install written under the old
-        // name is gone rather than sitting beside the new one.
-        removeLegacyNamedInstalls()
-        return AgentHarness.allCases.filter { harness in
-            guard harness.scope == .global, isInstalled(harness) else { return false }
-            guard case .installed(let changed)? = try? install(harness, permissions: .migrate)
-            else { return false }
-            return !changed.isEmpty
+        serialized {
+            // Before anything is refreshed, so an install written under the old
+            // name is gone rather than sitting beside the new one.
+            removeLegacyNamedInstalls()
+            return AgentHarness.allCases.filter { harness in
+                guard harness.scope == .global, isInstalled(harness) else { return false }
+                guard case .installed(let changed)? = try? install(harness, permissions: .migrate)
+                else { return false }
+                return !changed.isEmpty
+            }
         }
     }
 
@@ -908,6 +931,7 @@ struct HarnessInstaller {
     // path: update what the agent is told, leave what the agent is allowed
     // strictly alone.
     func install(_ harness: AgentHarness, permissions: AllowlistOp = .add) throws -> InstallResult {
+        Self.sequencing.lock(); defer { Self.sequencing.unlock() }
         let block = AgentVoiceInstructions.markedBlock(
             AgentVoiceInstructions.body(harness: harness, command: command))
 
@@ -1089,6 +1113,7 @@ struct HarnessInstaller {
     // is the user's only record of what the file looked like before we touched
     // it, and we never reach the deletion.
     func uninstall(_ harness: AgentHarness) throws {
+        Self.sequencing.lock(); defer { Self.sequencing.unlock() }
         // Recorded first, and whatever the rest of this throws: the user has
         // said no, and the automatic install on the next update must honour
         // that even if the removal itself hit a damaged file.
@@ -1214,6 +1239,7 @@ struct HarnessInstaller {
     // snippet for those, and nothing here may write into somebody's repo.
     @discardableResult
     func installAllDetected() -> [AgentHarness] {
+        Self.sequencing.lock(); defer { Self.sequencing.unlock() }
         let declined = declinedHarnesses
         return detect().compactMap { detected -> AgentHarness? in
             let harness = detected.harness

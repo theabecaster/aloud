@@ -15,7 +15,8 @@ final class AgentAutoInstallTriggerTests: XCTestCase {
     // leaves the plist behind, and cfprefsd rewrites it asynchronously after
     // tearDown, so a random name loses that race and litters
     // ~/Library/Preferences once per test, forever. A stable name still
-    // isolates and can leave at most one file, which tearDown removes.
+    // isolates and can leave at most one file, which `forgetTestDefaults`
+    // clears up as far as a test process can — see the limits set out there.
     private static let suiteName = "com.aloud.tests.autoinstall"
 
     override func setUp() {
@@ -28,10 +29,7 @@ final class AgentAutoInstallTriggerTests: XCTestCase {
     }
 
     override func tearDown() {
-        defaults.removePersistentDomain(forName: Self.suiteName)
-        let plist = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences/\(Self.suiteName).plist")
-        try? FileManager.default.removeItem(at: plist)
+        forgetTestDefaults(Self.suiteName)
         try? FileManager.default.removeItem(at: home)
         super.tearDown()
     }
@@ -226,13 +224,35 @@ final class AgentAutoInstallTriggerTests: XCTestCase {
     // Agents are let in on sight unless the user says otherwise, and existing
     // installs are brought onto that once — they are carrying a default nobody
     // chose.
-    func testConsentDefaultsAreAppliedOnce() {
-        defaults.set(AgentConsentMode.confirmByVoice.rawValue, forKey: "agentConsentMode")
-        defaults.set(true, forKey: "agentAsksOutLoud")
+    func testConsentDefaultsAreAppliedOnceWhereNothingWasChosen() {
+        XCTAssertNil(defaults.string(forKey: "agentConsentMode"),
+                     "the case this migration is for: nobody ever touched it")
 
         Migration.applyAgentConsentDefaultsIfNeeded(defaults)
         XCTAssertEqual(defaults.string(forKey: "agentConsentMode"), AgentConsentMode.open.rawValue)
         XCTAssertEqual(defaults.bool(forKey: "agentAsksOutLoud"), false)
+    }
+
+    // ...but a mode somebody actually picked is theirs, and stays.
+    //
+    // This key is written from exactly two places: `SettingsStore`'s `didSet`,
+    // which only fires when the value is changed, and this migration. So the
+    // key being present at all means a person went to the pane and chose — and
+    // the loosest setting in the app is not something to hand somebody who
+    // deliberately picked a stricter one. The migration still reaches everyone
+    // it was written for, because they have no such key.
+    func testAConsentModeTheUserChoseSurvivesTheMigration() {
+        defaults.set(AgentConsentMode.confirmByVoice.rawValue, forKey: "agentConsentMode")
+        defaults.set(true, forKey: "agentAsksOutLoud")
+
+        Migration.applyAgentConsentDefaultsIfNeeded(defaults)
+        XCTAssertEqual(defaults.string(forKey: "agentConsentMode"),
+                       AgentConsentMode.confirmByVoice.rawValue)
+        XCTAssertEqual(defaults.bool(forKey: "agentAsksOutLoud"), true)
+        // Still marked done, so a later launch does not come back for it.
+        Migration.applyAgentConsentDefaultsIfNeeded(defaults)
+        XCTAssertEqual(defaults.string(forKey: "agentConsentMode"),
+                       AgentConsentMode.confirmByVoice.rawValue)
     }
 
     // ...and never again, because after this everything in there is the user's

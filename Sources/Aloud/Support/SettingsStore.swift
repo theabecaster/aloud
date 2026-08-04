@@ -47,6 +47,7 @@ final class SettingsStore: ObservableObject {
         noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? false
         learnCorrections = defaults.object(forKey: Keys.learnCorrections) as? Bool ?? true
         installedHarnesses = defaults.object(forKey: Keys.installedHarnesses) as? [String] ?? []
+        handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
         // Open by default: agents are let in on sight, with the pill and its
         // name badge as the disclosure (see Migration.applyAgentConsentDefaults
         // IfNeeded, which also brings existing installs onto it once).
@@ -107,6 +108,7 @@ final class SettingsStore: ObservableObject {
         static let installedHarnesses = "installedHarnesses"
         static let agentVoiceGender = "agentVoiceGender"
         static let agentVoiceSpeed = "agentVoiceSpeed"
+        static let handsFree = "handsFree"
     }
 
     @Published var hotkey: Hotkey {
@@ -114,6 +116,18 @@ final class SettingsStore: ObservableObject {
     }
     // Optional dedicated hands-free key: press to start a locked session,
     // press again to finish. nil = double-tap the main key only.
+    // Double-tapping the dictation key to lock the microphone open.
+    //
+    // No control in Settings any more — this release replaced the on/off
+    // toggle with a dedicated hands-free key — but the stored value is still
+    // honoured, because it was a shipped setting and somebody turned it off on
+    // purpose. Almost always because an accidental double-tap left the
+    // microphone open, which is exactly the surprise not to hand back to them
+    // on an update. Absent (never touched) means on, as it always did.
+    @Published var handsFree: Bool {
+        didSet { defaults.set(handsFree, forKey: Keys.handsFree) }
+    }
+
     @Published var handsFreeHotkey: Hotkey? {
         didSet {
             if let hk = handsFreeHotkey, let data = try? JSONEncoder().encode(hk) {

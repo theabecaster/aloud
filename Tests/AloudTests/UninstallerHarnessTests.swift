@@ -40,10 +40,7 @@ final class UninstallerHarnessTests: XCTestCase {
 
     override func tearDown() {
         try? fm.removeItem(at: home)
-        defaults.removePersistentDomain(forName: Self.suiteName)
-        let plist = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences/\(Self.suiteName).plist")
-        try? fm.removeItem(at: plist)
+        forgetTestDefaults(Self.suiteName)
     }
 
     private func installer() -> HarnessInstaller {

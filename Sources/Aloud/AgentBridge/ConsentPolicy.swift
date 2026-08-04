@@ -157,9 +157,7 @@ final class ConsentPolicy {
 
     // MARK: asking
 
-    // An agent wants to listen. `installedHarnesses` is the number of harnesses
-    // installed on this Mac, passed in rather than discovered here — it only
-    // decides whether the prompt names the caller (§7.1c).
+    // An agent wants to listen.
     //
     // Idempotent, like LeaseManager.claim: asking again while the same lease's
     // prompt is up returns that same prompt rather than restarting its clock,
@@ -167,7 +165,6 @@ final class ConsentPolicy {
     func request(lease: String,
                  harness: String,
                  name: String,
-                 installedHarnesses: Int,
                  now: Date) -> ConsentRequest {
         expire(now: now)
 

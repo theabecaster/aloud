@@ -30,6 +30,12 @@ struct LeaseHolder: Equatable {
 struct QueueEntry: Equatable {
     let harness: String
     let pid: pid_t
+    // Whether the kernel agreed this caller owns the process it named. Part of
+    // the row's identity, not decoration: without it an unverified caller
+    // could join a verified one's row simply by sending the same harness and a
+    // pid read out of `ps`, and relabel somebody else's pending request with a
+    // name of its choosing.
+    let ownerVerified: Bool
     var name: String
     let joinedAt: Date
 }
@@ -145,13 +151,15 @@ final class LeaseManager {
 
         // Someone else is mid-session.
         if let current = holder {
-            return .queued(position: enqueue(harness: harness, pid: pid, name: name, now: now),
+            return .queued(position: enqueue(harness: harness, pid: pid,
+                                             ownerVerified: ownerVerified, name: name, now: now),
                            reason: .busy(holder: current.harness))
         }
 
         // Free, but the audio is still settling from the last session.
         if let freeAt, now < freeAt {
-            return .queued(position: enqueue(harness: harness, pid: pid, name: name, now: now),
+            return .queued(position: enqueue(harness: harness, pid: pid,
+                                             ownerVerified: ownerVerified, name: name, now: now),
                            reason: .cooldown)
         }
 
@@ -161,7 +169,8 @@ final class LeaseManager {
         // stays idle until the leader comes back for it, or until its queue TTL
         // expires and the next in line becomes the leader.
         if let leader = queue.first, !(leader.harness == harness && leader.pid == pid) {
-            return .queued(position: enqueue(harness: harness, pid: pid, name: name, now: now),
+            return .queued(position: enqueue(harness: harness, pid: pid,
+                                             ownerVerified: ownerVerified, name: name, now: now),
                            reason: .busy(holder: leader.harness))
         }
 
@@ -295,14 +304,18 @@ final class LeaseManager {
     // re-claim to discover whether their turn has come, and each of those calls
     // must return the same position rather than append a duplicate.
     @discardableResult
-    private func enqueue(harness: String, pid: pid_t, name: String, now: Date) -> Int {
-        if let existing = queue.firstIndex(where: { $0.harness == harness && $0.pid == pid }) {
+    private func enqueue(harness: String, pid: pid_t, ownerVerified: Bool,
+                         name: String, now: Date) -> Int {
+        if let existing = queue.firstIndex(where: {
+            $0.harness == harness && $0.pid == pid && $0.ownerVerified == ownerVerified
+        }) {
             // A waiting session may have moved on to something else by the time
             // its turn comes; the user should see what it is doing now.
             queue[existing].name = name
             return existing + 1
         }
-        queue.append(QueueEntry(harness: harness, pid: pid, name: name, joinedAt: now))
+        queue.append(QueueEntry(harness: harness, pid: pid, ownerVerified: ownerVerified,
+                                name: name, joinedAt: now))
         return queue.count
     }
 

@@ -135,5 +135,14 @@ final class CLIArgumentTests: XCTestCase {
         for verb in AgentVoiceInstructions.verbs {
             XCTAssertNotNil(BridgeOperation(rawValue: verb))
         }
+        // And the direction that actually shipped broken. Only checking that
+        // every taught verb routes is the harmless half: it stays green when a
+        // verb is *dropped* from the instructions, which is exactly the bug —
+        // `status` was missing from the list the allowlist is built from, so the
+        // first `status` an agent ran stopped for a permission prompt in a
+        // feature whose whole premise is that nobody is at the keyboard.
+        XCTAssertEqual(Set(AgentVoiceInstructions.verbs),
+                       Set(BridgeOperation.allCases.map(\.rawValue)),
+                       "the instructions and the wire protocol have to name the same verbs")
     }
 }

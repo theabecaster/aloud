@@ -47,6 +47,9 @@ final class DictationController: ObservableObject {
     // The tail of an agent's turn: capture over, but transcription and the
     // reveal still running under the agent's phase rather than the user's.
     private var agentTurnSettling = false
+    // The voice actually mid-utterance, so a stop reaches that one rather than
+    // whichever voice Settings would resolve to by the time the stop arrives.
+    private var speakingSpeaker: Speaker?
     // The hotkey during an agent listen is the manual "done" (§7.2): nobody
     // is holding a key in an agent session, so the press is the one gesture
     // the user has to end the turn deliberately instead of waiting out the
@@ -233,7 +236,8 @@ final class DictationController: ObservableObject {
         self.settings = settings
         self.history = history
         self.transcriber = transcriber
-        self.hotkeyManager = HotkeyManager(hotkey: settings.hotkey)
+        self.hotkeyManager = HotkeyManager(hotkey: settings.hotkey,
+                                           handsFree: settings.handsFree)
         self.transcriberState = transcriber.state
         self.upgradeState = (transcriber as? SwitchingTranscriber)?.primaryState ?? transcriber.state
         hotkeyManager.onAction = { [weak self] action in
@@ -1824,6 +1828,13 @@ final class DictationController: ObservableObject {
         // output-device latency, which on Bluetooth is not small.
         static let cueGuard: TimeInterval = 0.6
 
+        /// Input level that counts as "somebody is there" when the speech
+        /// detector never loaded. Well above a room's noise floor and well
+        /// below speech, because the only judgement it has to make is the
+        /// difference between an empty room and one with a person talking
+        /// into the microphone.
+        static let heardWithoutDetector: Float = 0.15
+
         // MARK: holding the microphone for somebody who walked away
         //
         // `noSpeechAtAll` is the right answer to "the room is empty" when the
@@ -1936,7 +1947,18 @@ final class DictationController: ObservableObject {
         // now, and for a held one it is whenever they walk back in.
         var preview: StreamingTranscription?
         func beginPreview() {
-            guard preview == nil else { return }
+            // A preview that already exists still has to be re-attached, not
+            // skipped. A false start on a held listen stops the recorder to
+            // start a fresh capture, and `stop()` clears both chunk consumers —
+            // the detector is re-armed right after, but this was not, so from
+            // the second attempt on the draft field sat on the false start's
+            // text (or empty) while the user talked through their whole answer.
+            // The transcript the agent gets was always right; only the live
+            // preview went quiet.
+            if preview != nil {
+                recorder.onChunk = { [weak preview] chunk in preview?.append(samples: chunk) }
+                return
+            }
             indicator.openDraft()
             preview = transcriber.makeStreamingTranscription()
             guard let preview else { return }
@@ -2041,14 +2063,30 @@ final class DictationController: ObservableObject {
         }
         stopSpeechActivity()
         isAgentSession = false
+
+        // Is this still our turn to be tearing down?
+        //
+        // Everything below touches the pill and the phase, and none of it
+        // checked whose they were. `endAgentSession` can end this session while
+        // the capture loop is between polls — and the user can press the hotkey
+        // in that same gap and start a real dictation. This loop would then
+        // wake and hide *their* pill, force *their* phase idle, and put an
+        // agent's conversation bubble back on screen over the top: the hotkey
+        // press did nothing at all, with no error and nothing typed.
+        let mine = sessionGeneration
+        func stillOurs() -> Bool { sessionGeneration == mine }
+        guard stillOurs() else { throw AgentListenError.busy }
+
         // Everything from here to `phase = .idle` is still the agent's turn,
         // even though its capture has ended.
         agentTurnSettling = true
         defer { agentTurnSettling = false }
 
         guard Double(samples.count) / AudioRecorder.targetSampleRate >= 0.35 else {
-            indicator.hide()
-            phase = .idle
+            if stillOurs() {
+                indicator.hide()
+                phase = .idle
+            }
             throw AgentListenError.nothingHeard
         }
 
@@ -2057,7 +2095,7 @@ final class DictationController: ObservableObject {
         // dictation pill's "Typing…", which types into nothing here.
         indicator.settleDraft()
         phase = .transcribing
-        defer { phase = .idle }
+        defer { if stillOurs() { phase = .idle } }
         do {
             await ensureTranscriberReady()
             let result = try await transcriber.transcribe(samples: samples)
@@ -2155,6 +2193,19 @@ final class DictationController: ObservableObject {
             if speechActivity.hasHeardSpeech {
                 DevDiag.note("listen", String(format: "somebody spoke after %.0fs of holding",
                                               Date().timeIntervalSince(began)))
+                stopWaiting()
+                return true
+            }
+            // The detector is not always there. Its models are fetched once per
+            // launch and a failure is deliberately not retried within the
+            // session, so on a Mac whose first launch was offline
+            // `hasHeardSpeech` is false forever — and a held listen could then
+            // only ever time out, ignoring everything the user said into an
+            // open microphone for the whole ceiling. The pill's own silence
+            // reminder already falls back to the input level for exactly this
+            // case; this is the same fallback, for the wait that matters more.
+            if !speechActivity.isRunning, recorder.currentLevel >= AgentListen.heardWithoutDetector {
+                DevDiag.note("listen", "hold ended by input level (no speech detector)")
                 stopWaiting()
                 return true
             }
@@ -2540,7 +2591,18 @@ extension DictationController: AgentVoiceHost {
             if !wasAsking { indicator.hideAfterAgentSpeech() }
         }
         agentSpeaking = true
-        defer { agentSpeaking = false }
+        // Remembered, not re-resolved. `agentSpeaker` is a computed property
+        // that asks Settings and the catalog for the right voice *now*, and
+        // "now" can differ from when this utterance started: Aloud's own voice
+        // finishing its download mid-sentence replaces the stand-in in the
+        // pool, and so does the user changing gender in Settings. Ending the
+        // session then stopped a speaker that had never said anything while
+        // the one actually talking read the question out to an empty screen.
+        speakingSpeaker = speaker
+        defer {
+            agentSpeaking = false
+            speakingSpeaker = nil
+        }
         // Let the pill land before the voice starts.
         //
         // Only on a session that has just appeared — most often one taking over
@@ -2604,8 +2666,17 @@ extension DictationController: AgentVoiceHost {
         // since the poll-session stop below is gated on `agentPoll`). If no
         // agent capture, prompt, or playback is live, the destructive
         // teardown is skipped entirely.
+        //
+        // The pill itself counts as activity. An accepted consent prompt
+        // deliberately leaves it standing — the session carries on into it —
+        // so between the accept and the first `listen` none of the flags below
+        // are set. An agent that is killed in that gap, or simply never calls
+        // `listen`, was reaped two minutes later into a teardown that returned
+        // at this guard: the pill stayed on screen, spinner and all, for the
+        // rest of the app's life, and "End all" could not take it down either.
         let hadAgentActivity = isAgentSession || agentPoll != nil
             || agentSpeaking || pendingConsentHeard != nil
+            || indicator.isShowingAgentSession
         stopConsentListening()
         indicatorDismissConsent()
         // A poll session owns the recorder until its stop call — and once the
@@ -2628,7 +2699,7 @@ extension DictationController: AgentVoiceHost {
         // Just the voice the agent was using — the pool is shared with the
         // preview in Settings, and a session ending must not cut a sample
         // somebody is listening to.
-        if agentSpeaking { agentSpeaker.stop() }
+        if agentSpeaking { (speakingSpeaker ?? agentSpeaker).stop() }
         // The blocking listen's capture is closed here rather than left to its
         // own poll to notice.
         //

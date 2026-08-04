@@ -113,6 +113,17 @@ final class AgentBridgeService {
     // the pid it sent and arrive with a clean slate every time.
     private static let unverifiedClaimantKey = "#unverified"
 
+    // Roughly two minutes of speech. A question nobody would ask out loud.
+    static let maxSpokenCharacters = 2_000
+
+    // A prompt this holder raised went unanswered — declined, or simply left.
+    // Either way it does not get to raise another one straight away.
+    private func quietenAfterUnanswered(holder: LeaseHolder?) {
+        let key = holder.map { "\($0.harness)#\($0.pid)" } ?? Self.unverifiedClaimantKey
+        refusedUntil[key] = now().addingTimeInterval(Self.refusalBackoff)
+        lastRefusalUntil = now().addingTimeInterval(Self.anyRefusalQuiet)
+    }
+
     // Letters, digits, dot, dash, underscore; 32 characters at the outside.
     // Every id the installer writes ("claude-code", "codex", "opencode") fits,
     // and nothing that fits can be mistaken for a sentence.
@@ -551,7 +562,6 @@ final class AgentBridgeService {
             switch consent.request(lease: lease,
                                    harness: request.harness,
                                    name: name,
-                                   installedHarnesses: settings.installedHarnesses.count,
                                    now: at) {
             case .granted:
                 var response = BridgeResponse.success()
@@ -590,10 +600,21 @@ final class AgentBridgeService {
                     lastRefusalUntil = now().addingTimeInterval(Self.anyRefusalQuiet)
                     leases.release(lease: lease, now: now())
                     return .failure(.denied, "The user declined.")
-                case .timedOut:
-                    leases.release(lease: lease, now: now())
-                    return .failure(.timeout, "Nobody answered.")
-                case .unrecognized, .ignored:
+                case .timedOut, .unrecognized, .ignored:
+                    // Silence buys quiet too.
+                    //
+                    // A decline was carefully backed off and an unanswered
+                    // prompt was not, which left the loop wide open: claim,
+                    // let the 20 s prompt expire, claim again — the pill is up
+                    // roughly all the time, and nothing ever slows it down.
+                    // That is worse than a nuisance, because a prompt on screen
+                    // re-points the dictation hotkey at "accept" — so the next
+                    // time the user reaches for the key they press dozens of
+                    // times a day, out of muscle memory, that press is the yes.
+                    // A real harness is already told not to re-ask straight
+                    // after a timeout, so this costs it nothing.
+                    refusedUntil[refusalKey] = now().addingTimeInterval(Self.refusalBackoff)
+                    lastRefusalUntil = now().addingTimeInterval(Self.anyRefusalQuiet)
                     leases.release(lease: lease, now: now())
                     return .failure(.timeout, "Nobody answered.")
                 }
@@ -753,6 +774,18 @@ final class AgentBridgeService {
         guard let text = request.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .failure(.badRequest, "speak needs something to say.")
         }
+        // The only caller-supplied string here with no bound of its own —
+        // `harness`, `name`, `wait` and `hold` are all capped. Left open, one
+        // request could make the Mac talk for hours, and `speak` does not
+        // return until it has finished: every other verb is refused as busy
+        // for the duration, and the only way out is a control the user has to
+        // notice and go looking for. Far above one or two spoken sentences,
+        // which is what the installed instructions ask agents for.
+        guard text.count <= Self.maxSpokenCharacters else {
+            return .failure(.badRequest,
+                            "That is too long to say out loud — "
+                            + "\(Self.maxSpokenCharacters) characters at most.")
+        }
         guard let lease = request.lease else {
             return .failure(.badRequest, "speak needs a lease — claim one first.")
         }
@@ -800,7 +833,6 @@ final class AgentBridgeService {
         switch consent.request(lease: lease,
                                harness: leases.holder?.harness ?? request.harness,
                                name: leases.holder?.name ?? request.harness,
-                               installedHarnesses: settings.installedHarnesses.count,
                                now: now()) {
         case .granted(let granted):
             grant = granted
@@ -834,13 +866,13 @@ final class AgentBridgeService {
                 // be declined and put the prompt straight back up, as often as
                 // it liked, because nothing here recorded that the answer had
                 // been no.
-                let holder = leases.holder
-                let claimantKey = holder.map { "\($0.harness)#\($0.pid)" }
-                    ?? Self.unverifiedClaimantKey
-                refusedUntil[claimantKey] = now().addingTimeInterval(Self.refusalBackoff)
-                lastRefusalUntil = now().addingTimeInterval(Self.anyRefusalQuiet)
+                quietenAfterUnanswered(holder: leases.holder)
                 return .failure(.denied, "The user declined.")
             case .timedOut, .unrecognized, .ignored:
+                // And silence, for the same reason it does at `claim`: an
+                // unanswered prompt that costs nothing can simply be raised
+                // again, forever.
+                quietenAfterUnanswered(holder: leases.holder)
                 return .failure(.timeout, "Nobody answered.")
             }
         }
@@ -1034,9 +1066,18 @@ final class AgentBridgeService {
     // calls it is not required to test it.
     @discardableResult
     func sweep(now moment: Date) -> Bool {
-        let had = leases.holder != nil
+        let heldBefore = leases.holder?.id
         leases.reap(now: moment)
-        return had && leases.holder == nil
+        let ended = heldBefore != nil && leases.holder == nil
+        // Consent dies with the lease, which is what `endLease` is for — but
+        // its three callers were all deliberate endings (a release, a session
+        // ended from the menu bar, a force-release). A lease that simply timed
+        // out, or whose owner process died, left its grant behind for the life
+        // of the process. Not reachable — the id is a fresh 128-bit token and
+        // `validate` refuses a reaped lease before consent is ever consulted —
+        // but it is a dictionary that only grows in an app that runs for weeks.
+        if ended, let heldBefore { consent.endLease(heldBefore) }
+        return ended
     }
 
     func sweepAndEndFinishedSessions() async {

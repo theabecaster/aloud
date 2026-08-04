@@ -11,7 +11,8 @@ final class AgentSettingsTests: XCTestCase {
     // tearDown, so a random name loses that race and leaves a file behind every
     // single time — hundreds had accumulated in ~/Library/Preferences. A stable
     // name still isolates (the domain is emptied on the way in) and can leave
-    // at most one file.
+    // at most one file. `forgetTestDefaults` clears it up, within the limits
+    // set out on that method.
     private static let suiteName = "aloud-agent-settings"
     private var suiteName = ""
     private var defaults: UserDefaults!
@@ -24,13 +25,7 @@ final class AgentSettingsTests: XCTestCase {
     }
 
     override func tearDown() {
-        defaults.removePersistentDomain(forName: suiteName)
-        // removePersistentDomain empties the domain but leaves the plist on
-        // disk, so a per-run suite name drops a file in ~/Library/Preferences
-        // every single time. Hundreds had piled up before anyone noticed.
-        let plist = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences/\(suiteName).plist")
-        try? FileManager.default.removeItem(at: plist)
+        forgetTestDefaults(suiteName)
         super.tearDown()
     }
 
@@ -125,11 +120,53 @@ final class AgentSettingsTests: XCTestCase {
 
         s.agentAsksFirst = true
         XCTAssertEqual(s.agentConsentMode, .confirmOnScreen)
+
+        // And the whole cycle for the style that is not the default, which is
+        // the one a user has to have gone out of their way to choose. Stopping
+        // at "off" proves nothing: the interesting half is the way back on, and
+        // it is the half that hands somebody the wrong prompt.
+        s.agentAsksOutLoud = true
+        XCTAssertEqual(s.agentConsentMode, .confirmByVoice)
+
+        s.agentAsksFirst = false
+        XCTAssertEqual(s.agentConsentMode, .open, "asking off is asking off, whatever the style")
+        XCTAssertTrue(s.agentAsksOutLoud, "the choice is remembered, not cleared")
+        XCTAssertTrue(SettingsStore(defaults: defaults).agentAsksOutLoud,
+                      "and remembered on disk, not just in this object")
+
+        s.agentAsksFirst = true
+        XCTAssertEqual(s.agentConsentMode, .confirmByVoice,
+                       "turning asking back on has to return the prompt they picked")
+    }
+
+    // Hands-free was a shipped toggle and this release took the control away.
+    // The stored value still has to be honoured: somebody turned it off on
+    // purpose — almost always because an accidental double-tap left the
+    // microphone open — and handing that back on an update is the one outcome
+    // the setting existed to prevent. Nobody who never touched it is affected.
+    func testAHandsFreeChoiceFromAnEarlierVersionIsStillHonoured() {
+        XCTAssertTrue(store().handsFree, "never chosen means on, as it always did")
+
+        defaults.set(false, forKey: "handsFree")
+        XCTAssertFalse(store().handsFree,
+                       "a user who switched hands-free off must not get it back on an update")
     }
 
     // An install from before the two-switch pane has a mode and no switch: the
     // switch reads itself off the mode rather than snapping to the default.
     func testTheOutLoudSwitchIsReadBackOffAnExistingMode() {
+        // The case that carries the whole test. `.confirmOnScreen` and `.open`
+        // both expect false — which is what a plain default answers too, so
+        // neither can tell a real read-back from `?? false`. Only an install
+        // that was already asking *out loud* can: downgrading it to the
+        // on-screen prompt is a setting silently undone by an update.
+        defaults.set(AgentConsentMode.confirmByVoice.rawValue, forKey: "agentConsentMode")
+        let outLoud = store()
+        XCTAssertTrue(outLoud.agentAsksFirst)
+        XCTAssertTrue(outLoud.agentAsksOutLoud,
+                      "an install that was asking out loud must not be quietly put back on screen")
+
+        defaults.removePersistentDomain(forName: suiteName)
         defaults.set(AgentConsentMode.confirmOnScreen.rawValue, forKey: "agentConsentMode")
         XCTAssertFalse(store().agentAsksOutLoud)
 

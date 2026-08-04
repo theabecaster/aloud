@@ -26,7 +26,8 @@ final class HarnessInstallerTests: XCTestCase {
     // tearDown — so a per-test name loses that race and drops a file in
     // ~/Library/Preferences every single run. Thousands had piled up. A stable
     // name still isolates (the domain is emptied before each test) and can
-    // leave at most one file, which tearDown then deletes by hand.
+    // leave at most one file, which `forgetTestDefaults` clears up as far as a
+    // test process can — see the limits set out on that method.
     private static let suiteName = "aloud-harness-tests"
     private var defaults: UserDefaults!
     private var fm: FileManager { .default }
@@ -41,13 +42,7 @@ final class HarnessInstallerTests: XCTestCase {
 
     override func tearDown() {
         try? fm.removeItem(at: home)
-        defaults.removePersistentDomain(forName: Self.suiteName)
-        // removePersistentDomain empties the domain but leaves the plist
-        // behind, so it is deleted by hand or the suite litters the
-        // developer's Preferences directory.
-        let plist = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences/\(Self.suiteName).plist")
-        try? fm.removeItem(at: plist)
+        forgetTestDefaults(Self.suiteName)
     }
 
     // Every installer a test builds goes through here, so none of them can
@@ -320,6 +315,15 @@ final class HarnessInstallerTests: XCTestCase {
             XCTAssertNotNil(BridgeOperation(rawValue: verb),
                             "the installed skill tells agents to run `\(verb)`, which nothing routes")
         }
+        // The other direction, which is the one that shipped broken. A loop over
+        // `verbs` cannot notice a verb *missing* from `verbs`, and `verbs` is
+        // what the allowlist entries are generated from: `status` fell out of it
+        // once, so the first `status` an agent ran stopped for a permission
+        // prompt — in a feature whose whole premise is that nobody is watching.
+        XCTAssertEqual(Set(AgentVoiceInstructions.verbs),
+                       Set(BridgeOperation.allCases.map(\.rawValue)),
+                       "a verb the bridge answers to but the instructions never teach "
+                       + "gets no allowlist entry, and stops on turn one")
     }
 
     // The turn-one trap, and the reason `offeredVerbs` exists.
@@ -1268,6 +1272,89 @@ final class HarnessInstallerTests: XCTestCase {
         // not ship, and somebody's own rule.
         XCTAssertEqual(try allowList(),
                        ["Bash(aloudmixer listen:*)", "Bash(aloud deploy:*)", "Bash(git status:*)"])
+    }
+
+    // MARK: - the old name
+    //
+    // Agent Speak used to be called `aloud-voice`, and every install carried
+    // that name: a skill directory, a marked block in somebody's AGENTS.md, and
+    // a note in their ~/.claude/CLAUDE.md. The rename cleans all three up, once,
+    // on the first launch after the update — which means this code deletes
+    // directories and rewrites instruction files people have kept for years,
+    // unprompted, on every launch, and nothing exercised it at all. Mutating it
+    // to `if true { return }` left the whole suite green.
+    //
+    // Everything here runs against the injected home. A test that let this
+    // loose on the real `~` would be deleting the developer's own skills.
+
+    private static let legacySkillPath = ".claude/skills/aloud-voice/SKILL.md"
+
+    private func legacySkillBody() -> String {
+        "\(HarnessInstaller.LegacyNames.markerStart)\n# aloud-voice\nSay something.\n"
+        + "\(HarnessInstaller.LegacyNames.markerEnd)\n"
+    }
+
+    private func legacyNote() -> String {
+        "\(HarnessInstaller.LegacyNames.noteMarkerStart)\n"
+        + "Ask the user out loud with `aloud-voice`.\n"
+        + "\(HarnessInstaller.LegacyNames.noteMarkerEnd)"
+    }
+
+    // All three shapes the old name was installed in, taken out together.
+    func testTheOldNamesInstallsAreAllCleanedUp() throws {
+        try write(legacySkillBody(), to: Self.legacySkillPath)
+        try write("# my notes\n\n\(HarnessInstaller.LegacyNames.markerStart)\n"
+                  + "Old Aloud instructions.\n"
+                  + "\(HarnessInstaller.LegacyNames.markerEnd)\n\n# more of mine\n",
+                  to: ".codex/AGENTS.md")
+        try write("# my rules\n\n\(legacyNote())\n\n# more rules\n", to: ".claude/CLAUDE.md")
+
+        installer().removeLegacyNamedInstalls()
+
+        XCTAssertNil(read(Self.legacySkillPath), "the old skill still teaches the old name")
+        XCTAssertFalse(fm.fileExists(atPath:
+            home.appendingPathComponent(".claude/skills/aloud-voice").path),
+                       "and its directory is litter once the file has gone")
+
+        let codex = try XCTUnwrap(read(".codex/AGENTS.md"))
+        XCTAssertFalse(codex.contains(HarnessInstaller.LegacyNames.markerStart),
+                       "the old block is duplicated beside the new one until this runs")
+        XCTAssertTrue(codex.contains("# my notes"), "and the user's own text is untouched")
+        XCTAssertTrue(codex.contains("# more of mine"))
+
+        let claude = try XCTUnwrap(read(".claude/CLAUDE.md"))
+        XCTAssertFalse(claude.contains("aloud-voice"), "the old note goes the same way")
+        XCTAssertTrue(claude.contains("# my rules"))
+        XCTAssertTrue(claude.contains("# more rules"))
+    }
+
+    // The guard that makes all of the above safe to run unasked. A directory
+    // that happens to share the old name but carries none of our markers was
+    // written by somebody else, and is not ours to delete.
+    func testAForeignSkillOfTheOldNameSurvives() throws {
+        let mine = "# aloud-voice\n\nmy own notes, nothing to do with Aloud\n"
+        try write(mine, to: Self.legacySkillPath)
+
+        installer().removeLegacyNamedInstalls()
+
+        XCTAssertEqual(read(Self.legacySkillPath), mine,
+                       "a file Aloud never wrote must survive Aloud's cleanup")
+    }
+
+    // A block whose markers do not pair up — a hand edit, an interrupted
+    // write — cannot be parsed with certainty, so the file is left exactly as
+    // it was rather than guessed at. Byte-identical, not merely equivalent.
+    func testADamagedOldBlockLeavesTheFileAlone() throws {
+        let damaged = "# my notes\n\n\(HarnessInstaller.LegacyNames.markerStart)\n"
+            + "Old Aloud instructions, and the end marker never arrived.\n\n# more of mine\n"
+        try write(damaged, to: ".codex/AGENTS.md")
+        let before = try Data(contentsOf: home.appendingPathComponent(".codex/AGENTS.md"))
+
+        installer().removeLegacyNamedInstalls()
+
+        let after = try Data(contentsOf: home.appendingPathComponent(".codex/AGENTS.md"))
+        XCTAssertEqual(after, before,
+                       "we cannot prove which lines are ours, so we touch none of them")
     }
 
     // MARK: - hygiene

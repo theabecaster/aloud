@@ -27,8 +27,18 @@ enum Migration {
     // first time anything asks for `.shared`.
     static func applyAgentConsentDefaultsIfNeeded(_ defaults: UserDefaults = .standard) {
         guard !defaults.bool(forKey: agentConsentDefaultKey) else { return }
-        defaults.set(AgentConsentMode.open.rawValue, forKey: "agentConsentMode")
-        defaults.set(false, forKey: "agentAsksOutLoud")
+        // Only where nothing was chosen. `SettingsStore` writes this key from a
+        // `didSet`, which does not fire while it is reading its initial values —
+        // so the key being present at all means a person went to the pane and
+        // picked something. Without this check the migration could not tell
+        // "never chose" from "chose to be asked out loud", and quietly turned
+        // the second one into no prompt at all: a stricter setting, deliberately
+        // made, replaced by the loosest one, permanently.
+        let untouched = defaults.object(forKey: "agentConsentMode") == nil
+        if untouched {
+            defaults.set(AgentConsentMode.open.rawValue, forKey: "agentConsentMode")
+            defaults.set(false, forKey: "agentAsksOutLoud")
+        }
         defaults.set(true, forKey: agentConsentDefaultKey)
     }
 
