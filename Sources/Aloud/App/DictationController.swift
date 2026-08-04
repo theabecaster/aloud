@@ -1991,7 +1991,13 @@ final class DictationController: ObservableObject {
         defer {
             previewPump?.cancel()
             previewPump = nil
-            recorder.onChunk = nil
+            // Only if this is still our session. `recorder.onChunk` is shared
+            // instance state, and this `defer` runs on exactly the paths that
+            // have just established the session is *not* ours — so without the
+            // guard it severs the live-typing feed of a dictation the user
+            // started in the gap. Cancelling our own preview is unconditional:
+            // it belongs to this call and nobody else can be holding it.
+            if stillOurs() { recorder.onChunk = nil }
             if let preview { Task { await preview.cancel() } }
         }
         // Wired to the microphone before the cue, not after it.

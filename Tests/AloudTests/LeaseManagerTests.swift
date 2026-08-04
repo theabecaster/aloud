@@ -126,6 +126,44 @@ final class LeaseManagerTests: XCTestCase {
                        "and the impostor may not rename what the user is reading")
     }
 
+    // The same hijack, arriving by the queue instead of by the holder.
+    //
+    // A waiting agent is the leader; the microphone comes free; a local process
+    // echoes back that agent's harness and the pid it read out of `ps`. If the
+    // leader check cannot tell a verified claimant from an unverified one, the
+    // impostor is taken for the leader and handed the lease the moment it is
+    // available — and under the shipped default there is no prompt in the way.
+    func testAnUnverifiedClaimantCannotTakeAVerifiedWaitersPlaceInTheQueue() {
+        let m = manager()
+        guard case .granted(let held) = m.claim(harness: "codex", pid: 3,
+                                                name: "writing docs", ownerVerified: true,
+                                                now: t0) else {
+            return XCTFail("expected the first claim to be granted")
+        }
+        // The real agent queues behind it.
+        XCTAssertEqual(m.claim(harness: "claude-code", pid: 42, name: "fixing tests",
+                               ownerVerified: true, now: t0),
+                       .queued(position: 1, reason: .busy(holder: "codex")))
+
+        // The microphone comes free.
+        m.release(lease: held, now: t0)
+        let free = t0.addingTimeInterval(LeaseConfig.default.cooldown + 1)
+
+        // The impostor arrives naming the waiting agent's own harness and pid.
+        let impostor = m.claim(harness: "claude-code", pid: 42, name: "reading mail",
+                               ownerVerified: false, now: free)
+        if case .granted(let id) = impostor {
+            XCTFail("an unverified claimant was handed lease \(id) from the queue")
+        }
+        XCTAssertNil(m.holder, "and the microphone stays free for the agent whose turn it is")
+
+        // The real one comes back for its turn and still has it.
+        guard case .granted = m.claim(harness: "claude-code", pid: 42, name: "fixing tests",
+                                      ownerVerified: true, now: free) else {
+            return XCTFail("the verified waiter lost the place it was holding")
+        }
+    }
+
     func testHolderKeepsTheLeaseAcrossManyCalls() {
         let m = manager()
         guard case .granted(let id) = m.claim(harness: "claude-code", pid: 1, name: "fixing tests", ownerVerified: true, now: t0) else {

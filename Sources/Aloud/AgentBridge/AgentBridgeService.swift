@@ -112,6 +112,21 @@ final class AgentBridgeService {
     private var consentEpoch = 0
     private var presentedConsentEpoch = 0
 
+    /// The prompt on screen has been taken down by something other than the
+    /// call that put it there — a reap, a force-release, the menu bar.
+    ///
+    /// Without this the parked `awaitConsent` still believes its prompt is the
+    /// one showing, so when its own deadline finally passes it runs the closing
+    /// `dismissConsent(accepted: false)` — which hides the pill and forces the
+    /// phase idle. Twenty seconds is long enough for the user to have seen the
+    /// prompt vanish, pressed the hotkey and started dictating, and that
+    /// teardown then lands on their session: nothing typed, and a recorder left
+    /// running for the next one to adopt.
+    private func invalidatePresentedConsent() {
+        consentEpoch += 1
+        presentedConsentEpoch = consentEpoch
+    }
+
     // A harness that was just refused cannot ask again straight away.
     // The installed instructions tell agents that `denied` means this request
     // only and not to retry-loop, but instructions are not enforcement: an
@@ -127,13 +142,25 @@ final class AgentBridgeService {
     // the pid it sent and arrive with a clean slate every time.
     private static let unverifiedClaimantKey = "#unverified"
 
+    // The key a refusal is recorded under, built the same way on every path.
+    //
+    // `claim` collapses every unverified caller into one key so a refusal
+    // cannot be walked away from by sending a slightly different harness id or
+    // pid. The holder-keyed paths were building the raw `harness#pid` instead,
+    // so a back-off recorded at `listen` went under a key `claim` would never
+    // look at — the 60 s quiet became the 5 s floor.
+    static func refusalKey(for holder: LeaseHolder?) -> String {
+        guard let holder, holder.ownerVerified else { return unverifiedClaimantKey }
+        return "\(holder.harness)#\(holder.pid)"
+    }
+
     // Roughly two minutes of speech. A question nobody would ask out loud.
     static let maxSpokenCharacters = 2_000
 
     // A prompt this holder raised went unanswered — declined, or simply left.
     // Either way it does not get to raise another one straight away.
     private func quietenAfterUnanswered(holder: LeaseHolder?) {
-        let key = holder.map { "\($0.harness)#\($0.pid)" } ?? Self.unverifiedClaimantKey
+        let key = Self.refusalKey(for: holder)
         refusedUntil[key] = now().addingTimeInterval(Self.refusalBackoff)
         lastRefusalUntil = now().addingTimeInterval(Self.anyRefusalQuiet)
     }
@@ -896,8 +923,7 @@ final class AgentBridgeService {
             // below only ever stops the *next claim* while this verb keeps
             // raising the prompt on the lease it already holds.
             let at = now()
-            let holderKey = leases.holder.map { "\($0.harness)#\($0.pid)" }
-                ?? Self.unverifiedClaimantKey
+            let holderKey = Self.refusalKey(for: leases.holder)
             let quietUntil = [refusedUntil[holderKey], lastRefusalUntil].compactMap { $0 }.max()
             if let until = quietUntil, at < until {
                 var response = BridgeResponse.failure(.denied, "The user declined.")
@@ -1137,7 +1163,12 @@ final class AgentBridgeService {
         let holderEnded = sweep(now: now())
         guard leases.sessions != before else { return }
         publishHolder()
-        if holderEnded { await host?.endAgentSession() }
+        if holderEnded {
+            // The prompt this reap is about to take down is no longer the one
+            // any parked caller may dismiss.
+            invalidatePresentedConsent()
+            await host?.endAgentSession()
+        }
     }
 
     // End one named session — the menu bar's list. The trash sits on a row, so

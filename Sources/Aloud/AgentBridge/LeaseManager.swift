@@ -16,6 +16,12 @@ struct LeaseHolder: Equatable {
     let id: String              // opaque lease token handed to the caller
     let harness: String         // "claude-code" — a label, never authentication
     let pid: pid_t              // the harness process, for liveness checks
+    // Whether the kernel agreed this caller owns the process it named. Carried
+    // on the holder as well as on a queue row, so anything keyed on "who is
+    // this" can collapse every unverified caller into one — a key built from
+    // caller-supplied text is a claim, not an identity, and a refusal keyed on
+    // it is walked away from by sending something slightly different.
+    let ownerVerified: Bool
     // What this session is doing, in the caller's own words: "fixing tests",
     // "release notes". The harness id says which tool is talking; two windows
     // of the same tool are both "claude-code" and the user cannot tell them
@@ -176,14 +182,28 @@ final class LeaseManager {
         // which is the entire reason the queue is ordered. The lease simply
         // stays idle until the leader comes back for it, or until its queue TTL
         // expires and the next in line becomes the leader.
-        if let leader = queue.first, !(leader.harness == harness && leader.pid == pid) {
+        // `ownerVerified` is part of the comparison for the same reason it is
+        // part of a row's identity. Without it, a process that echoes back a
+        // waiting agent's harness and pid — both readable out of `ps` — is
+        // taken for that agent at the front of the queue, and is handed the
+        // microphone the moment it comes free. Under the shipped default there
+        // is no prompt in the way, so that is the whole hijack this flag was
+        // added to prevent, arriving by the queue instead of by the holder.
+        if let leader = queue.first,
+           !(leader.harness == harness && leader.pid == pid
+             && leader.ownerVerified == ownerVerified) {
             return .queued(position: enqueue(harness: harness, pid: pid,
                                              ownerVerified: ownerVerified, name: name, now: now),
                            reason: .busy(holder: leader.harness))
         }
 
-        queue.removeAll { $0.harness == harness && $0.pid == pid }
-        return .granted(grant(harness: harness, pid: pid, name: name, now: now))
+        // And the same identity when the row is taken out of the queue, or a
+        // grant to one claimant would delete another's place in line.
+        queue.removeAll {
+            $0.harness == harness && $0.pid == pid && $0.ownerVerified == ownerVerified
+        }
+        return .granted(grant(harness: harness, pid: pid, ownerVerified: ownerVerified,
+                              name: name, now: now))
     }
 
     // Only the holder may act. Every accepted call refreshes the TTL — using
@@ -269,7 +289,8 @@ final class LeaseManager {
 
     // MARK: internals
 
-    private func grant(harness: String, pid: pid_t, name: String, now: Date) -> String {
+    private func grant(harness: String, pid: pid_t, ownerVerified: Bool,
+                       name: String, now: Date) -> String {
         counter += 1
         // The lease id is the capability: presenting it is what lets a caller
         // speak and listen on a session the user has already consented to. 32
@@ -279,7 +300,8 @@ final class LeaseManager {
         let token = String(UInt64.random(in: 0...UInt64.max), radix: 16)
             + String(UInt64.random(in: 0...UInt64.max), radix: 16)
         let id = "L\(counter)-\(token)"
-        holder = LeaseHolder(id: id, harness: harness, pid: pid, name: name,
+        holder = LeaseHolder(id: id, harness: harness, pid: pid,
+                             ownerVerified: ownerVerified, name: name,
                              grantedAt: now, lastUsed: now)
         freeAt = nil
         return id

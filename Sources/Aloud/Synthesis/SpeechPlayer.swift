@@ -92,10 +92,15 @@ final class SpeechPlayer {
     private func scheduleIdleShutdown(after run: Int) {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            levelLock.lock()
-            let stillIdle = startedAt == nil && run == levelRun
-            levelLock.unlock()
-            guard stillIdle else { return }
+            // Decided and acted on under the one lock. Checking and then
+            // releasing left a window — microseconds, but this timer fires on
+            // main while `play` runs on the cooperative pool — in which a new
+            // utterance could claim the engine, start it and schedule its
+            // buffer, and this would then stop the engine underneath it. That
+            // is the hang the claim-first ordering above exists to prevent, so
+            // it should not be reintroduced here.
+            levelLock.lock(); defer { levelLock.unlock() }
+            guard startedAt == nil, run == levelRun else { return }
             shutdown()
         }
         levelLock.lock()
