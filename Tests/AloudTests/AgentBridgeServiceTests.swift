@@ -975,7 +975,17 @@ final class AgentBridgeServiceTests: XCTestCase {
         async let bystander = service.handle(bystanderRequest, peer: waiter)
         try? await Task.sleep(nanoseconds: 400_000_000)
 
-        service.endSession("codex#99")
+        // Asked for by the id the menu bar itself would use, rather than
+        // spelled out here: the row id carries whether the caller could prove
+        // which process it belongs to, and a literal in a test is exactly how
+        // that stops matching without anything noticing.
+        var rows: [AgentSession] = []
+        service.onHolderChanged = { rows = $0 }
+        service.publishSessionsForTesting()
+        guard let codexRow = rows.first(where: { $0.harness == "codex" && !$0.isHolder }) else {
+            return XCTFail("the dismissed waiter is not in the session list")
+        }
+        service.endSession(codexRow.id)
 
         let dismissedResponse = await dismissed
         XCTAssertFalse(dismissedResponse.ok, "a dismissed waiter must be answered, not left parked")

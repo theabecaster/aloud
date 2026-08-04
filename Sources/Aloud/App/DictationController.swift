@@ -2020,7 +2020,6 @@ final class DictationController: ObservableObject {
         // Nobody is coming, or nobody said anything once they did. Same outcome
         // either way, and the same one an ordinary listen reports.
         func giveUp() -> AgentListenError {
-            stopSpeechActivity()
             isAgentSession = false
             // Held to the same rule as the teardown after the capture loop: a
             // hold can be ended from underneath by a release, a reap or the
@@ -2028,7 +2027,12 @@ final class DictationController: ObservableObject {
             // the gap before this notices. Stopping the recorder and hiding the
             // pill then lands on *their* session — the hotkey press does
             // nothing, silently, and looks like the app has stopped working.
+            //
+            // The guard comes before the detector too: `speechActivity` is one
+            // shared instance, so tearing it down here takes the still-listening
+            // reminder off a dictation that has just installed it.
             guard stillOurs() else { return AgentListenError.nothingHeard }
+            stopSpeechActivity()
             _ = recorder.stop()
             indicator.hide()
             phase = .idle
@@ -2078,7 +2082,6 @@ final class DictationController: ObservableObject {
             beginPreview()
             samples = await captureUntilEndpoint(session: mine).samples
         }
-        stopSpeechActivity()
         isAgentSession = false
 
         // Is this still our turn to be tearing down?
@@ -2091,6 +2094,10 @@ final class DictationController: ObservableObject {
         // agent's conversation bubble back on screen over the top: the hotkey
         // press did nothing at all, with no error and nothing typed.
         guard stillOurs() else { throw AgentListenError.busy }
+        // Only now, and for the same reason: the detector is shared, so
+        // stopping it before this guard would take it from whoever owns the
+        // microphone now.
+        stopSpeechActivity()
 
         // Everything from here to `phase = .idle` is still the agent's turn,
         // even though its capture has ended.

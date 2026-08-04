@@ -171,6 +171,19 @@ final class SpeechPlayer {
         // that decides the lead-in — so a teardown armed by the last utterance
         // cannot fire between here and the buffer being scheduled.
         let run = claimEngine()
+        // Registered here, immediately after the claim, and not further down.
+        //
+        // `claimEngine` cancels the timer the previous utterance armed, and
+        // everything between here and the scheduling below can throw — a format
+        // the device will not take, a raise out of the mixer wiring, an engine
+        // that will not start. Registering the re-arm later meant a throw on any
+        // of those left an already-running engine with no shutdown timer at all,
+        // which is precisely the held-open output device this timer exists to
+        // release.
+        defer {
+            endLevels(run)
+            scheduleIdleShutdown(after: run)
+        }
         guard let format = AVAudioFormat(standardFormatWithSampleRate: Double(speech.sampleRate),
                                          channels: 1)
         else { throw SpeakerError.playbackFailed("couldn't build an output buffer") }
@@ -244,10 +257,6 @@ final class SpeechPlayer {
         // throw, and a level clock running for audio that never played would
         // draw a voice nobody heard.
         beginLevels(padded, run: run)
-        defer {
-            endLevels(run)
-            scheduleIdleShutdown(after: run)
-        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             // Two things can resume this: the completion callback, and the
             // failure path below. Once the buffer is scheduled the node owns a

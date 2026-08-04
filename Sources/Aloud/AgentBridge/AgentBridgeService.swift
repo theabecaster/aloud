@@ -211,6 +211,10 @@ final class AgentBridgeService {
     // Test seam: who holds the microphone right now.
     var holderHarnessForTesting: String? { leases.holder?.harness }
 
+    /// Publish the session list on demand, so a test can ask for a row by the
+    /// same id the menu bar would use rather than spelling one out.
+    func publishSessionsForTesting() { publishHolder() }
+
     // MARK: dispatch
 
     func handle(_ request: BridgeRequest, peer: BridgeServer.PeerIdentity) async -> BridgeResponse {
@@ -526,7 +530,11 @@ final class AgentBridgeService {
         // finds its way back to the caller it was aimed at: a waiter the user
         // trashed re-claims (or wakes from its park) and is answered here,
         // once, instead of silently rejoining the queue.
-        let queueKey = claimantKey
+        //
+        // Built the way `QueueEntry.id` is built, verification included, or a
+        // dismissal aimed at one row would answer the other — and a real
+        // agent's request would be dropped by the user trashing an impostor's.
+        let queueKey = "\(request.harness)#\(pid)#\(ownerVerified ? "v" : "u")"
         if evicted.remove(queueKey) != nil {
             return .failure(.denied, "The user dismissed this session's request.")
         }

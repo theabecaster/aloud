@@ -179,6 +179,12 @@ final class NeuralSpeaker: Speaker {
         // opened the microphone on somebody who had been asked nothing.
         guard isCurrent(mine) else { throw SpeakerError.superseded }
         try await player.play(speech)
+        // And again after playback, which is the longer window of the two once
+        // the model is warm. A second utterance scheduled with `.interrupts`,
+        // or a `stop()`, fires this one's completion callback — so `play`
+        // returns perfectly normally having been cut off mid-sentence, and
+        // without this the agent is told its question was asked in full.
+        guard isCurrent(mine) else { throw SpeakerError.superseded }
     }
 
     // Bumped by every new utterance and by every stop, so "is the utterance I

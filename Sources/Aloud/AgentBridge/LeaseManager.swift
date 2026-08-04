@@ -28,6 +28,14 @@ struct LeaseHolder: Equatable {
 }
 
 struct QueueEntry: Equatable {
+    // How the menu bar names this row, and how a dismissal finds its way back
+    // to the caller it was aimed at. It has to carry `ownerVerified` for the
+    // same reason `enqueue` matches on it: a verified caller and an unverified
+    // one sharing a harness and a pid are two rows, and an id that cannot tell
+    // them apart makes trashing the impostor's row drop the real agent's place
+    // in the queue too — and gives SwiftUI two rows with one identity.
+    var id: String { "\(harness)#\(pid)#\(ownerVerified ? "v" : "u")" }
+
     let harness: String
     let pid: pid_t
     // Whether the kernel agreed this caller owns the process it named. Part of
@@ -321,7 +329,7 @@ final class LeaseManager {
 
     // Remove one waiting session by the id `sessions` gave it.
     func dropQueued(id: String) {
-        queue.removeAll { "\($0.harness)#\($0.pid)" == id }
+        queue.removeAll { $0.id == id }
     }
 
     // A session's job changes while it holds the microphone. The name is a
@@ -341,7 +349,7 @@ final class LeaseManager {
                                     harness: holder.harness, isHolder: true))
         }
         for entry in queue {
-            all.append(AgentSession(id: "\(entry.harness)#\(entry.pid)", name: entry.name,
+            all.append(AgentSession(id: entry.id, name: entry.name,
                                     harness: entry.harness, isHolder: false))
         }
         return all
