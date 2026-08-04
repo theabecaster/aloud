@@ -1365,9 +1365,14 @@ final class AgentBridgeServiceTests: XCTestCase {
         // between a five-minute answer comes back as `notHolder`. That is the
         // production arrangement too — 30s ticks under a 120s TTL — just at a
         // speed a test can observe.
+        // The heartbeat is real time while the clock it refreshes is logical,
+        // so this needs *ticks*, not luck: on a loaded CI runner a 0.2 s listen
+        // could finish before a 0.05 s heartbeat had run even once, and the
+        // lease was then reaped by its own advanced clock. Ten expected ticks
+        // instead of four, for a third of a second more wall time.
         service.leaseHeartbeat = 0.05
         host.duringListen = { clock.advance(300) }
-        host.listenDelay = 0.2
+        host.listenDelay = 0.5
 
         let held = await service.handle(heldAsk(600), peer: peer)
         XCTAssertTrue(held.ok, "the session survived its own wait")

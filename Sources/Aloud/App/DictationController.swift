@@ -2425,7 +2425,18 @@ final class DictationController: ObservableObject {
         // comment above says seconds. Everything below installs or frees shared
         // state, so ownership is re-checked here exactly as it is after the
         // microphone opens.
-        guard stillOurs() else { throw AgentListenError.busy }
+        //
+        // Both tokens, because they answer different questions. The generation
+        // catches a session *taken over* — somebody else started a capture. It
+        // cannot catch one simply *ended*: `endAgentSession` does not bump it,
+        // and at this point `agentPoll` is not installed yet either, so a
+        // release, a reap or "End all" landing here would be invisible to both
+        // and this call would run on to success — leaving the microphone open
+        // behind an idle phase with `agentPoll` set, which is exactly the state
+        // in which the user's next hotkey press adopts an abandoned agent
+        // capture and types its audio. `isAgentSession` is ours from line one
+        // and only those teardowns clear it.
+        guard stillOurs(), isAgentSession else { throw AgentListenError.busy }
         guard let stream = transcriber.makeStreamingTranscription() else {
             // No streaming engine on this Mac — the fallback path is batch
             // only. Refusing is better than pretending: an agent polling a
@@ -2450,7 +2461,7 @@ final class DictationController: ObservableObject {
             // while we were parked, and de-registering *its* session wedges it
             // with the phase held and no way back.
             if agentPoll === session { agentPoll = nil }
-            if stillOurs() {
+            if stillOurs(), isAgentSession {
                 isAgentSession = false
                 phase = .idle
                 indicator.hide()
@@ -2467,6 +2478,7 @@ final class DictationController: ObservableObject {
         guard agentPoll === session, stillOurs() else {
             if agentPoll === session { agentPoll = nil }
             if stillOurs() { _ = recorder.stop() }
+            Task { await stream.cancel() }
             throw AgentListenError.busy
         }
         recorder.onChunk = { [weak stream] chunk in stream?.append(samples: chunk) }
@@ -2493,6 +2505,8 @@ final class DictationController: ObservableObject {
             // tears down somebody else's capture in our name.
             if agentPoll === session { agentPoll = nil }
             if stillOurs() { _ = recorder.stop() }
+            // The stream goes with it, the way `endAgentSession` cancels one.
+            Task { await stream.cancel() }
             throw AgentListenError.busy
         }
         startSpeechActivity()
