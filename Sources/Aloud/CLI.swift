@@ -561,6 +561,14 @@ extension CLI {
                 continue
             }
             let loadSeconds = Date().timeIntervalSince(loadStarted)
+            // `prepare()` is only half the cold cost: the first synthesis is
+            // what compiles the CoreML variant, and timing it reported a warm
+            // engine's number as several times what it really is — the row said
+            // kokoro was slower than realtime when warm it is well under it.
+            // The app pays this compile in `EnhancedVoices.warm`, before
+            // anybody presses anything, so the interesting number here is the
+            // one *after* it.
+            _ = try? await candidate.speaker.synthesize("Hello.")
 
             do {
                 let speech = try await candidate.speaker.synthesize(text)
