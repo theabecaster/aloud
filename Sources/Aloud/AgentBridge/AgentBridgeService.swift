@@ -716,7 +716,18 @@ final class AgentBridgeService {
                     // here is not fatal on its own — the pill is still showing
                     // the same words — but it does mean a user looking away
                     // never learns they were asked.
-                    try? await self?.host?.speak(prompt.text)
+                    // Not `try?`. `speak` throws `superseded` when something
+                    // else took the voice mid-sentence — the Settings preview,
+                    // a gender change — and swallowing that opens the
+                    // microphone for a question the user heard half of, or none
+                    // of, and listens for a yes to it. The pill still carries
+                    // the question and the deadline still runs, which is
+                    // exactly what the on-screen mode does.
+                    do {
+                        try await self?.host?.speak(prompt.text)
+                    } catch {
+                        return
+                    }
                     // Answered while we were still talking: there is nothing
                     // left to listen for, and opening the microphone now would
                     // be capturing after the decision was made.
@@ -932,7 +943,14 @@ final class AgentBridgeService {
             // below only ever stops the *next claim* while this verb keeps
             // raising the prompt on the lease it already holds.
             let at = now()
-            let holderKey = Self.refusalKey(for: leases.holder)
+            // Read before the await, and used after it. A force-release or the
+            // menu-bar trash resolves this call and clears the holder, so
+            // asking again on the far side hands back nil — and the back-off
+            // would be filed under the shared unverified key: charged to every
+            // anonymous claimant on the Mac, and to none to the one refused.
+            // `claim` computes its key at entry for exactly this reason.
+            let holderAtPrompt = leases.holder
+            let holderKey = Self.refusalKey(for: holderAtPrompt)
             let quietUntil = [refusedUntil[holderKey], lastRefusalUntil].compactMap { $0 }.max()
             if let until = quietUntil, at < until {
                 var response = BridgeResponse.failure(.denied, "The user declined.")
@@ -949,13 +967,13 @@ final class AgentBridgeService {
                 // be declined and put the prompt straight back up, as often as
                 // it liked, because nothing here recorded that the answer had
                 // been no.
-                quietenAfterUnanswered(holder: leases.holder)
+                quietenAfterUnanswered(holder: holderAtPrompt)
                 return .failure(.denied, "The user declined.")
             case .timedOut, .unrecognized, .ignored:
                 // And silence, for the same reason it does at `claim`: an
                 // unanswered prompt that costs nothing can simply be raised
                 // again, forever.
-                quietenAfterUnanswered(holder: leases.holder)
+                quietenAfterUnanswered(holder: holderAtPrompt)
                 return .failure(.timeout, "Nobody answered.")
             }
         }

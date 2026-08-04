@@ -2409,6 +2409,12 @@ final class DictationController: ObservableObject {
         // second `listen --start` pass the `agentPoll == nil` guard — right on
         // top of the session about to open here.
         sessionGeneration += 1
+        // The same ownership token the blocking listen carries. `agentPoll ===
+        // session` answers "is my poll session still the live one", which is
+        // not the same question as "does anybody else own the microphone now" —
+        // and it is the second one every teardown below has to ask.
+        let mine = sessionGeneration
+        func stillOurs() -> Bool { sessionGeneration == mine }
         isAgentSession = true
         agentManualDone = false
         phase = .recording
@@ -2432,11 +2438,15 @@ final class DictationController: ObservableObject {
             _ = try await startAgentCapture()
         } catch {
             // Same rollback as the blocking listen — and `agentPoll` too, or
-            // no poll session can ever start again.
+            // no poll session can ever start again. `agentPoll` is ours
+            // unconditionally; the rest belongs to whoever owns the microphone,
+            // which after a second of opening a Bluetooth device may not be us.
             agentPoll = nil
-            isAgentSession = false
-            phase = .idle
-            indicator.hide()
+            if stillOurs() {
+                isAgentSession = false
+                phase = .idle
+                indicator.hide()
+            }
             throw error
         }
         // Opening the microphone is a real suspension (a Bluetooth device can
@@ -2446,8 +2456,8 @@ final class DictationController: ObservableObject {
         // session we started is no longer the live one, the mic just opened
         // for nobody — stop it rather than wiring a pump to a dead session and
         // handing back an id that can never be stopped.
-        guard agentPoll === session else {
-            _ = recorder.stop()
+        guard agentPoll === session, stillOurs() else {
+            if stillOurs() { _ = recorder.stop() }
             throw AgentListenError.busy
         }
         recorder.onChunk = { [weak stream] chunk in stream?.append(samples: chunk) }
@@ -2467,8 +2477,9 @@ final class DictationController: ObservableObject {
         // gap tears the session down, and resuming here re-armed the detector
         // on a stopped recorder, wired a pump to a cancelled stream, and handed
         // the agent a session id whose every later poll could only answer busy.
-        guard agentPoll === session else {
-            _ = recorder.stop()
+        guard agentPoll === session, stillOurs() else {
+            // Only stop a capture that is still ours to stop.
+            if stillOurs() { _ = recorder.stop() }
             throw AgentListenError.busy
         }
         startSpeechActivity()
@@ -2776,7 +2787,17 @@ extension DictationController: AgentVoiceHost {
             stopSpeechActivity()
         }
         guard hadAgentActivity else { return }
-        indicator.hide()
+        // A send already wrapping up keeps its own beat.
+        //
+        // `ask --end` — the one-liner the installed instructions teach as the
+        // default — hangs up the instant the answer is in, which lands here a
+        // hop after `sendDraft` put the user's own words on screen with a
+        // dismissal scheduled behind them. Hiding immediately spent that beat
+        // in the same frame it was drawn, and that beat is the only moment the
+        // user can check that what left in their name is what they said. The
+        // scheduled dismissal still takes the pill down; it just does it after
+        // they have had a chance to read it.
+        if !indicator.isWrappingUpASend { indicator.hide() }
         if phase == .recording { phase = .idle }
     }
 
@@ -2787,7 +2808,13 @@ extension DictationController: AgentVoiceHost {
         // accepted one carries on into a session, so anything else must take
         // the pill off screen rather than leaving an agent indicator parked
         // there with nothing behind it.
-        if !accepted {
+        // ...but only when there is no capture behind it. `listen` raises its
+        // consent prompt for every mode, streaming included, so a mode the user
+        // tightened mid-session can put a prompt over a *running* poll session.
+        // Forcing the phase idle there leaves `agentPoll` live and the recorder
+        // open behind an idle phase — the one state in which a hotkey press
+        // adopts an agent's capture and types its audio.
+        if !accepted, !isAgentSession, agentPoll == nil {
             indicator.hide()
             phase = .idle
         }
@@ -2854,7 +2881,11 @@ extension DictationController: AgentVoiceHost {
         // answered — and because that same nil makes every later
         // `stopConsentListening` a silent no-op, nothing could take it down.
         guard consentAudio === audio else {
-            _ = recorder.stop()
+            // Only stop a capture nobody else has taken over. An out-of-band
+            // teardown — "End all", a release, the sweep — frees the hotkey as
+            // it goes, so the user can have started a real dictation on this
+            // very recorder while the microphone was opening.
+            if phase == .idle || phase.isError { _ = recorder.stop() }
             return note("consent torn down while the microphone was opening")
         }
         note("listening for accept/decline")

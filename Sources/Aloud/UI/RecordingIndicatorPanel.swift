@@ -727,6 +727,11 @@ final class RecordingIndicatorPanel {
     // own bubble on the right, and after a beat the whole thing — panel and pill
     // together — wraps up and goes. That beat is not decoration; it is the only
     // moment the user can check that what left in their name is what they said.
+    /// Is the pill in its post-send wrap-up — the answer shown, a dismissal
+    /// already scheduled? Something ending the session in this window has
+    /// nothing to take down that is not already going.
+    var isWrappingUpASend: Bool { model.chatIsOpen && sendGeneration > 0 && model.agentIsDone }
+
     func sendDraft(_ finalText: String, dismissAfter: TimeInterval = 3.5) {
         let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return dismissChat(after: 0) }
