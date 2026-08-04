@@ -31,6 +31,9 @@ final class SystemSpeaker: NSObject, Speaker {
     // caller can take a given handler, so a continuation is resumed once and
     // belongs to the utterance that actually ended.
     nonisolated(unsafe) private var finishHandlers: [ObjectIdentifier: () -> Void] = [:]
+    // The utterance this speaker is currently meant to be saying, so a call
+    // that was superseded can tell that it was.
+    nonisolated(unsafe) private var currentUtterance: ObjectIdentifier?
     private let handlerLock = NSLock()
     // The voice the user picked, if they picked one of this engine's. nil means
     // "whatever this Mac says best", which is also what a picked voice degrades
@@ -102,6 +105,12 @@ final class SystemSpeaker: NSObject, Speaker {
         // distinct object from any the stop is about to cancel.
         let mine = utterance(for: trimmed)
         stop()
+        // Which utterance this instance is meant to be saying. The speakers are
+        // pooled, so the Settings preview and an agent's question share one —
+        // and a `didCancel` reads exactly like a `didFinish` from inside the
+        // continuation. Without this, an agent whose question was cut off by
+        // somebody pressing the preview button was told it had been spoken.
+        setCurrent(mine)
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             register({ continuation.resume() }, for: mine)
             synthesizer.speak(mine)
@@ -110,6 +119,17 @@ final class SystemSpeaker: NSObject, Speaker {
         // matters on a path where one never arrives, so a handler cannot
         // outlive the call that registered it.
         _ = takeHandler(for: mine)
+        guard isCurrent(mine) else { throw SpeakerError.superseded }
+    }
+
+    private func setCurrent(_ utterance: AVSpeechUtterance) {
+        handlerLock.lock(); defer { handlerLock.unlock() }
+        currentUtterance = ObjectIdentifier(utterance)
+    }
+
+    private func isCurrent(_ utterance: AVSpeechUtterance) -> Bool {
+        handlerLock.lock(); defer { handlerLock.unlock() }
+        return currentUtterance == ObjectIdentifier(utterance)
     }
 
     private func register(_ handler: @escaping () -> Void, for utterance: AVSpeechUtterance) {
@@ -201,6 +221,9 @@ final class SystemSpeaker: NSObject, Speaker {
         // `stopSpeaking(at:)` is safe on an idle synthesizer and also flushes
         // anything still queued behind the current utterance, which is exactly
         // what the guard was preventing.
+        handlerLock.lock()
+        currentUtterance = nil
+        handlerLock.unlock()
         synthesizer.stopSpeaking(at: .immediate)
     }
 }

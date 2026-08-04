@@ -34,6 +34,11 @@ enum SpeakerError: LocalizedError {
     case emptyText
     case synthesisFailed(String)
     case playbackFailed(String)
+    // Something else took the voice before this utterance was finished — the
+    // Settings preview, or the user switching voice gender mid-question. The
+    // caller has to hear about it: an agent told its question was spoken opens
+    // the microphone on somebody who was asked nothing.
+    case superseded
 
     var errorDescription: String? {
         switch self {
@@ -41,6 +46,7 @@ enum SpeakerError: LocalizedError {
         case .emptyText: return "nothing to say"
         case .synthesisFailed(let why): return "synthesis failed: \(why)"
         case .playbackFailed(let why): return "playback failed: \(why)"
+        case .superseded: return "another voice interrupted this one"
         }
     }
 }

@@ -1892,6 +1892,16 @@ final class DictationController: ObservableObject {
         }
 
         sessionGeneration += 1
+        // Taken here, at the top, and not later.
+        //
+        // Everything below that touches the pill, the phase or the recorder has
+        // to be able to ask "is this still my session" — and that is only
+        // meaningful against the generation this turn *started* with. Read
+        // after the capture loop it is a tautology: whoever took over has
+        // already bumped it, so the guard compares the new value against itself
+        // and passes, which is exactly the case it exists to catch.
+        let mine = sessionGeneration
+        func stillOurs() -> Bool { sessionGeneration == mine }
         isAgentSession = true
         agentManualDone = false
         phase = .recording
@@ -2012,6 +2022,13 @@ final class DictationController: ObservableObject {
         func giveUp() -> AgentListenError {
             stopSpeechActivity()
             isAgentSession = false
+            // Held to the same rule as the teardown after the capture loop: a
+            // hold can be ended from underneath by a release, a reap or the
+            // menu bar, and the user can have started their own dictation in
+            // the gap before this notices. Stopping the recorder and hiding the
+            // pill then lands on *their* session — the hotkey press does
+            // nothing, silently, and looks like the app has stopped working.
+            guard stillOurs() else { return AgentListenError.nothingHeard }
             _ = recorder.stop()
             indicator.hide()
             phase = .idle
@@ -2034,7 +2051,7 @@ final class DictationController: ObservableObject {
                 startSpeechActivity()
                 beginPreview()
                 DevDiag.note("listen", "capturing for \(agentSessionHolder?.name ?? "an unnamed session")")
-                let attempt = await captureUntilEndpoint()
+                let attempt = await captureUntilEndpoint(session: mine)
                 if attempt.heardSpeech { heard = attempt.samples; break }
                 // A false start. The wait is the point of this session, so it
                 // resumes rather than ending — a passing noise must not cost
@@ -2059,7 +2076,7 @@ final class DictationController: ObservableObject {
             samples = heard
         } else {
             beginPreview()
-            samples = await captureUntilEndpoint().samples
+            samples = await captureUntilEndpoint(session: mine).samples
         }
         stopSpeechActivity()
         isAgentSession = false
@@ -2073,8 +2090,6 @@ final class DictationController: ObservableObject {
         // wake and hide *their* pill, force *their* phase idle, and put an
         // agent's conversation bubble back on screen over the top: the hotkey
         // press did nothing at all, with no error and nothing typed.
-        let mine = sessionGeneration
-        func stillOurs() -> Bool { sessionGeneration == mine }
         guard stillOurs() else { throw AgentListenError.busy }
 
         // Everything from here to `phase = .idle` is still the agent's turn,
@@ -2249,7 +2264,11 @@ final class DictationController: ObservableObject {
     // ends, this runs once to catch the answer, and "the detector twitched but
     // nobody said anything" has to be told apart from a real reply so the wait
     // can resume instead of ending on a passing noise.
-    private func captureUntilEndpoint() async -> (samples: [Float], heardSpeech: Bool) {
+    // `session` is the generation the caller started with. The loop can be
+    // ended from underneath it — a release, a reap, the menu bar — and the user
+    // can start their own dictation before it notices, so the recorder this
+    // stops has to be checked to be the one this session opened.
+    private func captureUntilEndpoint(session: Int) async -> (samples: [Float], heardSpeech: Bool) {
         let began = Date()
         func note(_ why: String) {
             let elapsed = Date().timeIntervalSince(began)
@@ -2291,6 +2310,10 @@ final class DictationController: ObservableObject {
                 note("force-released")
                 break                      // force-released from the menu bar
             }
+        }
+        guard sessionGeneration == session else {
+            // Somebody else owns the microphone now; it is not ours to stop.
+            return ([], speechActivity.hasHeardSpeech)
         }
         return (recorder.stop(), speechActivity.hasHeardSpeech)
     }

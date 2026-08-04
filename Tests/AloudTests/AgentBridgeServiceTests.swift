@@ -1554,6 +1554,27 @@ final class AgentBridgeServiceTests: XCTestCase {
         XCTAssertEqual(host.listenCount, 0, "a question nobody heard never reaches the microphone")
     }
 
+    // A voice taken away mid-sentence is not a question that was asked.
+    //
+    // The speakers are pooled, so the preview button in Settings and an agent's
+    // question can be the same instance — and pressing it while an agent is
+    // talking cut the question off. The interrupted call returned *normally*,
+    // so the bridge answered `ok`, and the agent went straight on to `listen`:
+    // the microphone opened on somebody who had been asked nothing and had no
+    // idea a turn was waiting on them.
+    func testAQuestionCutOffByAnotherVoiceIsNeverReportedAsSpoken() async {
+        let service = makeService(mode: .open)
+        host.speakError = SpeakerError.superseded
+
+        let response = await service.handle(askRequest(), peer: peer)
+
+        XCTAssertFalse(response.ok, "an interrupted question must not answer ok")
+        XCTAssertEqual(response.reason, .queued, "the session is fine — say it again")
+        XCTAssertNotNil(response.retryAfter)
+        XCTAssertEqual(host.listenCount, 0,
+                       "and the microphone never opens on a question nobody heard")
+    }
+
     func testASpeakerThatFailsOutrightIsUnavailableAndAlsoHangsUp() async {
         struct SpeakerGone: Error {}
         let service = makeService(mode: .open)

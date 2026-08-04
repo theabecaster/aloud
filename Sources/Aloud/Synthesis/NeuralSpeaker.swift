@@ -173,7 +173,11 @@ final class NeuralSpeaker: Speaker {
         // ended, a second later, with nothing on screen to explain it.
         let mine = beginUtterance()
         let speech = try await synthesize(text)
-        guard isCurrent(mine) else { return }
+        // Thrown rather than returned. Returning normally told the caller the
+        // sentence had been said: `AgentBridgeService.speak` saw a live lease
+        // and answered `ok`, so the agent went straight on to `listen` and
+        // opened the microphone on somebody who had been asked nothing.
+        guard isCurrent(mine) else { throw SpeakerError.superseded }
         try await player.play(speech)
     }
 

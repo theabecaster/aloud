@@ -98,6 +98,20 @@ final class AgentBridgeService {
     // continuation per outstanding prompt, resumed exactly once.
     private var pendingConsent: [String: CheckedContinuation<ConsentResolution, Never>] = [:]
 
+    // Which prompt each parked continuation belongs to, and which prompt is the
+    // one actually on screen.
+    //
+    // Keying any of this on the lease alone is not enough: a lease can raise a
+    // second prompt (the user tightens the consent mode mid-session), and a
+    // lease that was reaped while its prompt was still up leaves a deadline
+    // task running with nobody to answer it. Either way a stale timer fired
+    // against whatever was on screen by then — timing out a *different* agent's
+    // prompt, or, worse, running the closing `dismissConsent(accepted: false)`
+    // over a live session and taking the pill and the microphone with it.
+    private var pendingConsentEpoch: [String: Int] = [:]
+    private var consentEpoch = 0
+    private var presentedConsentEpoch = 0
+
     // A harness that was just refused cannot ask again straight away.
     // The installed instructions tell agents that `denied` means this request
     // only and not to retry-loop, but instructions are not enforcement: an
@@ -655,8 +669,12 @@ final class AgentBridgeService {
         let deadline = prompt.deadline
         // Held so the answer can wait for the question to finish being read.
         var promptSpeech: Task<Void, Never>?
+        consentEpoch += 1
+        let epoch = consentEpoch
+        presentedConsentEpoch = epoch
         let resolution = await withCheckedContinuation { (continuation: CheckedContinuation<ConsentResolution, Never>) in
             pendingConsent[lease] = continuation
+            pendingConsentEpoch[lease] = epoch
             if prompt.mode == .confirmByVoice {
                 promptSpeech = Task { [weak self] in
                     // Spoken through whichever voice is available. A failure
@@ -681,7 +699,7 @@ final class AgentBridgeService {
                 if wait > 0 {
                     try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                 }
-                self?.timeOutConsent(lease: lease)
+                self?.timeOutConsent(lease: lease, epoch: epoch)
             }
         }
         // The pill invites an answer while the question is still being read
@@ -694,10 +712,17 @@ final class AgentBridgeService {
         // and the agent retried seconds later, so the user was asked to consent
         // a second time to something they had just said yes to.
         await promptSpeech?.value
-        if case .accepted = resolution {
-            await host?.dismissConsent(accepted: true)
-        } else {
-            await host?.dismissConsent(accepted: false)
+        // Only if the prompt on screen is still the one this call put there.
+        // `dismissConsent(accepted: false)` hides the pill and forces the phase
+        // idle, so running it against somebody else's prompt — or against the
+        // session that replaced it — takes down a live microphone. Whoever owns
+        // the screen now will dismiss their own.
+        if presentedConsentEpoch == epoch {
+            if case .accepted = resolution {
+                await host?.dismissConsent(accepted: true)
+            } else {
+                await host?.dismissConsent(accepted: false)
+            }
         }
         return resolution
     }
@@ -730,8 +755,10 @@ final class AgentBridgeService {
         resolve(lease, resolution)
     }
 
-    private func timeOutConsent(lease: String) {
-        guard pendingConsent[lease] != nil else { return }
+    private func timeOutConsent(lease: String, epoch: Int) {
+        // Only the prompt this deadline was armed for. A timer outliving its
+        // prompt used to answer whichever one had taken its place.
+        guard pendingConsentEpoch[lease] == epoch, pendingConsent[lease] != nil else { return }
         // The deadline fired. If the policy still has a live prompt it hands
         // back the real resolution; if it does not — a mid-session consent-mode
         // change reset it, or another lease's claim cleared it — the
@@ -741,6 +768,7 @@ final class AgentBridgeService {
     }
 
     private func resolve(_ lease: String, _ resolution: ConsentResolution) {
+        pendingConsentEpoch.removeValue(forKey: lease)
         guard let continuation = pendingConsent.removeValue(forKey: lease) else { return }
         continuation.resume(returning: resolution)
     }
@@ -805,6 +833,18 @@ final class AgentBridgeService {
             // the skill teaches agents to read as "the feature is gone".
             var response = BridgeResponse.failure(.queued, "Aloud is busy right now.")
             response.retryAfter = 3
+            return response
+        } catch SpeakerError.superseded {
+            // Something else took the voice mid-sentence — the preview button
+            // in Settings, or the user switching voice gender while the
+            // question was being read. The session itself is fine, so this is
+            // the same transient refusal as a busy microphone: say it again.
+            // What it must never be is a success, which would send the agent
+            // straight on to `listen` and open the microphone on somebody who
+            // was asked nothing.
+            if let refusal = validate(lease) { return refusal }
+            var response = BridgeResponse.failure(.queued, "Something interrupted the voice.")
+            response.retryAfter = 1
             return response
         } catch {
             return .failure(.unavailable, error.localizedDescription)
