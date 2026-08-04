@@ -2421,13 +2421,20 @@ final class DictationController: ObservableObject {
         indicatorShowAgentSession(harness: agentSessionHolder?.name ?? agentHarnessName ?? "")
 
         await ensureTranscriberReady()
+        // The first suspension, and on a cold model it is the long one — the
+        // comment above says seconds. Everything below installs or frees shared
+        // state, so ownership is re-checked here exactly as it is after the
+        // microphone opens.
+        guard stillOurs() else { throw AgentListenError.busy }
         guard let stream = transcriber.makeStreamingTranscription() else {
             // No streaming engine on this Mac — the fallback path is batch
             // only. Refusing is better than pretending: an agent polling a
             // session that will never update would wait out its own ceiling.
-            isAgentSession = false
-            phase = .idle
-            indicator.hide()
+            if stillOurs() {
+                isAgentSession = false
+                phase = .idle
+                indicator.hide()
+            }
             throw AgentListenError.notReady
         }
 
@@ -2438,10 +2445,11 @@ final class DictationController: ObservableObject {
             _ = try await startAgentCapture()
         } catch {
             // Same rollback as the blocking listen — and `agentPoll` too, or
-            // no poll session can ever start again. `agentPoll` is ours
-            // unconditionally; the rest belongs to whoever owns the microphone,
-            // which after a second of opening a Bluetooth device may not be us.
-            agentPoll = nil
+            // no poll session can ever start again. Only if it is still ours,
+            // though: a second `listen --start` can have registered itself
+            // while we were parked, and de-registering *its* session wedges it
+            // with the phase held and no way back.
+            if agentPoll === session { agentPoll = nil }
             if stillOurs() {
                 isAgentSession = false
                 phase = .idle
@@ -2457,6 +2465,7 @@ final class DictationController: ObservableObject {
         // for nobody — stop it rather than wiring a pump to a dead session and
         // handing back an id that can never be stopped.
         guard agentPoll === session, stillOurs() else {
+            if agentPoll === session { agentPoll = nil }
             if stillOurs() { _ = recorder.stop() }
             throw AgentListenError.busy
         }
@@ -2478,7 +2487,11 @@ final class DictationController: ObservableObject {
         // on a stopped recorder, wired a pump to a cancelled stream, and handed
         // the agent a session id whose every later poll could only answer busy.
         guard agentPoll === session, stillOurs() else {
-            // Only stop a capture that is still ours to stop.
+            // Only stop a capture that is still ours to stop — and never leave
+            // our own registration behind, or every later `listen --start` is
+            // refused by the `agentPoll == nil` guard and the next teardown
+            // tears down somebody else's capture in our name.
+            if agentPoll === session { agentPoll = nil }
             if stillOurs() { _ = recorder.stop() }
             throw AgentListenError.busy
         }

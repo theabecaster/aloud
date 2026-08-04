@@ -1572,6 +1572,36 @@ final class AgentBridgeServiceTests: XCTestCase {
     // so the bridge answered `ok`, and the agent went straight on to `listen`:
     // the microphone opened on somebody who had been asked nothing and had no
     // idea a turn was waiting on them.
+    // A consent prompt raised by `listen` must never land over a live
+    // dictation, for the same reason `claim` refuses to: the prompt seizes the
+    // hotkey, so the user's key release is swallowed and their commit is lost —
+    // and the decline that follows leaves their recorder open behind an idle
+    // phase, where the next press adopts it and types the stranded audio.
+    func testListenWillNotPromptOverALiveDictation() async {
+        // Built from a store the test keeps, so the mode can be tightened on a
+        // live service the way the Settings pane does it.
+        let settings = SettingsStore(defaults: defaults)
+        settings.experimentalAgentVoice = true
+        settings.installedHarnesses = ["claude-code"]
+        settings.agentConsentMode = .open
+        let service = makeService(settings: settings)
+        let granted = await service.handle(request(.claim), peer: peer)
+        guard let lease = granted.lease else { return XCTFail("no lease granted") }
+
+        // The user starts dictating, and the mode is tightened underneath the
+        // session so the next listen has to ask again.
+        settings.agentConsentMode = .confirmOnScreen
+        host.userDictationInProgress = true
+
+        let response = await service.handle(request(.listen, lease: lease), peer: peer)
+
+        XCTAssertEqual(response.reason, .queued, "transient — the user is busy, not refusing")
+        XCTAssertNotNil(response.retryAfter)
+        XCTAssertTrue(host.prompts.isEmpty,
+                      "no prompt may go up over somebody who is mid-sentence")
+        XCTAssertEqual(host.listenCount, 0)
+    }
+
     func testAQuestionCutOffByAnotherVoiceIsNeverReportedAsSpoken() async {
         let service = makeService(mode: .open)
         host.speakError = SpeakerError.superseded
@@ -1746,8 +1776,13 @@ final class AgentBridgeServiceTests: XCTestCase {
         XCTAssertGreaterThan(host.agentWaitingNotices, 1, "the dictation loop really did run")
         // Each poll is a real `queuePoll` sleep, so wall-clock time counts them:
         // the whole call may spend at most `Int(wait / queuePoll)` of them.
-        // Two budgets would put this at ~3.5 s rather than ~2 s.
-        XCTAssertLessThan(elapsed, ceiling + 0.7,
+        //
+        // The bound is set against the *bug*, not against the ideal. One budget
+        // is ~2 s and two are ~4 s, so anything under 3 s catches a second
+        // budget while leaving a full second for a loaded CI runner's sleeps to
+        // overshoot. A tighter bound measured the scheduler rather than the
+        // code, and duly failed at 2.716 s against 2.7 on a busy machine.
+        XCTAssertLessThan(elapsed, 3.0,
                           "the two loops shared one budget of \(Int(ceiling / AgentBridgeService.queuePoll)) polls")
     }
 }

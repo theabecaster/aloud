@@ -949,6 +949,17 @@ final class AgentBridgeService {
             // would be filed under the shared unverified key: charged to every
             // anonymous claimant on the Mac, and to none to the one refused.
             // `claim` computes its key at entry for exactly this reason.
+            // Never over a live dictation, exactly as `claim` refuses. The
+            // prompt seizes the hotkey, so raising one here swallows the user's
+            // commit — and the dictation is then stranded with its recorder
+            // open behind whatever phase the decline leaves. This verb reaches
+            // the same prompt machinery `claim` does and needs the same rule.
+            if host.userDictationInProgress {
+                var response = BridgeResponse.failure(.queued,
+                    "You're in the middle of dictating — try again in a moment.")
+                response.retryAfter = 3
+                return response
+            }
             let holderAtPrompt = leases.holder
             let holderKey = Self.refusalKey(for: holderAtPrompt)
             let quietUntil = [refusedUntil[holderKey], lastRefusalUntil].compactMap { $0 }.max()
