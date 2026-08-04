@@ -2045,7 +2045,6 @@ final class DictationController: ObservableObject {
         // Nobody is coming, or nobody said anything once they did. Same outcome
         // either way, and the same one an ordinary listen reports.
         func giveUp() -> AgentListenError {
-            isAgentSession = false
             // Held to the same rule as the teardown after the capture loop: a
             // hold can be ended from underneath by a release, a reap or the
             // menu bar, and the user can have started their own dictation in
@@ -2057,6 +2056,7 @@ final class DictationController: ObservableObject {
             // shared instance, so tearing it down here takes the still-listening
             // reminder off a dictation that has just installed it.
             guard stillOurs() else { return AgentListenError.nothingHeard }
+            isAgentSession = false
             stopSpeechActivity()
             _ = recorder.stop()
             indicator.hide()
@@ -2107,7 +2107,6 @@ final class DictationController: ObservableObject {
             beginPreview()
             samples = await captureUntilEndpoint(session: mine).samples
         }
-        isAgentSession = false
 
         // Is this still our turn to be tearing down?
         //
@@ -2119,6 +2118,13 @@ final class DictationController: ObservableObject {
         // agent's conversation bubble back on screen over the top: the hotkey
         // press did nothing at all, with no error and nothing typed.
         guard stillOurs() else { throw AgentListenError.busy }
+        // Cleared here rather than above the guard. `isAgentSession` is a
+        // token a *successor* reads — the poll session checks it to tell "my
+        // session was ended" from "somebody took over" — so a stale call
+        // clearing it unconditionally turned off the flag belonging to a
+        // session that had just started, which then refused itself as busy and
+        // left the phase stranded at `.recording` with the hotkey inert.
+        isAgentSession = false
         // Only now, and for the same reason: the detector is shared, so
         // stopping it before this guard would take it from whoever owns the
         // microphone now.
