@@ -1915,11 +1915,19 @@ final class DictationController: ObservableObject {
         do {
             _ = try await startAgentCapture()
         } catch {
-            isAgentSession = false
-            phase = .idle
-            indicator.hide()
+            // Opening the microphone can take seconds on Bluetooth, and the
+            // session can be ended — and the user's own dictation started —
+            // inside that window. Putting this session's state back is right;
+            // putting somebody else's back is the same cross-session teardown
+            // every other path here guards against.
+            if stillOurs() {
+                isAgentSession = false
+                phase = .idle
+                indicator.hide()
+            }
             throw error
         }
+        guard stillOurs() else { throw AgentListenError.busy }
 
         // The consent boundary, enforced here rather than assumed.
         //
@@ -1957,6 +1965,11 @@ final class DictationController: ObservableObject {
         // now, and for a held one it is whenever they walk back in.
         var preview: StreamingTranscription?
         func beginPreview() {
+            // The preview wires `recorder.onChunk`, which is shared: a session
+            // that has already been ended must not point it at its own
+            // about-to-be-cancelled stream, over the top of a dictation that
+            // has just installed live typing there.
+            guard stillOurs() else { return }
             // A preview that already exists still has to be re-attached, not
             // skipped. A false start on a held listen stops the recorder to
             // start a fresh capture, and `stop()` clears both chunk consumers —
@@ -2021,6 +2034,12 @@ final class DictationController: ObservableObject {
         // Capture is already running, so nothing the user says is lost; only
         // the detector starts late, and it starts on a room that is ours again.
         try? await Task.sleep(nanoseconds: UInt64(AgentListen.cueGuard * 1_000_000_000))
+        // The guards on this function's teardown have a matching one here, on
+        // the way in. Everything below *installs* shared state — the detector,
+        // the monitor chunk consumer, the pill's speech-age provider — and a
+        // session ended during the cue guard means installing it over whatever
+        // owns the microphone now.
+        guard stillOurs() else { throw AgentListenError.busy }
         startSpeechActivity()
 
         // Nobody is coming, or nobody said anything once they did. Same outcome

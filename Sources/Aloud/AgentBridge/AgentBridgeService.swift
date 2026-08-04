@@ -825,7 +825,16 @@ final class AgentBridgeService {
         // process dropped that lease's consent — costing whoever actually held
         // it a fresh prompt for a session the user had already approved.
         let wasHolder = leases.holder?.id == lease
-        if wasHolder { consent.endLease(lease) }
+        if wasHolder {
+            consent.endLease(lease)
+            // The last of the out-of-band prompt teardowns. `endSession` and
+            // `forceRelease` resolve the parked call outright and the sweep
+            // invalidates the epoch; this one took the pill down and left a
+            // parked `awaitConsent` still believing its prompt was on screen,
+            // so its closing dismiss could land minutes later on whatever was
+            // there by then.
+            invalidatePresentedConsent()
+        }
         leases.release(lease: lease, now: now())
         if wasHolder { await host?.endAgentSession() }
         return .success()
