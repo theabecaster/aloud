@@ -35,12 +35,42 @@ final class SettingsStore: ObservableObject {
         statsDictations = defaults.object(forKey: Keys.statsDictations) as? Int ?? 0
         liveTyping = defaults.object(forKey: Keys.liveTyping) as? Bool ?? true
         let storedLanguages = defaults.object(forKey: Keys.declaredLanguages) as? [String] ?? []
+        // Opens on the system language, but only one dictation can actually
+        // hear — otherwise the list would start on an entry the picker can't
+        // offer back and no engine can act on. English is the floor because it
+        // is the one language every tier covers.
+        let systemLanguage = Locale.current.language.languageCode?.identifier ?? "en"
         declaredLanguages = storedLanguages.isEmpty
-            ? [Locale.current.language.languageCode?.identifier ?? "en"]
+            ? [DictationLanguages.isDictatable(systemLanguage) ? systemLanguage : "en"]
             : storedLanguages
         pressEnterCommand = defaults.bool(forKey: Keys.pressEnterCommand)
         noiseReduction = defaults.object(forKey: Keys.noiseReduction) as? Bool ?? false
         learnCorrections = defaults.object(forKey: Keys.learnCorrections) as? Bool ?? true
+        installedHarnesses = defaults.object(forKey: Keys.installedHarnesses) as? [String] ?? []
+        handsFree = defaults.object(forKey: Keys.handsFree) as? Bool ?? true
+        // Open by default: agents are let in on sight, with the pill and its
+        // name badge as the disclosure (see Migration.applyAgentConsentDefaults
+        // IfNeeded, which also brings existing installs onto it once).
+        let mode = (defaults.string(forKey: Keys.agentConsentMode))
+            .flatMap(AgentConsentMode.init) ?? .open
+        agentConsentMode = mode
+        // Never written before? Read it back off the mode, so an install that
+        // predates the two-switch pane keeps the prompt style it was using —
+        // and so a default-open install starts with the spoken prompt off
+        // rather than armed for the moment "ask me first" is switched on.
+        agentAsksOutLoud = defaults.object(forKey: Keys.agentAsksOutLoud) as? Bool
+            ?? (mode == .confirmByVoice)
+        // Off unless the user has opted in. `bool(forKey:)` is false for a key
+        // that was never written, which is exactly the default we want — an
+        // experiment nobody asked for should not be running.
+        experimentalAgentVoice = defaults.bool(forKey: Keys.experimentalAgentVoice)
+        // Which voice serves this gender is worked out at the moment it is
+        // needed rather than frozen here: macOS voices are downloaded and
+        // removed while Aloud is running.
+        agentVoiceGender = (defaults.string(forKey: Keys.agentVoiceGender))
+            .flatMap(VoiceGender.init) ?? VoiceCatalog.defaultGender
+        agentVoiceSpeed = VoiceSpeed.clamped(
+            defaults.object(forKey: Keys.agentVoiceSpeed) as? Double ?? VoiceSpeed.normal)
     }
 
     private static func resolveDefaults() -> UserDefaults {
@@ -72,6 +102,13 @@ final class SettingsStore: ObservableObject {
         static let noiseReduction = "noiseReduction"
         static let learnCorrections = "learnCorrections"
         static let deafDevices = "noiseReductionDeafDevices"
+        static let experimentalAgentVoice = "experimentalAgentVoice"
+        static let agentConsentMode = "agentConsentMode"
+        static let agentAsksOutLoud = "agentAsksOutLoud"
+        static let installedHarnesses = "installedHarnesses"
+        static let agentVoiceGender = "agentVoiceGender"
+        static let agentVoiceSpeed = "agentVoiceSpeed"
+        static let handsFree = "handsFree"
     }
 
     @Published var hotkey: Hotkey {
@@ -79,6 +116,18 @@ final class SettingsStore: ObservableObject {
     }
     // Optional dedicated hands-free key: press to start a locked session,
     // press again to finish. nil = double-tap the main key only.
+    // Double-tapping the dictation key to lock the microphone open.
+    //
+    // No control in Settings any more — this release replaced the on/off
+    // toggle with a dedicated hands-free key — but the stored value is still
+    // honoured, because it was a shipped setting and somebody turned it off on
+    // purpose. Almost always because an accidental double-tap left the
+    // microphone open, which is exactly the surprise not to hand back to them
+    // on an update. Absent (never touched) means on, as it always did.
+    @Published var handsFree: Bool {
+        didSet { defaults.set(handsFree, forKey: Keys.handsFree) }
+    }
+
     @Published var handsFreeHotkey: Hotkey? {
         didSet {
             if let hk = handsFreeHotkey, let data = try? JSONEncoder().encode(hk) {
@@ -173,6 +222,91 @@ final class SettingsStore: ObservableObject {
     @Published var learnCorrections: Bool {
         didSet { defaults.set(learnCorrections, forKey: Keys.learnCorrections) }
     }
+
+    // MARK: agent voice
+
+    // The experimental gate, and the feature's master switch — one control, not
+    // two. Off is the shipping default and means the whole feature is
+    // unavailable: Settings shows no Agents section, and every agent call is
+    // refused with `disabled`, which tells an agent to stop asking rather than
+    // to retry. Nothing underneath is conditional on it; only reachability is.
+    //
+    // Note this cannot be derived from whether a harness is installed the way a
+    // plain master switch could: the install UI lives on the page this reveals,
+    // so a harness can never exist before the switch is on.
+    @Published var experimentalAgentVoice: Bool {
+        didSet { defaults.set(experimentalAgentVoice, forKey: Keys.experimentalAgentVoice) }
+    }
+    // How an agent's request to listen is approved. Chosen on the onboarding
+    // install page rather than buried here, because that is the screen where
+    // the user is actually weighing it up.
+    //
+    // Still the one stored truth — the bridge reads this and nothing else — but
+    // Settings drives it through the two switches below rather than exposing
+    // three modes the user has to hold in their head at once.
+    @Published var agentConsentMode: AgentConsentMode {
+        didSet { defaults.set(agentConsentMode.rawValue, forKey: Keys.agentConsentMode) }
+    }
+    // Whether the question is asked out loud rather than shown on the pill.
+    // Persisted on its own key so it survives "ask me first" being switched off
+    // and back on: a user who chose the on-screen prompt should get it back,
+    // not the default. Only meaningful while `agentAsksFirst` is on, which is
+    // also the only time Settings shows it.
+    @Published var agentAsksOutLoud: Bool {
+        didSet {
+            defaults.set(agentAsksOutLoud, forKey: Keys.agentAsksOutLoud)
+            guard agentConsentMode != .open else { return }
+            agentConsentMode = agentAsksOutLoud ? .confirmByVoice : .confirmOnScreen
+        }
+    }
+    // The main switch in Settings → Agent Speak: on means an agent has to be
+    // let in, off means it is let in on sight. Computed rather than stored so
+    // the mode can never disagree with the switch that sets it.
+    var agentAsksFirst: Bool {
+        get { agentConsentMode != .open }
+        set {
+            guard newValue != agentAsksFirst else { return }
+            agentConsentMode = newValue
+                ? (agentAsksOutLoud ? .confirmByVoice : .confirmOnScreen)
+                : .open
+        }
+    }
+    // Harness ids the installer has wired up. Drives whether the spoken prompt
+    // names the caller: with one installed "an agent wants to listen" is
+    // clearer than naming it, so the name only appears when there is genuine
+    // ambiguity to resolve.
+    @Published var installedHarnesses: [String] {
+        didSet { defaults.set(installedHarnesses, forKey: Keys.installedHarnesses) }
+    }
+
+    // Which side agents speak from. The whole of the user's voice choice: not
+    // a named voice, because Aloud picks the best one it has on that side and
+    // that answer changes as macOS voices come and go. Stored as the gender so
+    // it can never name a voice that has since been uninstalled.
+    @Published var agentVoiceGender: VoiceGender {
+        didSet { defaults.set(agentVoiceGender.rawValue, forKey: Keys.agentVoiceGender) }
+    }
+
+    // How fast that voice talks, 1 being its natural pace. Clamped on write as
+    // well as on read: the slider can't leave the range, but a defaults key
+    // edited by hand can.
+    @Published var agentVoiceSpeed: Double {
+        didSet {
+            let clamped = VoiceSpeed.clamped(agentVoiceSpeed)
+            guard clamped == agentVoiceSpeed else { agentVoiceSpeed = clamped; return }
+            defaults.set(agentVoiceSpeed, forKey: Keys.agentVoiceSpeed)
+        }
+    }
+
+    /// The voice an agent will actually speak with, right now.
+    var agentVoice: VoiceOption { VoiceCatalog.resolved(gender: agentVoiceGender) }
+
+    var namesHarnessWhenSpeaking: Bool { installedHarnesses.count > 1 }
+
+    // What the bridge asks before doing anything for an agent. Kept as one
+    // named question so every call site reads the same, and so turning the
+    // experiment off can never be half-applied.
+    var agentVoiceAvailable: Bool { experimentalAgentVoice }
 
     // Microphones that went completely silent under macOS voice processing.
     // Some inputs — Bluetooth headsets in particular — accept it and then

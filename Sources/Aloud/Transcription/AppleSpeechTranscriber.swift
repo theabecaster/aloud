@@ -11,6 +11,10 @@ import Speech
 final class AppleSpeechTranscriber: Transcriber {
     private(set) var state: TranscriberState = .modelMissing
     private var locale: Locale?
+    // The declared languages `locale` was resolved from. Kept so a re-resolve
+    // can tell whether the locale in hand is answering the list as it stands
+    // now — see relocalize().
+    private var resolvedFor: [String] = []
     private let prepareLock = AsyncSerialGate()
 
     // Nil when this system can't provide a usable on-device fallback at all.
@@ -34,8 +38,12 @@ final class AppleSpeechTranscriber: Transcriber {
     // Declared dictation languages first (the user told us what they speak),
     // then the system locale, then English as the always-available floor.
     private static var localeCandidates: [Locale] {
-        SettingsStore.shared.declaredLanguages.map { Locale(identifier: $0) }
+        declaredLanguages.map { Locale(identifier: $0) }
             + [Locale.current, Locale(identifier: "en_US")]
+    }
+
+    private static var declaredLanguages: [String] {
+        SettingsStore.shared.declaredLanguages
     }
 
     // A declared language is a bare code ("pt"); recognizer locales are
@@ -94,6 +102,10 @@ final class AppleSpeechTranscriber: Transcriber {
 
     @available(macOS 26, *)
     private func prepareModern() async throws {
+        // Read before the awaits below, so what gets recorded is the list this
+        // resolve actually answered rather than whatever it has become by the
+        // time an asset install finishes.
+        let declared = Self.declaredLanguages
         let supported = await SpeechTranscriber.supportedLocales
         guard let match = Self.resolve(from: supported) else {
             throw AppleSpeechError.unavailable
@@ -107,9 +119,11 @@ final class AppleSpeechTranscriber: Transcriber {
             try await install.downloadAndInstall()
         }
         locale = match
+        resolvedFor = declared
     }
 
     private func prepareLegacy() async throws {
+        let declared = Self.declaredLanguages
         if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
             _ = await withCheckedContinuation { (cont: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
                 SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
@@ -120,6 +134,41 @@ final class AppleSpeechTranscriber: Transcriber {
             throw AppleSpeechError.unavailable
         }
         locale = recognizer.locale
+        resolvedFor = declared
+    }
+
+    // The declared dictation languages chose this engine's locale, once, at
+    // prepare. `prepare` returns early once ready, so without this a language
+    // added in Settings → Dictation would not reach basic dictation until the
+    // next launch — and that pane puts the Languages list directly under the
+    // banner saying basic dictation is the engine in use.
+    //
+    // A failed re-resolve (the modern path installs assets, which needs
+    // network) keeps the locale already in hand: losing basic dictation
+    // because someone added a language would be worse than the stale locale
+    // this exists to fix.
+    func relocalize() async {
+        guard state == .ready else { return }
+        // The gate coalesces: a re-resolve arriving while a prepare is already
+        // running joins that one rather than starting its own — and that one
+        // may have read the language list before the change that prompted
+        // this. So ask by result, not by call: keep going until the locale in
+        // hand was resolved from the list as it stands. Bounded, because a
+        // resolve that keeps failing must not spin.
+        for _ in 0..<3 {
+            guard resolvedFor != Self.declaredLanguages else { return }
+            do {
+                try await prepareLock.run { [self] in
+                    if #available(macOS 26, *) {
+                        try await prepareModern()
+                    } else {
+                        try await prepareLegacy()
+                    }
+                }
+            } catch {
+                return
+            }
+        }
     }
 
     func transcribe(samples: [Float]) async throws -> Transcription {

@@ -14,7 +14,6 @@ final class AudioRecorder {
     // engineQueue — start() blocks main inside an engineQueue.sync for
     // everything it does with it.
     private var engine = AVAudioEngine()
-    private var converter: AVAudioConverter?
     private var samples: [Float] = []
     private let lock = NSLock()
     // Every touch of `engine` (start, stop, a mid-session rebuild, a device
@@ -29,8 +28,16 @@ final class AudioRecorder {
     // engine and has to re-apply the same processing.
     private var noiseReduction = false
 
-    // Live input level (0…1) for the recording indicator, updated on the tap queue.
-    private(set) var currentLevel: Float = 0
+    // Live input level (0…1) for the recording indicator, updated on the tap
+    // queue and read from the main thread 30 times a second. Behind the same
+    // lock as every other field written there: a torn `Float` is benign on this
+    // hardware, but it is a declared data race all the same, and it was the one
+    // field in this file left outside the lock its neighbours use.
+    private var _currentLevel: Float = 0
+    var currentLevel: Float {
+        lock.lock(); defer { lock.unlock() }
+        return _currentLevel
+    }
 
     // Live per-frequency-band levels (0…1 each) for the indicator's spectrum.
     // The analyser is fed on the tap thread, reset from the main one when a
@@ -49,12 +56,28 @@ final class AudioRecorder {
     // Optional live consumer of converted 16 kHz chunks, invoked on the tap
     // thread as audio arrives (live typing feeds its streaming session here).
     // Samples still accumulate for `stop()` regardless. Cleared on stop.
-    var onChunk: (([Float]) -> Void)?
+    //
+    // Behind the lock because these are now swapped *while audio is flowing*.
+    // They used to be set once per hotkey press; the agent paths re-point them
+    // several times per turn — a false start in the hold loop rewires them, and
+    // a bridge call ending the session can clear them at any instant — while
+    // the tap thread is calling through them. Assigning a closure is not one
+    // store: it is a retain, a release and two words, and racing that with a
+    // call through it is a crash rather than a stale value.
+    var onChunk: (([Float]) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return _onChunk }
+        set { lock.lock(); defer { lock.unlock() }; _onChunk = newValue }
+    }
+    private var _onChunk: (([Float]) -> Void)?
 
     // Second, independent chunk consumer for passive listeners (speech
     // detection) that must keep running whether or not live typing owns
     // `onChunk`. Same thread, same cleared-on-stop contract.
-    var onMonitorChunk: (([Float]) -> Void)?
+    var onMonitorChunk: (([Float]) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return _onMonitorChunk }
+        set { lock.lock(); defer { lock.unlock() }; _onMonitorChunk = newValue }
+    }
+    private var _onMonitorChunk: (([Float]) -> Void)?
 
     // Whether macOS voice processing was actually engaged for this session —
     // some interfaces (aggregate devices, a few USB mics) refuse it, and we
@@ -84,6 +107,15 @@ final class AudioRecorder {
     // anything. Diagnostic only.
     private var firstSignalUptime: TimeInterval?
     private var captureStartUptime: TimeInterval = 0
+
+    // When this capture began, as a wall clock so it can be compared with
+    // things decided elsewhere — the moment the user granted consent, above
+    // all. nil when nothing is being captured.
+    var captureStartedAt: Date? {
+        guard isRecording, captureStartUptime > 0 else { return nil }
+        let elapsed = ProcessInfo.processInfo.systemUptime - captureStartUptime
+        return Date().addingTimeInterval(-elapsed)
+    }
     private var silenceWatchdog: DispatchWorkItem?
     // Why the engine last refused to start. Kept for diagnostics (--mic-check)
     // — "couldn't start" on its own tells nobody anything.
@@ -406,8 +438,8 @@ final class AudioRecorder {
         samples.removeAll(keepingCapacity: true)
         sawSignal = false
         firstSignalUptime = nil
+        _currentLevel = 0
         lock.unlock()
-        currentLevel = 0
         resetSpectrum()
         voiceProcessingFellBack = false
     }
@@ -437,16 +469,39 @@ final class AudioRecorder {
             // must undo it on the way out — stop() never runs for a session
             // that never began, and nothing else would put it back.
             guard engine.inputNode.outputFormat(forBus: 0).sampleRate > 0 else {
-                restoreDefaultInputAfterSession()
+                abandonFailedStart()
                 throw NSError(domain: "Aloud", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
             }
             guard installCapture() else {
-                restoreDefaultInputAfterSession()
+                abandonFailedStart()
                 throw NSError(domain: "Aloud", code: 2,
                               userInfo: [NSLocalizedDescriptionKey: "Couldn’t start listening"])
             }
         sessionDeviceID = currentInputDeviceID()
+    }
+
+    // Undo everything a start got as far as doing before it failed.
+    //
+    // Restoring the default input was not enough. By this point voice
+    // processing may already be engaged, and the only teardown macOS reliably
+    // honours is replacing the engine outright — which lives in `stop()`, and
+    // `stop()` returns at its first guard for a session that never set
+    // `isRecording`. So a start that failed after the processing unit was
+    // attached left it attached, holding the microphone *and* the output device
+    // it echo-cancels against, for as long as the process lived. The way in is
+    // ordinary: noise filtering on, hotkey pressed while the input device is
+    // mid-transition (an AirPods hand-off, another app taking the input). The
+    // user sees "Couldn't access the microphone", gives up, and the claim
+    // outlives their attempt.
+    private func abandonFailedStart() {
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        engine.disconnectNodeOutput(engine.inputNode)
+        applyVoiceProcessing(false)
+        engine.reset()
+        engine = AVAudioEngine()
+        restoreDefaultInputAfterSession()
     }
 
     // Main-thread bookkeeping once capture is live.
@@ -527,7 +582,11 @@ final class AudioRecorder {
         if let map = Self.channelMap(forInputChannels: hwFormat.channelCount) {
             converter.channelMap = map
         }
-        self.converter = converter
+        // Deliberately not stored on `self`. The tap closure below captures the
+        // one it needs, and nothing else ever read the property — it was
+        // assigned on `engineQueue` here and cleared on the main thread in
+        // `stop()`, which is an unsynchronised store to a class reference and
+        // therefore an ARC retain/release race, for a value with no readers.
         // AVAudioEngine raises (and so aborts the app) if a tap is already on
         // the bus. A previous start that got as far as the tap and then failed
         // to start the engine — another app holding the input, a device
@@ -624,7 +683,6 @@ final class AudioRecorder {
             restoreDefaultInputAfterSession()
         }
         isRecording = false
-        converter = nil
         onChunk = nil
         onMonitorChunk = nil
         resetSpectrum()
@@ -636,6 +694,56 @@ final class AudioRecorder {
 
     func cancel() {
         _ = stop()
+    }
+
+    // Throw away what has been captured so far, keeping only the last few
+    // seconds.
+    //
+    // Every other caller records for as long as somebody holds a key, so the
+    // buffer growing for the whole session is exactly right. An agent waiting
+    // for a user who has walked away is the one case that is not: the
+    // microphone is open for minutes with nobody in the room, and all of it
+    // would be kept and then handed to the transcriber. Ten minutes is ~38 M
+    // samples — 150 MB of silence to decode in order to read one sentence.
+    //
+    // The tail is what makes it safe to discard at all: capture cannot start
+    // the instant somebody speaks, because "somebody spoke" is only known a
+    // fraction of a second afterwards. Keeping a little of the recent past
+    // means the first word survives the decision to start listening to it.
+    // A copy of what has been captured so far, leaving the session running.
+    //
+    // For anything that starts consuming audio partway through a capture: a
+    // live preview attached at the moment somebody starts speaking hears only
+    // what arrives *after* it, so the first second — already sitting in this
+    // buffer — would never reach it, and the user watches an empty field
+    // through the start of their own sentence.
+    var bufferedSamples: [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return samples
+    }
+
+    func discardBuffered(keepingLast seconds: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        samples = Self.keepingTail(samples, seconds: seconds)
+    }
+
+    // The arithmetic on its own, so the trim that keeps a ten-minute hold from
+    // handing ten minutes of room tone to the transcriber can actually be
+    // tested. Reaching it through the recorder needs a live microphone: the
+    // buffer is private and its only writer is the audio tap.
+    //
+    // `isFinite` first, and not for tidiness: `Int(_: Double)` traps on
+    // infinity and NaN, and it converts before `max(0,…)` can clamp anything —
+    // so an infinite `seconds` took the process down rather than keeping
+    // everything, which is what asking to keep an infinite tail obviously means.
+    // Both callers pass constants today; this is the trap closed before one of
+    // them stops being a constant.
+    static func keepingTail(_ samples: [Float], seconds: TimeInterval,
+                            sampleRate: Double = targetSampleRate) -> [Float] {
+        guard seconds.isFinite else { return samples }
+        let keep = max(0, Int(seconds * sampleRate))
+        guard samples.count > keep else { return samples }
+        return Array(samples.suffix(keep))
     }
 
     // Whether the audio hardware has actually been let go: engine idle and
@@ -676,19 +784,25 @@ final class AudioRecorder {
         var sum: Float = 0
         for s in chunk { sum += s * s }
         let rms = (sum / Float(max(chunk.count, 1))).squareRoot()
-        currentLevel = min(1, rms * 12)
         // Frequency bands for the indicator, from the same converted chunk.
         bandsLock.lock()
         if let bands = analyzer.append(chunk) { self.bands = bands }
         bandsLock.unlock()
         lock.lock()
+        _currentLevel = min(1, rms * 12)
         if !sawSignal, chunk.contains(where: { $0 != 0 }) {
             sawSignal = true
             firstSignalUptime = ProcessInfo.processInfo.systemUptime
         }
         samples.append(contentsOf: chunk)
+        // Snapshotted under the lock and called outside it: calling through a
+        // closure while another thread may be replacing it is the race, and
+        // holding the lock across a consumer we do not own would invite a
+        // deadlock the moment one of them touched the recorder back.
+        let chunkConsumer = _onChunk
+        let monitorConsumer = _onMonitorChunk
         lock.unlock()
-        onChunk?(chunk)
-        onMonitorChunk?(chunk)
+        chunkConsumer?(chunk)
+        monitorConsumer?(chunk)
     }
 }

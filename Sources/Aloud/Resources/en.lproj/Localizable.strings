@@ -6,8 +6,6 @@
 "Aloud can’t work until you allow access" = "Aloud can’t work until you allow access";
 "Download Voice Recognition" = "Download Voice Recognition";
 "Retry Voice Download" = "Retry Voice Download";
-"Improving accuracy…" = "Improving accuracy…";
-"Improving accuracy… %ld%%" = "Improving accuracy… %ld%%";
 "Copy Last Text" = "Copy Last Text";
 "Type It Again" = "Type It Again";
 "Use Exact Words" = "Use Exact Words";
@@ -30,6 +28,8 @@
 "Voice download didn’t finish" = "Voice download didn’t finish";
 "Dictation key isn’t working — try reopening Aloud" = "Dictation key isn’t working — try reopening Aloud";
 "Hold %@ to dictate" = "Hold %@ to dictate";
+"%@ is using the microphone" = "%@ is using the microphone";
+"End %@’s session" = "End %@’s Session";
 
 /* Windows */
 "Welcome to Aloud" = "Welcome to Aloud";
@@ -71,7 +71,6 @@
 "Microphone changed — still listening" = "Microphone changed — still listening";
 
 /* Dictation hints */
-"Voice model is still warming up…" = "Voice model is still warming up…";
 "Finish setup to start dictating" = "Finish setup to start dictating";
 "Couldn’t access the microphone" = "Couldn’t access the microphone";
 "Couldn’t finish that dictation" = "Couldn’t finish that dictation";
@@ -123,6 +122,7 @@
 "Reduce background noise" = "Reduce background noise";
 "The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again." = "The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again.";
 "Not available with %@." = "Not available with %@.";
+"this output" = "this output";
 "Getting ready…" = "Getting ready…";
 "%@ (Bluetooth)" = "%@ (Bluetooth)";
 "A Bluetooth mic puts the whole headset into mono call audio while Aloud listens." = "A Bluetooth mic puts the whole headset into mono call audio while Aloud listens.";
@@ -130,7 +130,7 @@
 "Where Aloud listens. System default follows the Mac." = "Where Aloud listens. System default follows the Mac.";
 "Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin." = "Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin.";
 "More info" = "More info";
-"Sound when recording starts" = "Sound when recording starts";
+"Play sound effects" = "Play sound effects";
 "Open Aloud at login" = "Open Aloud at login";
 
 /* Settings — keys */
@@ -146,6 +146,12 @@
 
 /* Settings — dictation */
 "Basic dictation in use" = "Basic dictation in use";
+"A language you listed is only heard by basic dictation, so every dictation uses it." = "A language you listed is only heard by basic dictation, so every dictation uses it.";
+"Aloud couldn’t set up that language on this Mac, so it isn’t being heard." = "Aloud couldn’t set up that language on this Mac, so it isn’t being heard.";
+"Remove the languages marked Basic below to go back to full accuracy." = "Remove the languages marked Basic below to go back to full accuracy.";
+"Basic dictation only" = "Basic dictation only";
+"Only basic dictation hears this language, so every dictation uses it." = "Only basic dictation hears this language, so every dictation uses it.";
+"All time" = "All time";
 "Setting up full accuracy — %ld%%" = "Setting up full accuracy — %ld%%";
 "Dictation keeps working while this finishes; the switch is automatic." = "Dictation keeps working while this finishes; the switch is automatic.";
 "Setting up full accuracy — almost done" = "Setting up full accuracy — almost done";
@@ -227,7 +233,6 @@
 "less than a minute ago" = "less than a minute ago";
 "Show original" = "Show original";
 "Original" = "Original";
-"Hide original" = "Hide original";
 "Fix" = "Fix";
 "Correct this dictation and teach Aloud the right words" = "Correct this dictation and teach Aloud the right words";
 "Copy" = "Copy";
@@ -265,7 +270,7 @@
 "Setting Up Voice Recognition" = "Setting Up Voice Recognition";
 "A one-time download, about 500 MB. After this, dictation works offline." = "A one-time download, about 500 MB. After this, dictation works offline.";
 "No internet connection" = "No internet connection";
-"This screen continues on its own once you're back online." = "This screen continues on its own once you're back online.";
+"This screen continues on its own once you’re back online." = "This screen continues on its own once you’re back online.";
 "Download" = "Download";
 "%ld%% — you can keep using your Mac" = "%ld%% — you can keep using your Mac";
 "Almost ready…" = "Almost ready…";
@@ -284,7 +289,6 @@
 "One moment…" = "One moment…";
 "Aloud lives in your menu bar — the " = "Aloud lives in your menu bar — the ";
 " icon at the top of your screen." = " icon at the top of your screen.";
-"Tip: double-press %@ to keep listening hands-free. Esc finishes." = "Tip: double-press %@ to keep listening hands-free. Esc finishes.";
 "Done" = "Done";
 "Skip for now" = "Skip for now";
 
@@ -310,12 +314,10 @@
 "key %ld" = "key %ld";
 
 "Polishing…" = "Polishing…";
-"Kept your exact words — Aloud never rewrites here" = "Kept your exact words — Aloud never rewrites here";
 "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier." = "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier.";
 "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works.";
 "Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor.";
 "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor.";
-"Tip: press %@ to keep listening hands-free. Esc finishes." = "Tip: press %@ to keep listening hands-free. Esc finishes.";
 "%1$@ is already your %2$@." = "%1$@ is already your %2$@.";
 "%1$@ includes %2$@, which is already your %3$@." = "%1$@ includes %2$@, which is already your %3$@.";
 "%1$@ is part of %2$@, your %3$@." = "%1$@ is part of %2$@, your %3$@.";
@@ -325,6 +327,10 @@
 "These words aren’t applied while Clean-up is %@." = "These words aren’t applied while Clean-up is %@.";
 "Use Standard" = "Use Standard";
 "Not in use — Clean-up is set to %@." = "Not in use — Clean-up is set to %@.";
+"These rules only change the Concise clean-up, and Clean-up is %@." = "These rules only change the Concise clean-up, and Clean-up is %@.";
+"These rules only change the Concise clean-up, which this Mac can’t run." = "These rules only change the Concise clean-up, which this Mac can’t run.";
+"Use Concise" = "Use Concise";
+"Not in use — this Mac can’t run the Concise clean-up." = "Not in use — this Mac can’t run the Concise clean-up.";
 "What Else Aloud Does" = "What Else Aloud Does";
 "Nothing to set up now — this is just so you know it’s there." = "Nothing to set up now — this is just so you know it’s there.";
 "Start Using Aloud" = "Start Using Aloud";
@@ -346,10 +352,7 @@
 "Voice commands" = "Voice commands";
 "Say what to change" = "Say what to change";
 "Set a command key in Settings, then hold it and say what to do: rewrite or translate the selected text, or write something new." = "Set a command key in Settings, then hold it and say what to do: rewrite or translate the selected text, or write something new.";
-"Filtering background noise — click to stop" = "Filtering background noise — click to stop";
-"Filter background noise" = "Filter background noise";
 "Background noise is being filtered — click to stop" = "Background noise is being filtered — click to stop";
-"Filter out background noise" = "Filter out background noise";
 "%@ isn’t taking text right now" = "%@ isn’t taking text right now";
 "%@ didn’t take the text — it’s in History" = "%@ didn’t take the text — it’s in History";
 "The front app" = "The front app";
@@ -372,3 +375,133 @@
 "Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac." = "Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac.";
 "Learned from your edits" = "Learned from your edits";
 "Aloud noticed a fix — review it in the menu bar" = "Aloud noticed a fix — review it in the menu bar";
+
+/* Agent Speak — the spoken consent prompt. This is the string that
+   tells someone a decision is being asked of them, so it must never
+   fall back to English. */
+"Let %@ agent listen? Yes or no" = "Let %@ agent listen? Yes or no";
+
+/* Agent Speak — Settings → Agent Speak: whether an agent is asked
+   before it listens, how the asking happens, and the agent tools Aloud
+   can set itself up in. The on/off switch is not here — it lives in
+   General → Experimental with the other experiments. */
+"Permission" = "Permission";
+"Ask before listening" = "Ask before listening";
+"Ask out loud" = "Ask out loud";
+"Agents start listening as soon as they ask, without checking with you first." = "Agents start listening as soon as they ask, without checking with you first.";
+"Aloud asks through your speakers and waits for you to say yes — no need to look at the screen. You’re asked once per session." = "Aloud asks through your speakers and waits for you to say yes — no need to look at the screen. You’re asked once per session.";
+"The question appears on the recording indicator and waits for you to accept. You’re asked once per session." = "The question appears on the recording indicator and waits for you to accept. You’re asked once per session.";
+"Setting one up adds a short instructions file, a line in the tool’s own instructions, and permission to run Aloud. Remove takes them back out and stops Aloud setting that tool up again. Turning Agent Speak off leaves them in place." = "Setting one up adds a short instructions file, a line in the tool’s own instructions, and permission to run Aloud. Remove takes them back out and stops Aloud setting that tool up again. Turning Agent Speak off leaves them in place.";
+"Set Up" = "Set Up";
+"Paste it into %@ in each project you want it in." = "Paste it into %@ in each project you want it in.";
+"Copy the lines to add" = "Copy the lines to add";
+"The recording indicator always shows while an agent is listening, and nothing leaves this Mac." = "The recording indicator always shows while an agent is listening, and nothing leaves this Mac.";
+"Agent Tools" = "Agent Tools";
+"No agent tools found on this Mac." = "No agent tools found on this Mac.";
+"Aloud looks for the agent tools you already use. Open one, then come back." = "Aloud looks for the agent tools you already use. Open one, then come back.";
+"Already set up on this Mac" = "Already set up on this Mac";
+"%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand." = "%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand.";
+"Couldn’t write %1$@ — %2$@" = "Couldn’t write %1$@ — %2$@";
+"Let coding agents ask you questions out loud." = "Let coding agents ask you questions out loud.";
+"Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings." = "Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings.";
+
+/* Agent Speak — the banner when the feature is on but the bridge never
+   started. The technical reason is shown verbatim underneath, so these
+   two carry the plain-language part: what is wrong, and the one thing
+   worth trying. The apostrophe is straight because the loc() call is —
+   the key has to match the source byte for byte. */
+"Agents can’t reach Aloud right now." = "Agents can’t reach Aloud right now.";
+"Restarting Aloud usually clears this." = "Restarting Aloud usually clears this.";
+
+/* Agent Speak — the onboarding opt-in. A consent screen: what is being
+   granted, and the two answers. */
+"Let Agents Ask You Out Loud" = "Let Agents Ask You Out Loud";
+"A coding agent can ask you a question out loud and hear your answer, so you can keep working instead of switching to its window." = "A coding agent can ask you a question out loud and hear your answer, so you can keep working instead of switching to its window.";
+"This is experimental. You can turn it on or off any time in Settings." = "This is experimental. You can turn it on or off any time in Settings.";
+"Agents can turn on the microphone" = "Agents can turn on the microphone";
+"To hear your answer to a question they asked." = "To hear your answer to a question they asked.";
+"Agents can speak through your speakers" = "Agents can speak through your speakers";
+"That is how the question reaches you." = "That is how the question reaches you.";
+"You always see it happening" = "You always see it happening";
+"The recording indicator appears every time, and names the agent." = "The recording indicator appears every time, and names the agent.";
+"Nothing leaves this Mac" = "Nothing leaves this Mac";
+"Questions and answers stay on this Mac, like the rest of Aloud." = "Questions and answers stay on this Mac, like the rest of Aloud.";
+"Turn Off" = "Turn Off";
+"Not Now" = "Not Now";
+"Turn On" = "Turn On";
+
+/* Agent Speak — the pill while an agent has the mic. Room is tight:
+   the headline is one line beside a glyph and the buttons, so these
+   stay as short as the English. */
+"Accept — or press the Aloud hotkey" = "Accept — or press the Aloud hotkey";
+"Decline — or press Esc" = "Decline — or press Esc";
+"Open the mic?" = "Open the mic?";
+"Waiting…" = "Waiting…";
+"Agent conversation" = "Agent conversation";
+"Agent" = "Agent";
+"The agent session using your microphone" = "The agent session using your microphone";
+"Aloud is busy — press the Aloud hotkey to accept" = "Aloud is busy — press the Aloud hotkey to accept";
+"Finish setup to answer out loud — or press the Aloud hotkey" = "Finish setup to answer out loud — or press the Aloud hotkey";
+"Aloud couldn’t open the microphone — press the hotkey to accept" = "Aloud couldn’t open the microphone — press the hotkey to accept";
+"Waiting for your answer" = "Waiting for your answer";
+"Listening — this goes to the agent" = "Listening — this goes to the agent";
+"The agent is speaking" = "The agent is speaking";
+"Agent Speak" = "Agent Speak";
+
+/* Agent Speak — live sessions in the menu bar footer. */
+"%@ — using the microphone" = "%@ — using the microphone";
+"%@ — waiting" = "%@ — waiting";
+"%ld sessions" = "%ld sessions";
+"Agent sessions using the microphone" = "Agent sessions using the microphone";
+"Agent sessions" = "Agent sessions";
+"End %@’s session?" = "End %@’s session?";
+"End all" = "End All";
+"Close" = "Close";
+"End every session, including waiting ones" = "End every session, including waiting ones";
+"It gives the microphone back and tells the agent the session is over." = "It gives the microphone back and tells the agent the session is over.";
+"%@ isn’t valid JSON, so Aloud left it alone. Remove the Aloud permission entries by hand." = "%@ isn’t valid JSON, so Aloud left it alone. Remove the Aloud permission entries by hand.";
+"%@ has an Aloud section with a broken marker, so Aloud left it alone. Fix or remove that section by hand." = "%@ has an Aloud section with a broken marker, so Aloud left it alone. Fix or remove that section by hand.";
+
+/* Agent Speak — the sentence a user says to an agent to make voice replies
+   certain, rather than relying on the agent to reach for it. */
+"Tell Your Agent" = "Tell Your Agent";
+"Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain." = "Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain.";
+"Copy this to paste into an agent" = "Copy this to paste into an agent";
+"Agent tools on this Mac are set up automatically. To be sure, tell your agent:" = "Agent tools on this Mac are set up automatically. To be sure, tell your agent:";
+
+/* Agent Speak — the pill while it holds the microphone for somebody who
+   walked away from the question. */
+"Waiting" = "Waiting";
+"Listening whenever you’re ready — just start talking" = "Listening whenever you’re ready — just start talking";
+
+/* Agent Speak — picking the voice agents speak with. The gender labels group
+   the menu; the rest describes the choice and its one-time download. */
+"Voice" = "Voice";
+"Speed" = "Speed";
+"Speaking speed" = "Speaking speed";
+"Female" = "Female";
+"Male" = "Male";
+"Hear this voice" = "Hear this voice";
+"Stop" = "Stop";
+
+/* Agent Speak — the voice choice: which side it speaks from, and the
+   upgrade to Aloud's own voice when that side can carry it. */
+"Voice gender" = "Voice gender";
+
+/* Agent Speak — what the voice control says while Aloud's own voice
+   is still on its way down. */
+"Agents ask their questions in this voice." = "Agents ask their questions in this voice.";
+"Using a basic voice for now — Aloud’s own is still downloading." = "Using a basic voice for now — Aloud’s own is still downloading.";
+"Getting the voice ready" = "Getting the voice ready";
+
+"This is me, thinking out loud. How’s the pace?" = "This is me, thinking out loud. How’s the pace?";
+
+/* Agent Speak — the savings badge thrown off the composer when the Concise
+   rewrite shortened what the user said. */
+"tokens" = "tokens";
+"Saved about %ld tokens" = "Saved about %ld tokens";
+
+/* Dictation pill — an agent asked for the microphone while the user was
+   using it, and is waiting for them to finish. */
+"An agent wants to speak" = "An agent wants to speak";
+"Finish to let it through" = "Finish to let it through";

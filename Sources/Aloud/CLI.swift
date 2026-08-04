@@ -6,12 +6,270 @@ import Foundation
 // Headless verbs so agents and CI can verify subsystems with no GUI and no
 // human. Every path here must run without TCC permissions
 // except --inject (Accessibility) and --transcribe with live capture.
+//
+// Only the verbs in `run` below exist in a distributed build. Everything else
+// is development tooling and is compiled out when ALOUD_PROD_CLI is defined —
+// see `runDevelopmentVerb`.
 enum CLI {
     static func run(_ args: [String]) async -> Int32 {
         switch args.first {
         case "--version":
             print(Updater.currentVersion())
             return 0
+        // Matched against the operation table rather than a list written out
+        // here, for the same reason main.swift is: a verb this switch does not
+        // name falls through to the development branch, and in a distributed
+        // build that answers "unknown flag" for something the installed skill
+        // is actively telling agents to run.
+        case let verb? where BridgeOperation(rawValue: verb) != nil:
+            return await agentVerb(args)
+        default:
+            return await runDevelopmentVerb(args)
+        }
+    }
+
+    // MARK: agent verbs
+
+    // The whole supported surface. Each is one request to the running app over
+    // the bridge socket: the microphone, the model and the indicator all live
+    // there, and the singleton lock means this process could not start its own
+    // recorder even if it wanted to.
+    //
+    // Exit status is 0 for anything the app answered, including a refusal.
+    // Refusals are ordinary outcomes an agent is taught to read from the JSON
+    // (`disabled` means stop asking, `denied` means this request only) — a
+    // non-zero exit would make the harness report a failed *command*, which is
+    // a different and misleading thing. Non-zero is reserved for usage errors
+    // and for never reaching the app at all.
+    static func agentVerb(_ args: [String]) async -> Int32 {
+        let verb = args[0]
+        guard let op = BridgeOperation(rawValue: verb) else { return 64 }
+
+        // A number that isn't one is refused rather than dropped. Silently
+        // ignoring it ran the call with a different ceiling than the caller
+        // asked for and said nothing, so `--wait abc` behaved exactly like no
+        // `--wait` at all — indistinguishable, from the agent's side, from
+        // having been honoured.
+        for flag in ["--wait", "--hold"] where value(of: flag, in: args).map({ Double($0) == nil }) == true {
+            usage("\(verb) \(flag) <seconds>")
+            return 64
+        }
+        if value(of: "--owner-pid", in: args).map({ Int32($0) == nil }) == true {
+            usage("\(verb) --owner-pid <pid>")
+            return 64
+        }
+
+        var request = BridgeRequest(op: op,
+                                    harness: value(of: "--harness", in: args) ?? "unknown",
+                                    pid: ownerProcessID(args))
+        request.lease = value(of: "--lease", in: args)
+        // What this session is doing, in two words. Required on claim and
+        // accepted later, because a session's job moves on and the user reads
+        // this name on the pill, hears it in the prompt, and picks from it when
+        // more than one session wants the microphone.
+        request.name = value(of: "--name", in: args)
+        // `claim --wait N` blocks until the microphone is yours, so an agent
+        // can park it in a background shell and get on with something else
+        // rather than spending a model turn per look. Also accepted on listen,
+        // where it is the long-poll ceiling.
+        // Clamped to the server's own ceiling at the door. `Double.init`
+        // happily parses "inf"/"nan" and 20-digit typos, and an unbounded
+        // value would trap in the socket-timeout conversion below — a crash
+        // where the harness expected the documented refusal JSON.
+        request.wait = value(of: "--wait", in: args).flatMap(Double.init)
+            .map { $0.isFinite ? min(max($0, 0), AgentBridgeService.maxQueueWait) : 0 }
+        request.session = value(of: "--session", in: args)
+        // `ask --end` hangs up as soon as the answer is in, so a single
+        // question is a single command rather than a claim, an ask and a
+        // release. Absent rather than false when it is not asked for: the
+        // field is new, and an old app reading it should see nothing.
+        request.end = args.contains("--end") ? true : nil
+        // Clamped here as well as app-side, and for the same reason `--wait` is:
+        // `Double.init` accepts "inf" and twenty-digit typos, and an unbounded
+        // value would trap in the socket-timeout arithmetic below — a crash
+        // where the caller expected the documented refusal.
+        request.hold = value(of: "--hold", in: args).flatMap(Double.init)
+            .map { $0.isFinite ? min(max($0, 0), AgentBridgeService.maxHold) : 0 }
+        if op == .listen {
+            for (flag, mode) in [("--start", BridgeRequest.ListenMode.start),
+                                 ("--poll", .poll), ("--stop", .stop)] where args.contains(flag) {
+                request.mode = mode
+            }
+        }
+        if op == .speak || op == .ask {
+            guard let text = firstPositional(after: 1, in: args) else {
+                usage(op == .ask ? "ask --harness <id> --name \"<two words>\" <question>"
+                                 : "speak --lease <id> <text>")
+                return 64
+            }
+            request.text = text
+        }
+        // Optional on `wait`: the question has normally already been asked, and
+        // the point of the verb is to listen without asking it again.
+        if op == .wait { request.text = firstPositional(after: 1, in: args) }
+        if op == .claim, value(of: "--harness", in: args) == nil {
+            usage("claim --harness <id>")
+            return 64
+        }
+        // `ask` opens its own session when it is not handed one, so it needs
+        // what `claim` needs — and needs neither when continuing a session the
+        // lease already identifies.
+        if op == .ask || op == .wait, request.lease == nil,
+           value(of: "--harness", in: args) == nil {
+            usage(op == .wait
+                  ? "wait --harness <id> --name \"<two words>\"   (or --lease <id> to carry on)"
+                  : "ask --harness <id> --name \"<two words>\" <question>   (or --lease <id> to carry on)")
+            return 64
+        }
+        if (op == .speak || op == .listen || op == .release), request.lease == nil {
+            usage("\(verb) --lease <id>   (claim one first)")
+            return 64
+        }
+
+        // Comfortably under a harness's own command timeout, and well past the
+        // consent timeout the app applies — a claim that is waiting on a person
+        // must not be cut off from this end.
+        // Comfortably past whatever the app will spend waiting, so we never
+        // hang up on our own request at the moment it is granted.
+        //
+        // `ask` gets its own, larger allowance because it is three of these
+        // end to end: a consent prompt somebody has to answer, a sentence
+        // played to the end, and then however long they take to reply. Given
+        // the same 90 it would hang up mid-answer on the slow-but-ordinary
+        // case, and the agent would read that as the bridge being gone.
+        //
+        // A hold is added on top of both: it is time the app will deliberately
+        // spend waiting, and hanging up on our own request at minute two of a
+        // ten-minute hold would abandon a session that is still on screen with
+        // the microphone open.
+        // `wait` with no ceiling named takes the app's own, which is what the
+        // app will apply — so the socket has to allow for it or we would hang
+        // up on a wait we asked for.
+        let hold = request.hold ?? (op == .wait ? AgentBridgeService.maxHold : 0)
+        // `wait` also queues by default (see `waitQueueGrace`), so the socket
+        // has to allow for time the app will spend before the hold even starts.
+        let queued = request.wait ?? (op == .wait ? AgentBridgeService.waitQueueGrace : 0)
+        let timeout = (op == .ask || op == .wait ? max(180, queued + 90)
+                                                : max(90, queued + 30)) + hold
+        let response = BridgeClient.send(request, timeout: timeout)
+        emit(response)
+        return response.reason == .unavailable ? 1 : 0
+    }
+
+    private static func emit(_ response: BridgeResponse) {
+        guard let data = try? BridgeCodec.encode(response) else { return }
+        FileHandle.standardOutput.write(data)
+    }
+
+    // The usage line goes to stderr for a person, and the same refusal goes to
+    // stdout as JSON for the agent reading it.
+    //
+    // The installed instructions teach exactly one shape for "you asked for
+    // something I can't do": `{"ok":false,"reason":"badRequest",...}`. A missing
+    // flag caught app-side answered in that shape; the same mistake caught here
+    // printed prose to stderr and left stdout empty, so an agent parsing the
+    // documented field got nothing at all and had to guess what happened.
+    private static func usage(_ line: String) {
+        FileHandle.standardError.write(Data("usage: Aloud \(line)\n".utf8))
+        emit(.failure(.badRequest, "usage: Aloud \(line)"))
+    }
+
+    static func value(of flag: String, in args: [String]) -> String? {
+        guard let index = args.firstIndex(of: flag), args.count > index + 1 else { return nil }
+        // The mirror of the problem `valuelessFlags` solves in `firstPositional`:
+        // `--name --end` would otherwise read the switch as the name. Only
+        // switches are rejected, never anything that merely looks like a flag —
+        // the user's own text is allowed to start with dashes.
+        let next = args[index + 1]
+        guard !valuelessFlags.contains(next) else { return nil }
+        return next
+    }
+
+    // The flags that are switches rather than settings — present or absent,
+    // never followed by a value. They have to be named, because `firstPositional`
+    // below skips a flag AND the word after it, and there is nothing about
+    // `--end` that says the next word belongs to somebody else.
+    //
+    // Getting this wrong is silent and total: `ask --end "<question>"` had the
+    // question read as `--end`'s value, so the call came back "usage: …" as if
+    // no question had been passed at all.
+    static let valuelessFlags: Set<String> = ["--end", "--start", "--poll", "--stop"]
+
+    // The flags that take a value. Named, rather than inferred from a `--`
+    // prefix, because the thing being looked for here is a *sentence*: skipping
+    // anything that starts with two dashes — and the word after it — made every
+    // question that opened with a dash unreachable. `speak --lease L "--wait for
+    // me"` read the user's own text as a flag, skipped it and the word after,
+    // and came back "usage:" as though no text had been passed. `value(of:)`
+    // has always got this right; this is the same rule, applied here.
+    static let valueFlags: Set<String> = [
+        "--harness", "--lease", "--name", "--wait", "--session", "--hold", "--owner-pid",
+    ]
+
+    // The first argument that is neither a flag nor a flag's value — the text
+    // for `speak` and `ask`, wherever the caller chose to put it.
+    static func firstPositional(after start: Int, in args: [String]) -> String? {
+        var index = start
+        while index < args.count {
+            let token = args[index]
+            // The conventional escape hatch: everything after `--` is the
+            // caller's own words, whatever they look like.
+            if token == "--" { return index + 1 < args.count ? args[index + 1] : nil }
+            if valuelessFlags.contains(token) { index += 1; continue }
+            if valueFlags.contains(token) { index += 2; continue }
+            return token
+        }
+        return nil
+    }
+
+    // Who owns this session, as a long-lived process the app can watch.
+    //
+    // Not getppid(): a CLI invoked per call has a parent that is whatever
+    // short-lived shell the agent spawned, it dies immediately, and a lease
+    // keyed on it is reaped before the agent's next call. That is what made
+    // every lease dead on arrival.
+    //
+    // But "I have no stable process" cannot be the whole answer either,
+    // because it is also the *identity* the lease recognises its holder by,
+    // and every unnamed caller looks alike: two sessions of the same harness
+    // both say `noOwnerPid`, so the second was handed the first one's lease
+    // and could speak, listen and release on a conversation that was not its
+    // own. Confirmed against the running app before this was written.
+    //
+    // So a harness that knows its own long-lived pid says so, and gets a
+    // session the app can tell apart and can reap the instant that process
+    // dies. One that does not stays anonymous and simply queues. The
+    // installed instructions pass `--owner-pid $PPID`, which in every harness
+    // we install into is the agent process itself rather than a per-call
+    // shell — verified, not assumed.
+    static func ownerProcessID(_ args: [String]) -> pid_t {
+        guard let raw = value(of: "--owner-pid", in: args),
+              let pid = pid_t(raw), pid > 0 else { return LeaseManager.noOwnerPid }
+        return pid
+    }
+
+    #if ALOUD_PROD_CLI
+    // Distribution build: the development verbs are not compiled in at all.
+    // They type into the focused app (--inject), open the microphone
+    // (--mic-check, --transcribe), and print the user's paths and input device
+    // names (--doctor). A signed Developer-ID binary that already holds
+    // Accessibility and Microphone grants has no business offering any of that
+    // to whatever process happens to invoke it.
+    //
+    // scripts/make-app.sh defines this flag for every bundle it stages;
+    // ALOUD_DEV_CLI=1 opts back out, for the tests that must drive an installed
+    // app (scripts/loop-test.sh).
+    private static func runDevelopmentVerb(_ args: [String]) async -> Int32 {
+        FileHandle.standardError.write(Data("unknown flag \(args.first ?? "")\n".utf8))
+        return 2
+    }
+    #endif
+}
+
+#if !ALOUD_PROD_CLI
+extension CLI {
+    private static func runDevelopmentVerb(_ args: [String]) async -> Int32 {
+        switch args.first {
         case "--doctor":
             return doctor()
         case "--enhance":
@@ -59,7 +317,53 @@ enum CLI {
             }
             return await command(instruction: args[1], selection: selection)
         case "--selftest":
-            return selfTest()
+            return await selfTest()
+        case "--speak-preview":
+            // The Settings preview button, without Settings: resolve the voice
+            // for each gender exactly as the picker does, speak the sample
+            // line, stop, speak it again. Two rounds because the failure this
+            // was written for only appeared on the second one — silence after
+            // the first stop — and a GUI is a poor place to time anything.
+            // Optional speed argument; makes noise by design.
+            let speed = args.count > 1 ? (Double(args[1]) ?? VoiceSpeed.normal) : VoiceSpeed.normal
+            return await speakPreview(speed: speed)
+        case "--speak-bench":
+            // Renders one line through every available voice and prints what
+            // each cost. Choosing the enhanced engine is a listening decision
+            // plus a latency budget, and neither is answerable from the SDK
+            // docs. Optional --out <dir> writes a WAV per engine to compare by
+            // ear; --engine <name> limits the run to one.
+            guard args.count >= 2 else {
+                FileHandle.standardError.write(Data(
+                    "usage: Aloud --speak-bench <text> [--engine system|supertonic|kokoro|pocket] [--voice <style>] [--out <dir>]\n".utf8))
+                return 64
+            }
+            var out: URL?
+            if let idx = args.firstIndex(of: "--out"), args.count > idx + 1 {
+                out = URL(fileURLWithPath: args[idx + 1])
+            }
+            // Which preset voice, on an engine that has several ("M1", "F3").
+            // Auditioning them is the only way to choose the pair Aloud ships:
+            // "which male voice sounds least like a robot" is not a question
+            // the SDK docs answer.
+            var voice: String?
+            if let idx = args.firstIndex(of: "--voice"), args.count > idx + 1 {
+                voice = args[idx + 1]
+            }
+            var only: String?
+            if let idx = args.firstIndex(of: "--engine"), args.count > idx + 1 {
+                only = args[idx + 1]
+            }
+            // Pace, so the audio a given setting actually produces can be
+            // measured rather than inferred — a sentence that comes out short
+            // at one speed and whole at another is an engine problem, and
+            // nothing on screen can tell you which.
+            var speed = VoiceSpeed.normal
+            if let idx = args.firstIndex(of: "--speed"), args.count > idx + 1 {
+                speed = Double(args[idx + 1]) ?? VoiceSpeed.normal
+            }
+            return await speakBench(text: args[1], only: only, voice: voice,
+                                    speed: speed, outputDirectory: out)
         case "--transcribe":
             guard args.count >= 2 else {
                 FileHandle.standardError.write(Data("usage: Aloud --transcribe <audio-file>\n".utf8))
@@ -154,6 +458,167 @@ enum CLI {
         }
     }
 
+    // MARK: --speak-preview
+
+    static func speakPreview(speed: Double) async -> Int32 {
+        let line = "This is me, thinking out loud. How’s the pace?"
+        var failures = 0
+        for gender in VoiceGender.allCases {
+            let option = VoiceCatalog.resolved(gender: gender)
+            let speaker = SpeakerFactory.make(option, speed: speed)
+            print("\(gender.rawValue): \(option.name) at \(VoiceSpeed.label(speed))")
+            // The warm-up the picker runs when a side is chosen, on the same
+            // speaker the press will use — part of the sequence, so part of
+            // the reproduction.
+            let warmStarted = Date()
+            _ = try? await speaker.synthesize("Hello.")
+            print(String(format: "  warm: %.2fs", Date().timeIntervalSince(warmStarted)))
+            for round in 1...2 {
+                let started = Date()
+                do {
+                    try await speaker.speak(line)
+                } catch {
+                    print("  round \(round): threw — \(error.localizedDescription)")
+                    failures += 1
+                    continue
+                }
+                let elapsed = Date().timeIntervalSince(started)
+                let heard = elapsed > 0.5
+                print(String(format: "  round %d: %.2fs %@", round, elapsed,
+                             heard ? "" : "← nothing was heard"))
+                if !heard { failures += 1 }
+                // What the preview does between samples.
+                speaker.stop()
+            }
+
+            // And the case the preview hits when the speed slider moves while
+            // a sample is playing: speak over it, mid-utterance. The
+            // replacement has to run its full length — a short one here is the
+            // sample that says half its sentence and stops.
+            let interrupted = Task { try? await speaker.speak(line) }
+            try? await Task.sleep(for: .milliseconds(400))
+            let overStarted = Date()
+            do {
+                try await speaker.speak(line)
+            } catch {
+                print("  over-speak: threw — \(error.localizedDescription)")
+                failures += 1
+                _ = await interrupted.value
+                continue
+            }
+            _ = await interrupted.value
+            let over = Date().timeIntervalSince(overStarted)
+            let whole = over > 1.0
+            print(String(format: "  over-speak: %.2fs %@", over,
+                         whole ? "" : "← the replacement was cut short"))
+            if !whole { failures += 1 }
+            speaker.stop()
+        }
+        return failures == 0 ? 0 : 1
+    }
+
+    // MARK: --speak-bench
+
+    static func speakBench(text: String, only: String?, voice: String?,
+                           speed: Double = VoiceSpeed.normal,
+                           outputDirectory: URL?) async -> Int32 {
+        let system = SystemSpeaker()
+        system.speed = speed
+        var candidates: [(name: String, speaker: Speaker)] = [("system", system)]
+        for engine in NeuralEngine.allCases {
+            let speaker = voice.map { NeuralSpeaker(engine: engine, style: $0) }
+                ?? NeuralSpeaker(engine: engine)
+            speaker.speed = speed
+            // The voice goes in the name so a directory of samples can be
+            // sorted through by ear without keeping track of what wrote what.
+            candidates.append((voice.map { "\(engine.rawValue)-\($0)" } ?? engine.rawValue,
+                               speaker))
+        }
+        if let only {
+            // Matched on the engine, not the decorated name, so `--engine
+            // supertonic --voice M3` still selects one row.
+            candidates = candidates.filter { $0.name == only || $0.name.hasPrefix("\(only)-") }
+            guard !candidates.isEmpty else {
+                FileHandle.standardError.write(Data("unknown engine \(only)\n".utf8))
+                return 64
+            }
+        }
+        if let outputDirectory {
+            try? FileManager.default.createDirectory(at: outputDirectory,
+                                                     withIntermediateDirectories: true)
+        }
+
+        print(row("engine", "audio(s)", "synth(s)", "RTF", "rate", "status"))
+        var failures = 0
+        for candidate in candidates {
+            // Download+load is not what we're measuring — warm first, then time
+            // synthesis on its own. A cold number would just be bandwidth.
+            let loadStarted = Date()
+            do { try await candidate.speaker.prepare() } catch {
+                print(row(candidate.name, "—", "—", "—", "—",
+                          "unavailable: \(error.localizedDescription)"))
+                failures += 1
+                continue
+            }
+            let loadSeconds = Date().timeIntervalSince(loadStarted)
+
+            do {
+                let speech = try await candidate.speaker.synthesize(text)
+                print(row(candidate.name,
+                          String(format: "%.2f", speech.duration),
+                          String(format: "%.2f", speech.synthesisTime),
+                          String(format: "%.3f", speech.realtimeFactor),
+                          String(speech.sampleRate),
+                          String(format: "load %.1fs", loadSeconds)))
+                if let outputDirectory {
+                    let url = outputDirectory.appendingPathComponent("\(candidate.name).wav")
+                    writeWAV(speech, to: url)
+                    print("         → \(url.path)")
+                }
+            } catch {
+                print(row(candidate.name, "—", "—", "—", "—",
+                          "failed: \(error.localizedDescription)"))
+                failures += 1
+            }
+        }
+        print("\nRTF below 1.0 means synthesis outruns playback.")
+        return failures == candidates.count ? 1 : 0
+    }
+
+    // Hand-padded rather than String(format:) — %s there takes a C string, not
+    // a Swift String, and silently prints garbage.
+    private static func row(_ engine: String, _ audio: String, _ synth: String,
+                            _ rtf: String, _ rate: String, _ status: String) -> String {
+        func pad(_ text: String, _ width: Int, right: Bool = true) -> String {
+            let padding = String(repeating: " ", count: max(0, width - text.count))
+            return right ? padding + text : text + padding
+        }
+        return pad(engine, 8, right: false) + pad(audio, 10) + pad(synth, 10)
+            + pad(rtf, 8) + pad(rate, 8) + "  " + status
+    }
+
+    // AudioBackup's writer is pinned to the recorder's 16 kHz; synthesis comes
+    // out at 24 kHz, so the bench needs its own.
+    private static func writeWAV(_ speech: Speech, to url: URL) {
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                         sampleRate: Double(speech.sampleRate),
+                                         channels: 1, interleaved: false),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format,
+                                            frameCapacity: AVAudioFrameCount(speech.samples.count)),
+              let channel = buffer.floatChannelData
+        else { return }
+        buffer.frameLength = AVAudioFrameCount(speech.samples.count)
+        speech.samples.withUnsafeBufferPointer { src in
+            guard let base = src.baseAddress else { return }
+            channel[0].update(from: base, count: src.count)
+        }
+        try? FileManager.default.removeItem(at: url)
+        guard let file = try? AVAudioFile(forWriting: url, settings: format.settings,
+                                          commonFormat: .pcmFormatFloat32, interleaved: false)
+        else { return }
+        try? file.write(from: buffer)
+    }
+
     // MARK: --command
 
     static func command(instruction: String, selection: String?) async -> Int32 {
@@ -214,6 +679,13 @@ enum CLI {
                 "onboardingComplete": settings.onboardingComplete,
                 "liveTyping": settings.liveTyping,
                 "noiseReduction": settings.noiseReduction,
+                // Who an agent will be heard through, and how fast. "Why does
+                // it sound like that" is otherwise a question only the user's
+                // ears can answer, and the stored id alone doesn't say whether
+                // the voice it names is still installed.
+                "agentVoice": settings.agentVoice.name,
+                "agentVoiceIsEnhanced": settings.agentVoice.isEnhanced,
+                "agentVoiceSpeed": settings.agentVoiceSpeed,
             ],
             "paths": [
                 "stateDir": AppPaths.stateDir.path,
@@ -426,86 +898,6 @@ enum CLI {
         }
     }
 
-    // MARK: --indicator-demo
-
-    // Schedules the pill through every state it has, driven by a file instead
-    // of the microphone, and returns — main.swift runs the app loop. It has to
-    // be that way round: the meter's own updates hop through the main actor,
-    // which never gets a turn if a CLI verb is still sitting on it.
-    //
-    // Each state prints as it is entered, so a script can time its screenshots.
-    @MainActor
-    static func prepareIndicatorDemo(path: String?) -> Int32 {
-        // Band levels for the whole clip up front, then played back in step
-        // with the clock so the bars move the way a real voice moves them.
-        var timeline: [[Float]] = []
-        var levels: [Float] = []
-        if let path, let samples = loadSamples16k(URL(fileURLWithPath: path)) {
-            let analyzer = SpectrumAnalyzer()
-            var i = 0
-            while i + 512 <= samples.count {
-                let frame = Array(samples[i..<(i + 512)])
-                timeline.append(analyzer.bands(frame: frame))
-                let rms = (frame.reduce(0) { $0 + $1 * $1 } / 512).squareRoot()
-                levels.append(min(1, rms * 12))
-                i += 512
-            }
-        }
-        guard !timeline.isEmpty else {
-            FileHandle.standardError.write(Data("usage: Aloud --indicator-demo <audio-file>\n".utf8))
-            return 64
-        }
-
-        let indicator = RecordingIndicatorPanel()
-        indicator.settings = SettingsStore.shared
-        let started = ProcessInfo.processInfo.systemUptime
-        let framesPerSecond = AudioRecorder.targetSampleRate / 512
-        func index() -> Int {
-            Int((ProcessInfo.processInfo.systemUptime - started) * framesPerSecond) % timeline.count
-        }
-
-        // The states, in order, with how long each is held. Scheduled on the
-        // run loop rather than driven by a blocking loop: the pill's own meter
-        // timer hops through the main actor, which never gets a turn if this
-        // function sits on it.
-        let script: [(name: String, seconds: Double, enter: @MainActor () -> Void)] = [
-            ("recording", 4, {
-                indicator.show(levelProvider: { levels[index()] },
-                               bandsProvider: { timeline[index()] })
-            }),
-            ("recording-noise-on", 3, { indicator.noiseReduction = true }),
-            ("recording-noise-off", 3, { indicator.noiseReduction = false }),
-            ("recording-basic", 3, { indicator.isBasic = true }),
-            ("hands-free", 4, {
-                indicator.isBasic = false
-                indicator.showLocked()
-            }),
-            ("still-listening", 5, { indicator.demoStillListening() }),
-            ("command", 4, {
-                indicator.hide()
-                indicator.show(levelProvider: { levels[index()] },
-                               bandsProvider: { timeline[index()] },
-                               command: true)
-            }),
-            ("notice", 3, { indicator.showNotice(loc("Microphone changed — still listening")) }),
-            ("transcribing", 3, { indicator.showTranscribing() }),
-            ("hint", 3, { indicator.showHint(loc("Finish setup to start dictating")) }),
-        ]
-        var at: TimeInterval = 0
-        for step in script {
-            Timer.scheduledTimer(withTimeInterval: max(at, 0.001), repeats: false) { _ in
-                MainActor.assumeIsolated {
-                    print("state=\(step.name)")
-                    fflush(stdout)
-                    step.enter()
-                }
-            }
-            at += step.seconds
-        }
-        Timer.scheduledTimer(withTimeInterval: at, repeats: false) { _ in exit(0) }
-        return 0
-    }
-
     // MARK: --spectrum
 
     // Run a file through the indicator's analyser and draw the result: one
@@ -702,7 +1094,17 @@ enum CLI {
     // MARK: --selftest
 
     // In-process checks needing no TCC grants and no model. Exit 0 = pass.
-    static func selfTest() -> Int32 {
+    static func selfTest() async -> Int32 {
+        // Line-buffered, because this runs in CI with stdout on a pipe.
+        //
+        // Block buffering is the default there, so a crash mid-run loses every
+        // line printed before it: a segfault on the runner produced a bare
+        // "Segmentation fault: 11" and not one word of the eighty checks that
+        // had already passed, which says nothing about where to look. Flushing
+        // per line costs nothing at this scale and makes the last line printed
+        // the check that died.
+        setvbuf(stdout, nil, _IOLBF, 0)
+
         var failures: [String] = []
         func expect(_ cond: Bool, _ name: String) {
             if cond { print("ok  \(name)") } else { print("FAIL \(name)"); failures.append(name) }
@@ -870,7 +1272,7 @@ enum CLI {
         store.append(HistoryEntry(text: "second", duration: 0.8), limit: 50)
         expect(store.entries.count == 2 && store.entries[0].text == "second",
                "history: append order")
-        Thread.sleep(forTimeInterval: 0.3)   // async persist
+        try? await Task.sleep(nanoseconds: 300_000_000)   // async persist
         let reloaded = HistoryStore(fileURL: historyURL)
         expect(reloaded.entries.count == 2, "history: persisted + reloaded")
         store.clear()
@@ -955,7 +1357,10 @@ enum CLI {
         }
 
         // 10. Settings store round-trip in an isolated suite.
-        let suiteName = "aloud-selftest-\(getpid())"
+        // Fixed rather than pid-keyed: removePersistentDomain empties the
+        // domain but cfprefsd rewrites the plist afterwards, so a new name per
+        // run left a file in ~/Library/Preferences every time selftest ran.
+        let suiteName = "aloud-selftest-settings"
         if let d = UserDefaults(suiteName: suiteName) {
             d.removePersistentDomain(forName: suiteName)
             let s = SettingsStore(defaults: d)
@@ -990,7 +1395,7 @@ enum CLI {
         // dictation is found (edited) in a later field snapshot, the edit
         // becomes a candidate, two sightings promote it, accepting it lands
         // a learned replacement.
-        let learnSuite = "aloud-selftest-learn-\(getpid())"
+        let learnSuite = "aloud-selftest-learn"
         if let d = UserDefaults(suiteName: learnSuite) {
             d.removePersistentDomain(forName: learnSuite)
             let learnSettings = SettingsStore(defaults: d)
@@ -1033,7 +1438,132 @@ enum CLI {
             d.removePersistentDomain(forName: learnSuite)
         } else { expect(false, "learning: settings suite") }
 
+        // Synthesis: the system voice is the tier that must never be broken —
+        // it is what `speak` degrades to when the enhanced assets are absent,
+        // and what carries the consent prompt in every language Aloud ships.
+        let speech = Speech(samples: Array(repeating: 0, count: 4800), sampleRate: 24000,
+                            synthesisTime: 0.6)
+        expect(abs(speech.duration - 0.2) < 0.0001, "synthesis: duration from sample count")
+        expect(abs(speech.realtimeFactor - 3.0) < 0.0001, "synthesis: realtime factor")
+        expect(Speech(samples: [], sampleRate: 0, synthesisTime: 0).duration == 0,
+               "synthesis: empty speech has no duration and doesn't divide by zero")
+
+        // A speaker the factory hands out can always run right now: the
+        // enhanced voice only when its assets are on disk, the system voice
+        // otherwise. Never something that needs a download first.
+        expect(SpeakerFactory.make().modelIsDownloaded,
+               "synthesis: factory only returns a voice that's ready")
+
+        let system = SystemSpeaker()
+        expect(system.state == .ready && system.modelIsDownloaded,
+               "synthesis: system voice needs no download")
+        do {
+            _ = try await system.synthesize("   ")
+            expect(false, "synthesis: blank text is refused")
+        } catch {
+            expect(error is SpeakerError, "synthesis: blank text is refused")
+        }
+        // Tolerated rather than asserted: a bare CI runner can have no voices
+        // installed, and failing the gate on that would be noise, not signal.
+        if AVSpeechSynthesisVoice.speechVoices().isEmpty {
+            print("skip  synthesis: system voice renders audio (no voices on this machine)")
+        } else {
+            do {
+                let rendered = try await system.synthesize("Testing, one two three.")
+                expect(!rendered.samples.isEmpty && rendered.sampleRate > 0,
+                       "synthesis: system voice renders audio")
+                expect(rendered.samples.contains { $0 != 0 },
+                       "synthesis: rendered audio isn't silence")
+                expect(rendered.realtimeFactor < 1.0,
+                       "synthesis: system voice outruns playback")
+            } catch {
+                expect(false, "synthesis: system voice renders audio (\(error))")
+            }
+
+            // The speed slider, end to end: the same sentence has to come out
+            // measurably longer at the slow end than at the fast one. A rate
+            // that is stored, shown and then dropped on the way to the engine
+            // is a setting that does nothing, and nothing on screen would say
+            // so — the only way to know is to listen, or to time it.
+            do {
+                let slow = SystemSpeaker()
+                slow.speed = VoiceSpeed.slowest
+                let fast = SystemSpeaker()
+                fast.speed = VoiceSpeed.fastest
+                let line = "Testing, one two three."
+                let slowly = try await slow.synthesize(line)
+                let quickly = try await fast.synthesize(line)
+                expect(slowly.duration > quickly.duration * 1.2,
+                       "synthesis: speaking speed changes how long a sentence takes")
+            } catch {
+                expect(false, "synthesis: speaking speed changes how long a sentence takes (\(error))")
+            }
+        }
+
+        // The voice choice: one question, and the guarantee that either answer
+        // resolves to something that can actually speak.
+        VoiceCatalog.refresh()
+        expect(!VoiceCatalog.availableGenders.isEmpty,
+               "voices: the picker always has something to offer")
+        for gender in VoiceGender.allCases {
+            expect(!VoiceCatalog.resolved(gender: gender).name.isEmpty,
+                   "voices: \(gender.rawValue) resolves to a voice rather than to silence")
+        }
+        for gender in VoiceCatalog.availableGenders {
+            expect(VoiceCatalog.resolved(gender: gender).gender == gender,
+                   "voices: an offered \(gender.rawValue) choice is honoured")
+        }
+        // Aloud's own female voice is English-only; the male one speaks 31
+        // languages. A Portuguese Mac must not be told it is waiting for a
+        // voice that will never serve it.
+        expect(VoiceCatalog.enhancedVoice(for: .female, language: "pt_BR") == nil
+                && VoiceCatalog.enhancedVoice(for: .male, language: "pt_BR") != nil,
+               "voices: Aloud's own voices are only claimed for languages they speak")
+        expect(SpeakerFactory.make(VoiceCatalog.resolved(gender: nil)).modelIsDownloaded,
+               "voices: the default choice can speak right now")
+
+        // Twice on the same speaker, which is the case that broke: the female
+        // engine's default ANE placement synthesized correctly exactly once
+        // per process and then failed forever inside `postAlbert`. On screen
+        // that is a preview that works once, and an agent whose second
+        // question of the session is silent — both of which look like the
+        // feature quietly dying rather than a bug in a model stage.
+        for gender in VoiceCatalog.availableGenders {
+            let speaker = SpeakerFactory.make(VoiceCatalog.resolved(gender: gender))
+            do {
+                _ = try await speaker.synthesize("Testing, one two three.")
+                let second = try await speaker.synthesize("Testing, one two three.")
+                expect(!second.samples.isEmpty,
+                       "voices: the \(gender.rawValue) voice speaks more than once")
+            } catch {
+                expect(false, "voices: the \(gender.rawValue) voice speaks more than once (\(error))")
+            }
+        }
+
+        // The speed slider, through the voice a user actually gets rather than
+        // through the system voice alone: whichever engine serves a side has
+        // to honour the pace, and the one that doesn't would be a slider that
+        // silently stops working when the download lands.
+        for gender in VoiceCatalog.availableGenders {
+            let option = VoiceCatalog.resolved(gender: gender)
+            do {
+                let slow = SpeakerFactory.make(option, speed: VoiceSpeed.slowest)
+                let fast = SpeakerFactory.make(option, speed: VoiceSpeed.fastest)
+                let line = "Testing, one two three."
+                let slowly = try await slow.synthesize(line)
+                let quickly = try await fast.synthesize(line)
+                expect(slowly.duration > quickly.duration * 1.2,
+                       "voices: the \(gender.rawValue) voice honours speaking speed")
+            } catch {
+                expect(false, "voices: the \(gender.rawValue) voice honours speaking speed (\(error))")
+            }
+        }
+        expect(VoiceSpeed.clamped(.nan) == VoiceSpeed.slowest
+                && VoiceSpeed.clamped(99) == VoiceSpeed.fastest,
+               "voices: a stored speed is always one an engine can use")
+
         print(failures.isEmpty ? "\nselftest passed" : "\nselftest FAILED: \(failures.joined(separator: ", "))")
         return failures.isEmpty ? 0 : 1
     }
 }
+#endif

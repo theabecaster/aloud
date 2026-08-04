@@ -62,6 +62,13 @@ enum PolishLevel: String, Codable, CaseIterable, Identifiable {
     var appliesVocabulary: Bool {
         deterministicLevel == .standard
     }
+
+    /// App Rules only ever steer the Concise rewrite — the deterministic
+    /// levels write the same way in every app, so a rule has nothing to
+    /// change there. Settings dims the App Rules pane on this.
+    var appliesAppRules: Bool {
+        self == .concise
+    }
 }
 
 // A user-defined replacement: fix a name the model keeps misspelling, or

@@ -6,8 +6,6 @@
 "Aloud can’t work until you allow access" = "Aloud no funciona hasta que permitas el acceso";
 "Download Voice Recognition" = "Descargar reconocimiento de voz";
 "Retry Voice Download" = "Reintentar la descarga de voz";
-"Improving accuracy…" = "Mejorando la precisión…";
-"Improving accuracy… %ld%%" = "Mejorando la precisión… %ld %%";
 "Copy Last Text" = "Copiar el último texto";
 "Type It Again" = "Escribirlo otra vez";
 "Use Exact Words" = "Usar las palabras exactas";
@@ -30,6 +28,8 @@
 "Voice download didn’t finish" = "La descarga de voz no terminó";
 "Dictation key isn’t working — try reopening Aloud" = "La tecla de dictado no funciona. Prueba a abrir Aloud de nuevo";
 "Hold %@ to dictate" = "Mantén pulsada %@ para dictar";
+"%@ is using the microphone" = "%@ está usando el micrófono";
+"End %@’s session" = "Finalizar la sesión de %@";
 
 /* Windows */
 "Welcome to Aloud" = "Te damos la bienvenida a Aloud";
@@ -71,7 +71,6 @@
 "Microphone changed — still listening" = "El micrófono cambió; sigo escuchando";
 
 /* Dictation hints */
-"Voice model is still warming up…" = "El modelo de voz aún se está preparando…";
 "Finish setup to start dictating" = "Termina la configuración para empezar a dictar";
 "Couldn’t access the microphone" = "No se pudo acceder al micrófono";
 "Couldn’t finish that dictation" = "No se pudo terminar ese dictado";
@@ -123,6 +122,7 @@
 "Reduce background noise" = "Reducir el ruido de fondo";
 "The filter works through the Mac’s own speakers, so it pauses while sound goes to %@. It comes back — with your setting — when the speakers are the output again." = "El filtro funciona a través de los altavoces del Mac, así que se pausa mientras el sonido va a %@. Vuelve — con tu ajuste — cuando los altavoces son de nuevo la salida.";
 "Not available with %@." = "No disponible con %@.";
+"this output" = "esta salida";
 "Getting ready…" = "Preparando…";
 "%@ (Bluetooth)" = "%@ (Bluetooth)";
 "A Bluetooth mic puts the whole headset into mono call audio while Aloud listens." = "Un micrófono Bluetooth pone todos los auriculares en audio de llamada mono mientras Aloud escucha.";
@@ -130,7 +130,7 @@
 "Where Aloud listens. System default follows the Mac." = "Dónde escucha Aloud. «Por omisión del sistema» sigue al Mac.";
 "Filters room noise, keyboard clatter, and sound from your Mac’s speakers. Leave it off if your voice sounds thin." = "Filtra el ruido de la sala, el teclado y el sonido de los altavoces del Mac. Déjalo desactivado si tu voz suena delgada.";
 "More info" = "Más información";
-"Sound when recording starts" = "Sonido al empezar a grabar";
+"Play sound effects" = "Reproducir efectos de sonido";
 "Open Aloud at login" = "Abrir Aloud al iniciar sesión";
 
 /* Settings — keys */
@@ -146,6 +146,12 @@
 
 /* Settings — dictation */
 "Basic dictation in use" = "Dictado básico en uso";
+"A language you listed is only heard by basic dictation, so every dictation uses it." = "Uno de los idiomas de tu lista solo lo escucha el dictado básico, así que todos los dictados lo usan.";
+"Aloud couldn’t set up that language on this Mac, so it isn’t being heard." = "Aloud no pudo configurar ese idioma en este Mac, así que no se está escuchando.";
+"Remove the languages marked Basic below to go back to full accuracy." = "Quita los idiomas marcados como Básico para volver a la precisión completa.";
+"Basic dictation only" = "Solo dictado básico";
+"Only basic dictation hears this language, so every dictation uses it." = "Solo el dictado básico escucha este idioma, así que todos los dictados lo usan.";
+"All time" = "Total";
 "Setting up full accuracy — %ld%%" = "Configurando la precisión completa: %ld %%";
 "Dictation keeps working while this finishes; the switch is automatic." = "El dictado sigue funcionando mientras esto termina; el cambio es automático.";
 "Setting up full accuracy — almost done" = "Configurando la precisión completa: casi listo";
@@ -227,7 +233,6 @@
 "less than a minute ago" = "hace menos de un minuto";
 "Show original" = "Mostrar original";
 "Original" = "Original";
-"Hide original" = "Ocultar original";
 "Fix" = "Corregir";
 "Correct this dictation and teach Aloud the right words" = "Corrige este dictado y enseña a Aloud las palabras correctas";
 "Copy" = "Copiar";
@@ -265,7 +270,7 @@
 "Setting Up Voice Recognition" = "Configurando el reconocimiento de voz";
 "A one-time download, about 500 MB. After this, dictation works offline." = "Una descarga única de unos 500 MB. Después, el dictado funciona sin conexión.";
 "No internet connection" = "Sin conexión a internet";
-"This screen continues on its own once you're back online." = "Esta pantalla continúa sola en cuanto vuelvas a tener conexión.";
+"This screen continues on its own once you’re back online." = "Esta pantalla continúa sola en cuanto vuelvas a tener conexión.";
 "Download" = "Descargar";
 "%ld%% — you can keep using your Mac" = "%ld %%: puedes seguir usando tu Mac";
 "Almost ready…" = "Casi listo…";
@@ -284,7 +289,6 @@
 "One moment…" = "Un momento…";
 "Aloud lives in your menu bar — the " = "Aloud vive en tu barra de menús: es el icono ";
 " icon at the top of your screen." = " de la parte superior de la pantalla.";
-"Tip: double-press %@ to keep listening hands-free. Esc finishes." = "Consejo: pulsa dos veces %@ para seguir escuchando en manos libres. Esc termina.";
 "Done" = "Hecho";
 "Skip for now" = "Omitir por ahora";
 
@@ -310,12 +314,10 @@
 "key %ld" = "tecla %ld";
 
 "Polishing…" = "Puliendo…";
-"Kept your exact words — Aloud never rewrites here" = "Se conservaron tus palabras exactas: Aloud nunca reescribe aquí";
 "Hold %@ to talk, release to type. Esc while holding cancels. Extra mouse buttons work too, alone or with a modifier." = "Mantén %@ para hablar y suéltala para escribir. Esc mientras la mantienes cancela. También sirven los botones extra del ratón, solos o con un modificador.";
 "Press %1$@ to start listening, then Esc — or %1$@ again — to finish and type. Double-pressing %2$@ still works." = "Pulsa %1$@ para empezar a escuchar y luego Esc —o %1$@ otra vez— para terminar y escribir. Pulsar dos veces %2$@ sigue funcionando.";
 "Optional. Pick a key, then hold it and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Opcional. Elige una tecla, mantenla y di qué hacer: reescribir o traducir el texto seleccionado, o escribir algo nuevo en el cursor.";
 "Hold %@ and say what to do: rewrite or translate the selected text, or write something new at the cursor." = "Mantén %@ y di qué hacer: reescribir o traducir el texto seleccionado, o escribir algo nuevo en el cursor.";
-"Tip: press %@ to keep listening hands-free. Esc finishes." = "Consejo: pulsa %@ para seguir dictando sin manos. Esc termina.";
 "%1$@ is already your %2$@." = "%1$@ ya es tu %2$@.";
 "%1$@ includes %2$@, which is already your %3$@." = "%1$@ incluye %2$@, que ya es tu %3$@.";
 "%1$@ is part of %2$@, your %3$@." = "%1$@ forma parte de %2$@, tu %3$@.";
@@ -325,6 +327,10 @@
 "These words aren’t applied while Clean-up is %@." = "Estas palabras no se aplican mientras la Limpieza sea %@.";
 "Use Standard" = "Usar Estándar";
 "Not in use — Clean-up is set to %@." = "Sin uso: la Limpieza está en %@.";
+"These rules only change the Concise clean-up, and Clean-up is %@." = "Estas reglas solo cambian la limpieza Concisa, y la Limpieza está en %@.";
+"These rules only change the Concise clean-up, which this Mac can’t run." = "Estas reglas solo cambian la limpieza Concisa, que este Mac no puede ejecutar.";
+"Use Concise" = "Usar Conciso";
+"Not in use — this Mac can’t run the Concise clean-up." = "Sin uso: este Mac no puede ejecutar la limpieza Concisa.";
 "What Else Aloud Does" = "Qué más hace Aloud";
 "Nothing to set up now — this is just so you know it’s there." = "No hay nada que configurar ahora; esto es solo para que sepas que está ahí.";
 "Start Using Aloud" = "Empezar a usar Aloud";
@@ -346,10 +352,7 @@
 "Voice commands" = "Comandos de voz";
 "Say what to change" = "Di qué cambiar";
 "Set a command key in Settings, then hold it and say what to do: rewrite or translate the selected text, or write something new." = "Elige una tecla de comandos en Ajustes, mantenla y di qué hacer: reescribir o traducir el texto seleccionado, o escribir algo nuevo.";
-"Filtering background noise — click to stop" = "Filtrando el ruido de fondo: haz clic para desactivar";
-"Filter background noise" = "Filtrar el ruido de fondo";
 "Background noise is being filtered — click to stop" = "Se está filtrando el ruido de fondo: haz clic para desactivar";
-"Filter out background noise" = "Filtrar el ruido de fondo";
 "%@ isn’t taking text right now" = "%@ no acepta texto en este momento";
 "%@ didn’t take the text — it’s in History" = "%@ no recibió el texto — está en el historial";
 "The front app" = "La app en primer plano";
@@ -372,3 +375,133 @@
 "Aloud notices when you correct a dictation where it landed and offers to fix it automatically next time. Nothing leaves this Mac." = "Aloud nota cuando corriges un dictado donde quedó escrito y ofrece corregirlo automáticamente la próxima vez. Nada sale de este Mac.";
 "Learned from your edits" = "Aprendida de tus cambios";
 "Aloud noticed a fix — review it in the menu bar" = "Aloud detectó una corrección — revísala en la barra de menús";
+
+/* Agent Speak — the spoken consent prompt. This is the string that
+   tells someone a decision is being asked of them, so it must never
+   fall back to English. */
+"Let %@ agent listen? Yes or no" = "¿Dejar escuchar al agente %@? Sí o no";
+
+/* Agent Speak — Settings → Agent Speak: whether an agent is asked
+   before it listens, how the asking happens, and the agent tools Aloud
+   can set itself up in. The on/off switch is not here — it lives in
+   General → Experimental with the other experiments. */
+"Permission" = "Permiso";
+"Ask before listening" = "Preguntar antes de escuchar";
+"Ask out loud" = "Preguntar en voz alta";
+"Agents start listening as soon as they ask, without checking with you first." = "Los agentes empiezan a escuchar en cuanto lo piden, sin consultarte antes.";
+"Aloud asks through your speakers and waits for you to say yes — no need to look at the screen. You’re asked once per session." = "Aloud pregunta por tus altavoces y espera a que digas que sí; no hace falta mirar la pantalla. Se te pregunta una vez por sesión.";
+"The question appears on the recording indicator and waits for you to accept. You’re asked once per session." = "La pregunta aparece en el indicador de grabación y espera a que aceptes. Se te pregunta una vez por sesión.";
+"Setting one up adds a short instructions file, a line in the tool’s own instructions, and permission to run Aloud. Remove takes them back out and stops Aloud setting that tool up again. Turning Agent Speak off leaves them in place." = "Configurar una herramienta añade un archivo de instrucciones breve, una línea en las instrucciones de la propia herramienta y permiso para ejecutar Aloud. Quitar los elimina y evita que Aloud vuelva a configurarla. Desactivar Agent Speak los deja donde están.";
+"Set Up" = "Configurar";
+"Paste it into %@ in each project you want it in." = "Pégalo en %@ en cada proyecto donde lo quieras.";
+"Copy the lines to add" = "Copiar las líneas que hay que añadir";
+"The recording indicator always shows while an agent is listening, and nothing leaves this Mac." = "El indicador de grabación siempre aparece mientras un agente escucha, y nada sale de este Mac.";
+"Agent Tools" = "Herramientas de agente";
+"No agent tools found on this Mac." = "No se encontraron herramientas de agente en este Mac.";
+"Aloud looks for the agent tools you already use. Open one, then come back." = "Aloud busca las herramientas de agente que ya usas. Abre una y vuelve aquí.";
+"Already set up on this Mac" = "Ya configurado en este Mac";
+"%@ isn’t valid JSON, so Aloud left it alone. Add these lines to it by hand." = "%@ no es JSON válido, así que Aloud no lo tocó. Añade estas líneas a mano.";
+"Couldn’t write %1$@ — %2$@" = "No se pudo escribir %1$@: %2$@";
+"Let coding agents ask you questions out loud." = "Deja que los agentes te pregunten en voz alta.";
+"Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings." = "Permite que los agentes de programación te hagan una pregunta en voz alta y oigan tu respuesta. Añade la sección «Voz para agentes» a los Ajustes.";
+
+/* Agent Speak — the banner when the feature is on but the bridge never
+   started. The technical reason is shown verbatim underneath, so these
+   two carry the plain-language part: what is wrong, and the one thing
+   worth trying. The apostrophe is straight because the loc() call is —
+   the key has to match the source byte for byte. */
+"Agents can’t reach Aloud right now." = "Los agentes no pueden conectar con Aloud ahora mismo.";
+"Restarting Aloud usually clears this." = "Reabrir Aloud suele solucionarlo.";
+
+/* Agent Speak — the onboarding opt-in. A consent screen: what is being
+   granted, and the two answers. */
+"Let Agents Ask You Out Loud" = "Deja que los agentes te pregunten en voz alta";
+"A coding agent can ask you a question out loud and hear your answer, so you can keep working instead of switching to its window." = "Un agente de programación puede hacerte una pregunta en voz alta y oír tu respuesta, para que sigas trabajando en vez de cambiar a su ventana.";
+"This is experimental. You can turn it on or off any time in Settings." = "Esto es experimental. Puedes activarlo o desactivarlo cuando quieras en Ajustes.";
+"Agents can turn on the microphone" = "Los agentes pueden encender el micrófono";
+"To hear your answer to a question they asked." = "Para oír tu respuesta a una pregunta que te hicieron.";
+"Agents can speak through your speakers" = "Los agentes pueden hablar por tus altavoces";
+"That is how the question reaches you." = "Así es como te llega la pregunta.";
+"You always see it happening" = "Siempre lo ves cuando ocurre";
+"The recording indicator appears every time, and names the agent." = "El indicador de grabación aparece siempre e indica de qué agente se trata.";
+"Nothing leaves this Mac" = "Nada sale de este Mac";
+"Questions and answers stay on this Mac, like the rest of Aloud." = "Las preguntas y las respuestas se quedan en este Mac, como el resto de Aloud.";
+"Turn Off" = "Desactivar";
+"Not Now" = "Ahora no";
+"Turn On" = "Activar";
+
+/* Agent Speak — the pill while an agent has the mic. Room is tight:
+   the headline is one line beside a glyph and the buttons, so these
+   stay as short as the English. */
+"Accept — or press the Aloud hotkey" = "Aceptar (o pulsa la tecla de Aloud)";
+"Decline — or press Esc" = "Rechazar (o pulsa Esc)";
+"Open the mic?" = "¿Abrir el micrófono?";
+"Waiting…" = "Esperando…";
+"Agent conversation" = "Conversación con el agente";
+"Agent" = "Agente";
+"The agent session using your microphone" = "La sesión del agente que usa tu micrófono";
+"Aloud is busy — press the Aloud hotkey to accept" = "Aloud está ocupado: pulsa el atajo de Aloud para aceptar";
+"Finish setup to answer out loud — or press the Aloud hotkey" = "Termina la configuración para responder en voz alta, o pulsa el atajo de Aloud";
+"Aloud couldn’t open the microphone — press the hotkey to accept" = "Aloud no pudo abrir el micrófono: pulsa el atajo para aceptar";
+"Waiting for your answer" = "Esperando tu respuesta";
+"Listening — this goes to the agent" = "Escuchando: esto va al agente";
+"The agent is speaking" = "El agente está hablando";
+"Agent Speak" = "Voz para agentes";
+
+/* Agent Speak — live sessions in the menu bar footer. */
+"%@ — using the microphone" = "%@ — usando el micrófono";
+"%@ — waiting" = "%@ — esperando";
+"%ld sessions" = "%ld sesiones";
+"Agent sessions using the microphone" = "Sesiones de agentes que usan el micrófono";
+"Agent sessions" = "Sesiones de agentes";
+"End %@’s session?" = "¿Finalizar la sesión de %@?";
+"End all" = "Finalizar todas";
+"Close" = "Cerrar";
+"End every session, including waiting ones" = "Finalizar todas las sesiones, incluidas las que esperan";
+"It gives the microphone back and tells the agent the session is over." = "Devuelve el micrófono y avisa al agente de que la sesión ha terminado.";
+"%@ isn’t valid JSON, so Aloud left it alone. Remove the Aloud permission entries by hand." = "%@ no es JSON válido, así que Aloud no lo tocó. Elimina las entradas de permisos de Aloud a mano.";
+"%@ has an Aloud section with a broken marker, so Aloud left it alone. Fix or remove that section by hand." = "%@ tiene una sección de Aloud con un marcador dañado, así que Aloud no la tocó. Corrige o elimina esa sección a mano.";
+
+/* Agent Speak — the sentence a user says to an agent to make voice replies
+   certain, rather than relying on the agent to reach for it. */
+"Tell Your Agent" = "Díselo a tu agente";
+"Agents you set up can ask you out loud on their own. Saying this once at the start of a session makes it certain." = "Los agentes que configures pueden preguntarte en voz alta por su cuenta. Decirlo una vez al empezar una sesión lo asegura.";
+"Copy this to paste into an agent" = "Copiar para pegarlo en un agente";
+"Agent tools on this Mac are set up automatically. To be sure, tell your agent:" = "Las herramientas de agente de este Mac se configuran automáticamente. Para asegurarte, dile a tu agente:";
+
+/* Agent Speak — the pill while it holds the microphone for somebody who
+   walked away from the question. */
+"Waiting" = "Esperando";
+"Listening whenever you’re ready — just start talking" = "Te escucho cuando quieras: solo empieza a hablar";
+
+/* Agent Speak — picking the voice agents speak with. The gender labels group
+   the menu; the rest describes the choice and its one-time download. */
+"Voice" = "Voz";
+"Speed" = "Velocidad";
+"Speaking speed" = "Velocidad al hablar";
+"Female" = "Femenina";
+"Male" = "Masculina";
+"Hear this voice" = "Escuchar esta voz";
+"Stop" = "Detener";
+
+/* Agent Speak — the voice choice: which side it speaks from, and the
+   upgrade to Aloud's own voice when that side can carry it. */
+"Voice gender" = "Género de la voz";
+
+/* Agent Speak — what the voice control says while Aloud's own voice
+   is still on its way down. */
+"Agents ask their questions in this voice." = "Los agentes hacen sus preguntas con esta voz.";
+"Using a basic voice for now — Aloud’s own is still downloading." = "Por ahora se usa una voz básica: la de Aloud aún se está descargando.";
+"Getting the voice ready" = "Preparando la voz";
+
+"This is me, thinking out loud. How’s the pace?" = "Así sueno yo, pensando en voz alta. ¿Qué tal el ritmo?";
+
+/* Agent Speak — the savings badge thrown off the composer when the Concise
+   rewrite shortened what the user said. */
+"tokens" = "tokens";
+"Saved about %ld tokens" = "Ahorrados unos %ld tokens";
+
+/* Dictation pill — an agent asked for the microphone while the user was
+   using it, and is waiting for them to finish. */
+"An agent wants to speak" = "Un agente quiere hablar";
+"Finish to let it through" = "Termina para dejarlo pasar";

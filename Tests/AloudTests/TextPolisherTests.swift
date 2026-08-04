@@ -127,4 +127,24 @@ final class TextPolisherTests: XCTestCase {
         // A transcript that is nothing but fillers collapses to empty (nothing injected).
         XCTAssertEqual(polish("um, uh."), "")
     }
+
+    // MARK: which panes a level keeps alive
+
+    // Settings dims Vocabulary and App Rules on these two, and each pane says
+    // so in a notice with the cure attached — so they have to keep agreeing
+    // with the pipeline that actually reads them.
+    func testVocabularyAppliesOnlyWhereTheStandardPassRuns() {
+        XCTAssertFalse(PolishLevel.off.appliesVocabulary)
+        XCTAssertFalse(PolishLevel.light.appliesVocabulary)
+        XCTAssertTrue(PolishLevel.standard.appliesVocabulary)
+        // Concise runs the Standard pass first, then rewrites its result.
+        XCTAssertTrue(PolishLevel.concise.appliesVocabulary)
+    }
+
+    func testAppRulesApplyOnlyToTheConciseRewrite() {
+        XCTAssertFalse(PolishLevel.off.appliesAppRules)
+        XCTAssertFalse(PolishLevel.light.appliesAppRules)
+        XCTAssertFalse(PolishLevel.standard.appliesAppRules)
+        XCTAssertTrue(PolishLevel.concise.appliesAppRules)
+    }
 }

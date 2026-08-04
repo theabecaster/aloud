@@ -18,17 +18,20 @@ final class TextInjector {
         self.postEvents = postEvents
     }
 
+    // Flavors are kept as an ordered list, not a dictionary: a pasteboard item
+    // advertises its types in priority order and the pasting app takes the
+    // first one it understands. A dictionary would re-order them on every
+    // restore, so a copied rich-text selection could come back plain-text-first.
     struct Snapshot {
-        let items: [[String: Data]]   // per item: type → data
+        let items: [[(type: String, data: Data)]]   // per item: flavors, richest first
     }
 
     func snapshot() -> Snapshot {
-        let items = (pasteboard.pasteboardItems ?? []).map { item -> [String: Data] in
-            var entry: [String: Data] = [:]
-            for type in item.types {
-                if let data = item.data(forType: type) { entry[type.rawValue] = data }
+        let items = (pasteboard.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type -> (type: String, data: Data)? in
+                guard let data = item.data(forType: type) else { return nil }
+                return (type.rawValue, data)
             }
-            return entry
         }
         return Snapshot(items: items)
     }
@@ -36,9 +39,9 @@ final class TextInjector {
     func restore(_ snapshot: Snapshot) {
         pasteboard.clearContents()
         guard !snapshot.items.isEmpty else { return }
-        let items = snapshot.items.map { entry -> NSPasteboardItem in
+        let items = snapshot.items.map { flavors -> NSPasteboardItem in
             let item = NSPasteboardItem()
-            for (type, data) in entry {
+            for (type, data) in flavors {
                 item.setData(data, forType: NSPasteboard.PasteboardType(type))
             }
             return item

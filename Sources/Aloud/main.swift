@@ -4,19 +4,28 @@ import Foundation
 // Entry: CLI verbs do their work and exit; no args runs the menu bar app.
 let cliArgs = Array(CommandLine.arguments.dropFirst())
 
-// The indicator demo is a CLI verb that needs the app loop: it puts the real
-// pill on screen with no microphone, model, or permissions so the indicator can
-// be looked at (or screenshotted) on a machine that hasn't granted anything.
-if cliArgs.first == "--indicator-demo" {
-    let code = CLI.prepareIndicatorDemo(path: cliArgs.count > 1 ? cliArgs[1] : nil)
-    if code != 0 { exit(code) }
-    let app = NSApplication.shared
-    app.setActivationPolicy(.accessory)
-    app.run()
-    exit(0)
-}
-
-if let first = cliArgs.first, first.hasPrefix("--") {
+// Agent verbs are bare subcommands, not --flags: `aloud speak "…"` reads
+// naturally in the skill files we install, and it keeps the supported surface
+// visibly separate from the development tooling. They have to be matched
+// explicitly — anything unrecognised must still fall through to launching the
+// menu bar app, which is what a bare `open -a Aloud` relies on.
+//
+// The verb list itself lives in `BridgeOperation`, and `CLI.run` matches
+// against it. Nothing is written out here: as a hand-kept list it silently
+// disagreed with `CLI.run` the moment a verb was added — `ask` reached neither
+// branch, fell through to the launch path, activated the running app and
+// exited 0 with no output and nothing to debug from.
+// A bare word that is not a verb is a typo, and it used to be silent: `aloud
+// spek "…"` matched neither branch, fell through to the launch path, found the
+// app already running, activated it and exited 0 — no output on either stream
+// and a success status, which an agent reads as the question having been asked.
+// Sending every bare word to `CLI.run` gets it the ordinary "unknown flag"
+// refusal and a non-zero exit instead.
+//
+// Single-dash arguments still fall through untouched: those are what
+// LaunchServices passes (`-psn_0_…`, `-NSDocumentRevisionsDebugMode`), and a
+// bare `open -a Aloud` passes nothing at all.
+if let first = cliArgs.first, !first.isEmpty, first.hasPrefix("--") || !first.hasPrefix("-") {
     let code = await CLI.run(cliArgs)
     exit(code)
 }
@@ -29,6 +38,11 @@ let isUIPreview = ProcessInfo.processInfo.environment["ALOUD_UI_PREVIEW"] == "1"
 if !isUIPreview, Bundle.main.bundleURL.pathExtension == "app" {
     Migration.runCleanSlateIfNeeded()
 }
+
+// The consent defaults, before anything reads them — SettingsStore latches its
+// values the first time `.shared` is touched, and this has to be the state it
+// finds. Runs for development builds too: they are how the defaults get tested.
+Migration.applyAgentConsentDefaultsIfNeeded()
 
 // Singleton: a second GUI launch hands off to the running one and exits.
 // flock on a file in the state dir — crash-safe (the lock dies with the pid).

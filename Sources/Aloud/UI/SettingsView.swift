@@ -36,6 +36,7 @@ struct SettingsView: View {
         case vocabulary = "Vocabulary"
         case snippets = "Snippets"
         case appRules = "App Rules"
+        case agents = "Agent Speak"
         case history = "History"
         case about = "About"
         var id: String { rawValue }
@@ -47,6 +48,7 @@ struct SettingsView: View {
             case .vocabulary: return loc("Teach Aloud the words that matter to you.")
             case .snippets: return loc("Turn short phrases into text you use often.")
             case .appRules: return loc("Choose how Aloud writes in specific apps.")
+            case .agents: return loc("Let coding agents ask you questions out loud.")
             case .history: return loc("Find, copy, and correct your recent dictations.")
             case .about: return loc("Version, updates, and privacy.")
             }
@@ -58,6 +60,10 @@ struct SettingsView: View {
             case .vocabulary: return "character.book.closed"
             case .snippets: return "text.insert"
             case .appRules: return "macwindow"
+            // Two bubbles: the feature is a conversation with an agent, not a
+            // sprinkle of magic. Same glyph the onboarding screen leads with,
+            // so the row is recognizable from the one place the user met it.
+            case .agents: return "bubble.left.and.bubble.right"
             case .history: return "clock"
             case .about: return "info.circle"
             }
@@ -66,11 +72,18 @@ struct SettingsView: View {
 
     // Headerless clusters: the grouping reads as rhythm in the sidebar
     // without inventing category names the user has to learn.
-    private let clusters: [[Section]] = [
-        [.general, .dictation],
-        [.vocabulary, .snippets, .appRules],
-        [.history, .about],
-    ]
+    // Agents is absent, not disabled, until the experiment is switched on: the
+    // gate's promise is that the feature does not exist until asked for, and a
+    // greyed row advertising it would break that. The onboarding page and
+    // Settings → General are the two ways in.
+    // When it is on it leads its cluster, above Vocabulary: it is the thing the
+    // user just turned on and came here to set up, so it should not be the last
+    // row in the group.
+    private var clusters: [[Section]] {
+        var middle: [Section] = [.vocabulary, .snippets, .appRules]
+        if settings.experimentalAgentVoice { middle.insert(.agents, at: 0) }
+        return [[.general, .dictation], middle, [.history, .about]]
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -119,6 +132,12 @@ struct SettingsView: View {
         }
         .frame(minWidth: 760, idealWidth: 820, maxWidth: 1040,
                minHeight: 540, idealHeight: 620, maxHeight: 920)
+        // Turning the experiment off while standing in its pane would leave the
+        // selection pointing at a row that no longer exists — the sidebar
+        // empties out and the detail keeps rendering. Step back to General.
+        .onChange(of: settings.experimentalAgentVoice) { _, on in
+            if !on, navigation.section == .agents { navigation.section = .general }
+        }
         .overlay(alignment: .top) {
             if controller.showSettingsStopBanner {
                 Label(loc("Stopped listening so you can change settings"), systemImage: "mic.slash")
@@ -142,9 +161,23 @@ struct SettingsView: View {
         case .dictation: DictationSettings(controller: controller)
         case .vocabulary: VocabularySettings(settings: controller.settings)
         case .snippets: SnippetsSettings(settings: controller.settings)
-        case .appRules: AppRulesSettings(settings: controller.settings)
+        case .appRules: AppRulesSettings(settings: controller.settings,
+                                         conciseAvailable: controller.enhancerAvailable)
+        case .agents: AgentsSettings(settings: controller.settings)
         case .history: HistorySettings(history: controller.history, settings: controller.settings)
         case .about: AboutSettings()
+        }
+    }
+
+    // Panes whose contents currently do nothing. Both answers are the clean-up
+    // level: Vocabulary needs the Standard pass, App Rules only steer the
+    // Concise rewrite — and a Mac without the rewrite engine can't run that at
+    // all, whatever the level says.
+    private func isInert(_ s: Section) -> Bool {
+        switch s {
+        case .vocabulary: return !settings.polishLevel.appliesVocabulary
+        case .appRules: return !settings.polishLevel.appliesAppRules || !controller.enhancerAvailable
+        default: return false
         }
     }
 
@@ -152,7 +185,7 @@ struct SettingsView: View {
     // reason a hover away — still selectable, because the fix lives inside it.
     @ViewBuilder
     private func sidebarRow(_ s: Section) -> some View {
-        if s == .vocabulary, !settings.polishLevel.appliesVocabulary {
+        if isInert(s) {
             HStack(spacing: 9) {
                 sidebarIcon(s)
                 Text(s.title)
@@ -161,13 +194,24 @@ struct SettingsView: View {
                     .imageScale(.small)
             }
             .foregroundStyle(.secondary)
-            .help(loc("Not in use — Clean-up is set to %@.", settings.polishLevel.displayName))
+            .help(inertHelp(s))
         } else {
             HStack(spacing: 9) {
                 sidebarIcon(s)
                 Text(s.title)
             }
         }
+    }
+
+    // The tooltip on a dimmed row. Usually the clean-up level is the whole
+    // story; on a Mac with no rewrite engine, App Rules are inert whatever the
+    // level is, and naming the level there would send the user to change a
+    // setting that wouldn't help.
+    private func inertHelp(_ s: Section) -> String {
+        if s == .appRules, !controller.enhancerAvailable {
+            return loc("Not in use — this Mac can’t run the Concise clean-up.")
+        }
+        return loc("Not in use — Clean-up is set to %@.", settings.polishLevel.displayName)
     }
 
     private func sidebarIcon(_ section: Section) -> some View {
@@ -303,6 +347,14 @@ struct GeneralSettings: View {
                 micAccess = Permissions.microphone
                 axAccess = Permissions.accessibility
                 autoSteersToBuiltIn = AudioDevices.defaultOutputIsBluetooth()
+                // The settings window outlives its closes, so onAppear can fire
+                // once and never again — a headset plugged in afterwards would
+                // never reach this picker, and unplugging the selected one would
+                // leave it pointing at a row that isn't there. Only assigned on
+                // a real change, so the common case doesn't re-render the pane
+                // every 1.5 s.
+                let latest = AudioDevices.inputDevices()
+                if latest != devices { devices = latest }
             }
         }
     }
@@ -480,6 +532,32 @@ struct GeneralSettings: View {
     // a bare Spacer between sections draws as an empty card.
     private var startup: some View {
         Form {
+            // Every experiment, in one place. They used to be split across two
+            // panes under the same header, which read as two different kinds of
+            // experimental — and left the Agent Speak switch in two places at
+            // once, one of which vanished when you used it.
+            SwiftUI.Section {
+                Toggle(loc("Live typing"), isOn: $settings.liveTyping)
+                Toggle(loc("Agent Speak"), isOn: $settings.experimentalAgentVoice)
+            } header: {
+                HStack(spacing: 5) {
+                    Text(loc("Experimental"))
+                    InfoButton(text: loc("Experimental features work, but expect the occasional hiccup. You can turn them off any time."))
+                }
+            } footer: {
+                // One line each, in the order the switches sit in. Both say
+                // what turning it on does, not what it is.
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(settings.liveTyping
+                         ? loc("Words appear as you speak and settle as Aloud hears more.")
+                         : loc("Everything is typed at once when you release the key."))
+                    Text(loc("Lets coding agents ask you a question out loud and hear your answer. Adds an Agent Speak section to Settings."))
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             SwiftUI.Section {
                 Toggle(loc("Open Aloud at login"), isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
@@ -527,8 +605,10 @@ struct GeneralSettings: View {
             // undo it, and sending them anywhere else wastes a click.
             if status == .notDetermined, let request {
                 Button(loc("Allow…"), action: request)
+                    .buttonStyle(.text)
             } else {
                 Button(loc("Open Settings"), action: openSettings)
+                    .buttonStyle(.text)
             }
         } label: {
             Label {
@@ -700,6 +780,22 @@ private struct SettingLabel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+}
+
+// The reduced-accuracy mark. It is the pill's badge, drawn by the same view in
+// both places on purpose: someone who has seen the orange "Basic" tag on a
+// recording during the download should read the same tag beside a language in
+// Settings and know it means the same engine, without being taught a second
+// vocabulary for it.
+struct BasicDictationTag: View {
+    var body: some View {
+        Text(loc("Basic"))
+            .font(.system(size: 9, weight: .semibold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .foregroundStyle(.orange)
+            .overlay(Capsule().strokeBorder(Color.orange.opacity(0.5), lineWidth: 0.5))
     }
 }
 
@@ -938,17 +1034,48 @@ struct DictationSettings: View {
     }
 
     // Languages not yet declared, offered alphabetically by their shown name.
-    private var addableLanguages: [String] {
-        DictationLanguages.supported
-            .filter { !settings.declaredLanguages.contains($0) }
+    // Split by what would actually hear them: full accuracy, or basic
+    // dictation only. Two groups in one menu, so the difference is read before
+    // the choice is made rather than discovered afterwards.
+    private func addable(_ pool: [String]) -> [String] {
+        pool.filter { !settings.declaredLanguages.contains($0) }
             .sorted { DictationLanguages.displayName($0) < DictationLanguages.displayName($1) }
     }
 
     var body: some View {
         Form {
-            // Only present while a session would run at reduced accuracy —
-            // shows how far along the one-time upgrade is.
-            if controller.usingFallback {
+            // Same header either way — the engine in use is the same engine,
+            // and the app has one name for it. What differs is whether this is
+            // a state that ends on its own.
+            if controller.basicByLanguage {
+                SwiftUI.Section {
+                    if controller.usingFallback {
+                        Label(loc("A language you listed is only heard by basic dictation, so every dictation uses it."),
+                              systemImage: "globe")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // Asked for, and it didn't come up — no basic dictation
+                        // on this Mac at all, or not for this language. Which
+                        // of the two is not something the user can act on, so
+                        // the sentence claims neither; what matters is that
+                        // dictation is running on the engine that can't hear
+                        // them. Silence here would be the worst version of
+                        // this — words coming back as nonsense with nothing on
+                        // screen explaining why.
+                        Label(loc("Aloud couldn’t set up that language on this Mac, so it isn’t being heard."),
+                              systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text(loc("Basic dictation in use"))
+                } footer: {
+                    Text(loc("Remove the languages marked Basic below to go back to full accuracy."))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } else if controller.usingFallback {
+                // Only present while a session would run at reduced accuracy —
+                // shows how far along the one-time upgrade is.
                 SwiftUI.Section {
                     switch controller.upgradeState {
                     case .downloading(let progress):
@@ -997,8 +1124,17 @@ struct DictationSettings: View {
 
             SwiftUI.Section {
                 ForEach(settings.declaredLanguages, id: \.self) { code in
-                    HStack {
+                    HStack(spacing: 6) {
                         Text(DictationLanguages.displayName(code))
+                        // The pill's own badge, so the tag beside a language
+                        // and the tag on a recording are recognisably the one
+                        // thing. Nothing beside a full-accuracy language: the
+                        // unmarked row is the ordinary case.
+                        if !DictationLanguages.isFullQuality(code) {
+                            BasicDictationTag()
+                                .help(loc("Only basic dictation hears this language, so every dictation uses it."))
+                                .accessibilityLabel(loc("Basic dictation only"))
+                        }
                         Spacer()
                         if settings.declaredLanguages.count > 1 {
                             Button {
@@ -1012,11 +1148,24 @@ struct DictationSettings: View {
                         }
                     }
                 }
-                if !addableLanguages.isEmpty {
+                let full = addable(DictationLanguages.supported)
+                let basic = addable(DictationLanguages.basicOnly)
+                if !full.isEmpty || !basic.isEmpty {
                     Menu {
-                        ForEach(addableLanguages, id: \.self) { code in
+                        ForEach(full, id: \.self) { code in
                             Button(DictationLanguages.displayName(code)) {
                                 settings.declaredLanguages.append(code)
+                            }
+                        }
+                        if !basic.isEmpty {
+                            SwiftUI.Section {
+                                ForEach(basic, id: \.self) { code in
+                                    Button(DictationLanguages.displayName(code)) {
+                                        settings.declaredLanguages.append(code)
+                                    }
+                                }
+                            } header: {
+                                Text(loc("Basic dictation only"))
                             }
                         }
                     } label: {
@@ -1039,20 +1188,9 @@ struct DictationSettings: View {
                     .foregroundStyle(.secondary)
             }
 
-            SwiftUI.Section {
-                Toggle(loc("Live typing"), isOn: $settings.liveTyping)
-            } header: {
-                HStack(spacing: 5) {
-                    Text(loc("Experimental"))
-                    InfoButton(text: loc("Experimental features work, but expect the occasional hiccup. You can turn them off any time."))
-                }
-            } footer: {
-                Text(settings.liveTyping
-                     ? loc("Words appear as you speak and settle as Aloud hears more.")
-                     : loc("Everything is typed at once when you release the key."))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            // Live typing used to sit here under its own Experimental header.
+            // It lives with the other experiments in General now — one place to
+            // look for anything that is still finding its feet.
         }
         .formStyle(.grouped)
     }
@@ -1115,8 +1253,11 @@ extension ListEditorPane where Notice == EmptyView {
 // pane keeps its rhythm instead of growing a banner.
 struct InactiveNotice: View {
     let message: String
-    let actionLabel: String
-    let action: () -> Void
+    // No button when there is nothing the user can do about it here — a Mac
+    // without the rewrite engine can't be talked into having one. The sentence
+    // still gets said: a pane that quietly does nothing is the worse outcome.
+    var actionLabel: String? = nil
+    var action: (() -> Void)? = nil
 
     var body: some View {
         SwiftUI.Section {
@@ -1126,7 +1267,10 @@ struct InactiveNotice: View {
                 Text(message)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                Button(actionLabel, action: action)
+                if let actionLabel, let action {
+                    Button(actionLabel, action: action)
+                        .buttonStyle(.text)
+                }
             }
         }
     }
@@ -1397,6 +1541,8 @@ struct SnippetsSettings: View {
 // beats that built-in choice for one specific app.
 struct AppRulesSettings: View {
     @ObservedObject var settings: SettingsStore
+    // Whether the rewrite these rules steer exists on this Mac at all.
+    var conciseAvailable: Bool = true
 
     // What the behavior picker offers: a built-in category, the user's own
     // instruction, or the exact words.
@@ -1457,6 +1603,23 @@ struct AppRulesSettings: View {
                 Spacer()
                 Button(loc("Add")) { addRule() }
                     .disabled(!canAdd)
+            }
+        } notice: {
+            // A rule only ever changes how the Concise rewrite writes; at any
+            // other clean-up level every app is written the same way. Said here
+            // rather than left in the footnote, because a list of rules that
+            // silently does nothing is exactly what this pane must not be.
+            if !conciseAvailable {
+                InactiveNotice(
+                    message: loc("These rules only change the Concise clean-up, which this Mac can’t run."))
+            } else if !settings.polishLevel.appliesAppRules {
+                InactiveNotice(
+                    message: loc("These rules only change the Concise clean-up, and Clean-up is %@.",
+                                 settings.polishLevel.displayName),
+                    actionLabel: loc("Use Concise")
+                ) {
+                    settings.polishLevel = .concise
+                }
             }
         }
         .onAppear { refreshRunningApps() }
@@ -1534,10 +1697,21 @@ struct HistorySettings: View {
                 (averageWPM, loc("words per minute")),
             ].filter { $0.0 > 0 }
             if !stats.isEmpty {
-                HStack {
-                    ForEach(stats.indices, id: \.self) { i in
-                        if i > 0 { Divider().frame(height: 28) }
-                        StatBlock(value: "\(stats[i].value)", label: stats[i].label)
+                // Named all-time because they are: the list below is capped at
+                // the Keep setting and Clear History empties it, and neither
+                // touches these counters. Unlabelled they read as a summary of
+                // what's on screen, which is the one thing they aren't —
+                // "5,231 dictations" over an empty list is the same numbers
+                // telling the truth and looking broken.
+                VStack(spacing: 4) {
+                    Text(loc("All time"))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.tertiary)
+                    HStack {
+                        ForEach(stats.indices, id: \.self) { i in
+                            if i > 0 { Divider().frame(height: 28) }
+                            StatBlock(value: "\(stats[i].value)", label: stats[i].label)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -1588,6 +1762,7 @@ struct HistorySettings: View {
                     }
                     Spacer()
                     Button(loc("Clear History")) { history.clear() }
+                        .buttonStyle(.text)
                 }
                 .padding(12)
             }
@@ -1770,10 +1945,8 @@ struct HistoryRow: View {
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
                 .fixedSize()
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color.accentColor)
+        .buttonStyle(.text)
     }
 }
 
@@ -1916,6 +2089,8 @@ struct AboutSettings: View {
                 Button(loc("Check for Updates")) {
                     NotificationCenter.default.post(name: .aloudCheckForUpdates, object: nil)
                 }
+                .buttonStyle(.text)
+                .font(.callout)
                 .padding(.top, 4)
             }
             Spacer()

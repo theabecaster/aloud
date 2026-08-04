@@ -35,6 +35,26 @@ final class SpeechActivity: @unchecked Sendable {
         return ProcessInfo.processInfo.systemUptime - reference
     }
 
+    // Whether anyone has actually spoken this session.
+    //
+    // `secondsSinceSpeech` cannot answer this: with nothing heard yet it counts
+    // from the session start, so a freshly started detector reports ~0 — which
+    // reads exactly like someone talking right now. Anything endpointing on
+    // silence needs to know the difference, or it fires on an empty room the
+    // moment it starts.
+    var hasHeardSpeech: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return running && lastSpeechUptime != nil
+    }
+
+    /// Is the detector actually watching the room? False when its models never
+    /// loaded, which is what tells a caller that "nobody has spoken" is an
+    /// absence of evidence rather than evidence of absence.
+    var isRunning: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return running
+    }
+
     // Begin a session. No-op (and `secondsSinceSpeech` stays nil) when the
     // detector isn't loaded, so this is always safe to call.
     func start() {
@@ -60,11 +80,27 @@ final class SpeechActivity: @unchecked Sendable {
     }
 
     // Safe to call from the audio tap thread.
+    //
+    // Trimmed here as well as in `nextFrame`, because the drain is not
+    // guaranteed to be running. When the speech detector never loaded — an
+    // offline first launch, where the download is tried once per process — the
+    // pump returns immediately and `nextFrame`, the only other place that
+    // bounds this, is never reached. The tap keeps feeding it regardless, so a
+    // hands-free session or a ten-minute agent hold accumulated every sample it
+    // ever heard: about 38 MB for ten minutes, in an app that stays running for
+    // weeks. A backlog is stale by definition here — this answers a question
+    // about *now* — so dropping the oldest costs nothing.
     func append(samples: [Float]) {
         lock.lock()
         pending.append(contentsOf: samples)
+        if pending.count > Self.maxPending {
+            pending.removeFirst(pending.count - Self.maxPending)
+        }
         lock.unlock()
     }
+
+    // ~2 s at 16 kHz, the same ceiling `nextFrame` applies.
+    private static let maxPending = VadManager.chunkSize * 8
 
     private func run(detector: VadManager) async {
         markRunning()

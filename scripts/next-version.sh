@@ -44,7 +44,14 @@ subjects="$(git log "$range" --format='%s' 2>/dev/null || true)"
 bodies="$(git log "$range" --format='%B' 2>/dev/null || true)"
 
 bump=""
+# The `!` marker is looked for in bodies as well as subjects, and allowing for a
+# leading bullet, because a squash merge moves it there: GitHub folds every
+# commit in the branch into the squash body as `* fix!: …`, leaving a subject
+# like `feat: … (#44)`. Scanning subjects alone then reads a release with a
+# breaking change in it as a minor one — a 3.0.0 quietly cut as 2.9.0, decided
+# by which merge button somebody pressed.
 if printf '%s\n' "$subjects" | grep -qE '^[a-zA-Z]+(\([^)]*\))?!:' \
+   || printf '%s\n' "$bodies" | grep -qE '^[[:space:]]*\*?[[:space:]]*[a-zA-Z]+(\([^)]*\))?!:' \
    || printf '%s\n' "$bodies" | grep -qE 'BREAKING[ -]CHANGE'; then
   bump=major
 elif printf '%s\n' "$subjects" | grep -qE '^feat(\([^)]*\))?:'; then

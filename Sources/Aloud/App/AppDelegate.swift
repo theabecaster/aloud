@@ -21,6 +21,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusPopover: NSPopover?
     private var menuPreviewWindow: NSWindow?
     private let controller = DictationController()
+
+    // Agent Speak. Both are nil until the experiment is switched on: the gate's
+    // promise is that nothing is reachable until asked for, and the surest way
+    // to keep that promise is to not open the socket at all.
+    private var bridge: BridgeServer?
+    private var bridgeService: AgentBridgeService?
+    private var bridgeSweep: Timer?
+    private var bridgeGateObserver: AnyCancellable?
     private let settingsNavigation = SettingsNavigationModel()
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
@@ -61,6 +69,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return Self.executableFileID() != atLaunch
     }
 
+    // A clean quit must not leave `bridge.sock` on disk. Startup can cope with
+    // a stale file — it probes for a listener before unlinking — but a socket
+    // that outlives its app reads as "Aloud left something behind" to anyone
+    // who finds it, and the probe is a slower path than not needing one.
+    func applicationWillTerminate(_ notification: Notification) {
+        bridge?.stop()
+        // The system-wide default input, if a session was still holding it.
+        //
+        // Picking a microphone in Settings switches the OS default for the
+        // length of a session, and only `stop()` puts it back — which never
+        // runs when the user quits mid-session from the status menu. Every
+        // other app on the Mac was then left on Aloud's chosen input until
+        // Aloud was launched again, since the launch-time repair was the only
+        // thing that restored it.
+        AudioRecorder.restoreDefaultInputIfInterrupted()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = launchExecutableID
         AppPaths.ensureStateDir()
@@ -75,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             // preparation, reachability monitor, or update network request.
         } else if !controller.settings.onboardingComplete {
             showOnboarding()
+            observeAgentSpeakGate()
         } else {
             // Onboarding is done, so a missing permission does not reopen it —
             // revoking microphone access makes macOS restart the app, and
@@ -84,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             // it's a no-op without Accessibility and recovers on its own once
             // the grant comes back.
             _ = controller.startListening()
+            observeAgentSpeakGate()
             Task {
                 // Relaunched before the model download ever finished: cover
                 // with basic dictation (quiet activation never prompts) while
@@ -145,9 +172,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         // Harness hook: ALOUD_OPEN_SETTINGS=1 opens the Settings window at
-        // launch, so a pane can be inspected without driving the menu.
-        if ProcessInfo.processInfo.environment["ALOUD_OPEN_SETTINGS"] == "1" {
-            openSettings()
+        // launch, so a pane can be inspected without driving the menu. A
+        // section's own name ("Agent Speak") opens straight onto that pane —
+        // clicking the sidebar from a script needs the window focused, which
+        // is not something a screenshot harness can rely on.
+        if let open = ProcessInfo.processInfo.environment["ALOUD_OPEN_SETTINGS"], !open.isEmpty {
+            showSettings(SettingsView.Section(rawValue: open) ?? .general)
         }
         // Companion harness for visual QA of the custom status popover. Wait
         // one run-loop turn so AppKit has attached the status button to the
@@ -186,6 +216,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         monitor.start(queue: .global(qos: .utility))
         pathMonitor = monitor
+    }
+
+    // MARK: - Agent Speak bridge
+
+    // Follows the experimental gate for the life of the app: switching it off
+    // closes the socket, not merely refuses on it. A listening socket that
+    // exists while the feature is "off" is the kind of detail that reads badly
+    // when someone finds it rather than being told about it.
+    private func observeAgentSpeakGate() {
+        syncBridge()
+        bridgeGateObserver = controller.settings.$experimentalAgentVoice
+            .receive(on: RunLoop.main)
+            .sink { [weak self] enabled in self?.syncBridge(enabled: enabled) }
+    }
+
+    private func syncBridge(enabled: Bool? = nil) {
+        let on = enabled ?? controller.settings.experimentalAgentVoice
+        guard on else {
+            bridgeService?.forceRelease()
+            controller.agentSessionsChanged(to: [])
+            bridgeSweep?.invalidate()
+            bridgeSweep = nil
+            bridge?.stop()
+            bridge = nil
+            bridgeService = nil
+            BridgeStartFailure.clear()
+            return
+        }
+        guard bridge == nil else { return }
+
+        // Turning the feature on is the moment its voices become worth having.
+        // Quiet and unattended — the Mac's own voices cover until they land,
+        // and the user is never shown a download they did not ask about. The
+        // chosen side is loaded as well as fetched, so the first question an
+        // agent asks is not the one that waits for a CoreML chain.
+        EnhancedVoices.shared.ensureAll()
+        EnhancedVoices.shared.warm(controller.settings.agentVoiceGender, chosen: true)
+
+        let service = AgentBridgeService(settings: controller.settings, host: controller)
+        service.onHolderChanged = { [weak self] sessions in
+            self?.controller.agentSessionsChanged(to: sessions)
+        }
+        let server = BridgeServer()
+        server.handler = { [weak service] request, peer in
+            guard let service else {
+                return .failure(.unavailable, "Aloud isn't ready for agent requests.")
+            }
+            return await service.handle(request, peer: peer)
+        }
+        do {
+            try server.start()
+            bridgeService = service
+            bridge = server
+            // What agents are told has to travel with the app. An update that
+            // changes the instructions would otherwise leave every harness
+            // installed before it running the old text — still marked
+            // "Installed", still looking fine, and telling agents to call the
+            // CLI in a form that has moved on. Writes only what differs.
+            // The same rule the auto-installer follows: a development build
+            // writes nothing into the user's home. This runs on every bridge
+            // start, so without it a `swift build` binary rewrites the note,
+            // the skill files and the permission entries of every harness on
+            // the Mac — pointing them all at a scratch binary — every launch.
+            //
+            // Off the main thread: this is a read of every harness's
+            // instruction file and, where the text has moved on, an atomic
+            // rewrite of each — on the launch path and again on every flip of
+            // the Agent Speak switch. The auto-install below follows it rather
+            // than running beside it, because both write into the same home
+            // directory and the order they ran in when this was synchronous is
+            // the only order either has ever been tested in.
+            let mayWriteToHome = AgentAutoInstall.mayWriteToHome
+            let settings = controller.settings
+            Task.detached(priority: .utility) {
+                let refreshed = mayWriteToHome
+                    ? HarnessInstaller(home: HarnessInstaller.userHome).refreshInstalled()
+                    : []
+                await MainActor.run {
+                    if !refreshed.isEmpty {
+                        DevDiag.note("install", "refreshed: \(refreshed.map(\.id).joined(separator: ", "))")
+                    }
+                    // …and the harnesses that were never installed at all.
+                    // Refreshing only ever reached the ones somebody had
+                    // already clicked Install for, which left every user who
+                    // updated with the feature switched on and no agent on the
+                    // machine able to find it.
+                    AgentAutoInstall.runIfNeeded(settings: settings)
+                }
+            }
+            // Nothing else will notice an abandoned session. Every other reap
+            // rides in on a bridge call, and the case that strands the pill on
+            // screen is precisely the one where no more calls are coming.
+            bridgeSweep = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak service] _ in
+                Task { @MainActor in await service?.sweepAndEndFinishedSessions() }
+            }
+            BridgeStartFailure.clear()
+        } catch {
+            // Never fatal: dictation is the app, Agent Speak is an experiment
+            // on top of it. But it must not be silent either — recorded where
+            // the CLI can read it, so an agent is told the bridge is down
+            // rather than that the feature was switched off, and where the
+            // Agents pane can show the user something actionable.
+            BridgeStartFailure.record(error)
+            FileHandle.standardError.write(
+                Data("agent bridge failed to start: \(error.localizedDescription)\n".utf8))
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -573,7 +709,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             onUseExactWords: { [weak self] in
                 self?.runRestoringFocus { self?.undoEnhancement() }
             },
-            onQuit: { NSApp.terminate(nil) }
+            onQuit: { NSApp.terminate(nil) },
+            onEndAgentSession: { [weak self] id in self?.bridgeService?.endSession(id) },
+            onEndAllAgentSessions: { [weak self] in self?.bridgeService?.forceRelease() }
         )
     }
 
@@ -682,23 +820,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             window.displayIfNeeded()
             window.alphaValue = 1
         }
-        // Never leave the window invisible: whatever the key dance does,
-        // this is the longest the user waits.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { reveal() }
         if window.isKeyWindow {
             DispatchQueue.main.async { reveal() }
+            // Never leave the window invisible: whatever the key dance does,
+            // this is the longest the user waits.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { reveal() }
             return
         }
-        final class TokenBox: @unchecked Sendable { var value: NSObjectProtocol? }
+        // The same box `whenActive` uses, and for the same reason: whichever of
+        // the two paths gets there first hands the observer back. A window that
+        // never becomes key — it can be ordered out, or another app can hold on
+        // to key — used to leave this one registered for the life of the app,
+        // one per presentation.
+        final class TokenBox: @unchecked Sendable {
+            var value: NSObjectProtocol?
+            var done = false
+        }
         let box = TokenBox()
-        box.value = NotificationCenter.default.addObserver(
-            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { _ in
+        let fire = { @MainActor in
+            guard !box.done else { return }
+            box.done = true
             if let token = box.value {
                 NotificationCenter.default.removeObserver(token)
                 box.value = nil
             }
-            MainActor.assumeIsolated { reveal() }
+            reveal()
         }
+        box.value = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { _ in
+            MainActor.assumeIsolated { fire() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { fire() }
     }
 
     private func showOnboarding() {
@@ -706,6 +858,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let view = OnboardingView(controller: controller) { [weak self] in
             guard let self else { return }
             controller.settings.onboardingComplete = true
+            // Onboarding offers Agent Speak and the user left it on, so the
+            // harnesses on this Mac get the instructions now rather than on
+            // some later launch. Without them the switch is on and nothing can
+            // reach it — the agent has not been told the bridge exists.
+            AgentAutoInstall.runAfterOnboarding(settings: controller.settings)
             onboardingWindow?.close()
             onboardingWindow = nil
             _ = controller.startListening()

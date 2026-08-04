@@ -17,7 +17,7 @@ struct OnboardingView: View {
     }
 
     enum Step: Int, CaseIterable {
-        case welcome, access, voice, tryIt, cleanUp, features
+        case welcome, access, voice, tryIt, cleanUp, agentVoice, features
 
         // Harness hook: ALOUD_ONBOARDING_STEP=tryIt opens the flow on a later
         // screen so a screen can be inspected without clicking through.
@@ -27,6 +27,7 @@ struct OnboardingView: View {
             case "voice": return .voice
             case "tryIt": return .tryIt
             case "cleanUp": return .cleanUp
+            case "agentVoice": return .agentVoice
             case "features": return .features
             default: return .welcome
             }
@@ -38,7 +39,12 @@ struct OnboardingView: View {
     @State private var axStatus = Permissions.accessibility
     @State private var tryItDone = false
     @State private var isOnline = true
-    @State private var networkMonitor = NWPathMonitor()
+    // Made on appear rather than as this property's default value: a default is
+    // re-evaluated every time the struct is initialised, and with a poll
+    // redrawing this screen every 0.8 s that was a monitor allocated and thrown
+    // away several times a second. One is created when the flow opens and
+    // cancelled when it closes.
+    @State private var networkMonitor: NWPathMonitor?
     @State private var startingBasic = false
     @State private var basicUnavailable = false
     @State private var openedAccessibility = false
@@ -50,6 +56,12 @@ struct OnboardingView: View {
 
     private let poll = Timer.publish(every: 0.8, on: .main, in: .common).autoconnect()
 
+    // Harness hook: ALOUD_ONBOARDING_HOLD=1 keeps the flow on whatever screen
+    // it's showing. The screens that wait on something advance themselves the
+    // moment it's satisfied, which on a Mac that already has the permissions
+    // and the model makes them impossible to look at.
+    private let holdsStep = ProcessInfo.processInfo.environment["ALOUD_ONBOARDING_HOLD"] == "1"
+
     var body: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 28)
@@ -58,11 +70,20 @@ struct OnboardingView: View {
                 .padding(.horizontal, 40)
                 .id(step)
                 .transition(.opacity)
-            Spacer()
+            // Never less than this: Back is an overlay pinned to the bottom
+            // corner, so a screen tall enough to reach it would put its own
+            // buttons underneath one that isn't part of its layout. The reserve
+            // is what keeps the two apart no matter how long a translation runs.
+            Spacer(minLength: 30)
             dots
                 .padding(.bottom, 28)
         }
-        .frame(width: 560, height: 520)
+        // 660 rather than 520: the Agent Speak screen carries the two grants,
+        // the voice controls and the phrase to say, and the translations of all
+        // of that run longer than the English. Every other screen is centred
+        // between two Spacers, so the extra height reads as breathing room
+        // rather than as a gap.
+        .frame(width: 560, height: 660)
         .background(.background)
         .overlay(alignment: .bottomLeading) {
             if step != .welcome {
@@ -82,7 +103,12 @@ struct OnboardingView: View {
             Task { await controller.prepareModel() }
             // Watch connectivity for the voice screen: no network is a normal
             // first-run situation, and the download should resume by itself.
-            networkMonitor.pathUpdateHandler = { path in
+            // One at a time: an appear that arrives without an intervening
+            // disappear must not strand the monitor it already started.
+            guard networkMonitor == nil else { return }
+            let monitor = NWPathMonitor()
+            networkMonitor = monitor
+            monitor.pathUpdateHandler = { path in
                 let nowOnline = path.status == .satisfied
                 Task { @MainActor in
                     let cameBack = nowOnline && !isOnline
@@ -95,7 +121,13 @@ struct OnboardingView: View {
                     }
                 }
             }
-            networkMonitor.start(queue: .global(qos: .utility))
+            monitor.start(queue: .global(qos: .utility))
+        }
+        // Nothing else stops it: a started monitor keeps its queue and its
+        // handler alive for the life of the process otherwise.
+        .onDisappear {
+            networkMonitor?.cancel()
+            networkMonitor = nil
         }
         .onReceive(poll) { _ in
             micStatus = Permissions.microphone
@@ -104,8 +136,8 @@ struct OnboardingView: View {
             // happened in a system dialog or System Settings, and macOS
             // doesn't hand focus back to us — reclaim it so the flow visibly
             // continues instead of sitting behind whatever has focus.
-            if step == .access, Permissions.allGranted { advance(); reclaimFocus() }
-            if step == .voice, controller.transcriberState == .ready { advance() }
+            if !holdsStep, step == .access, Permissions.allGranted { advance(); reclaimFocus() }
+            if !holdsStep, step == .voice, controller.transcriberState == .ready { advance() }
             if step == .tryIt, !controller.lastTranscription.isEmpty { tryItDone = true }
         }
     }
@@ -118,6 +150,7 @@ struct OnboardingView: View {
         case .voice: voice
         case .tryIt: tryIt
         case .cleanUp: cleanUpScreen
+        case .agentVoice: agentVoice
         case .features: features
         }
     }
@@ -241,7 +274,7 @@ struct OnboardingView: View {
                 case .modelMissing where !isOnline, .failed where !isOnline:
                     Label(loc("No internet connection"), systemImage: "wifi.slash")
                         .foregroundStyle(.secondary)
-                    Text(loc("This screen continues on its own once you're back online."))
+                    Text(loc("This screen continues on its own once you’re back online."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -699,20 +732,44 @@ struct OnboardingView: View {
             .buttonStyle(OnboardingButtonStyle())
     }
 
+    // The screens this run will actually show. A step whose requirement is
+    // already met is one advance() walks straight past, so counting it here
+    // promises a screen that never arrives and makes the indicator jump two
+    // places at once. The current step always counts, even the moment it
+    // becomes satisfied — the dot under you may not vanish while you're
+    // standing on it.
+    private var visibleSteps: [Step] {
+        Step.allCases.filter { $0 == step || !isSatisfied($0) }
+    }
+
     private var dots: some View {
-        HStack(spacing: 8) {
-            ForEach(Step.allCases, id: \.rawValue) { s in
+        let steps = visibleSteps
+        let position = (steps.firstIndex(of: step) ?? 0) + 1
+        return HStack(spacing: 8) {
+            ForEach(steps, id: \.rawValue) { s in
                 Circle()
                     .fill(s == step ? Color.accentColor : Color.secondary.opacity(0.3))
                     .frame(width: 7, height: 7)
             }
         }
+        .animation(.easeOut(duration: 0.22), value: steps)
         .accessibilityElement()
-        .accessibilityLabel(loc("Step %1$ld of %2$ld", step.rawValue + 1, Step.allCases.count))
+        .accessibilityLabel(loc("Step %1$ld of %2$ld", position, steps.count))
     }
 
     // Skip steps that are already satisfied, so reopening setup (or a re-grant
     // in System Settings) never replays screens the user has completed.
+    // The experimental opt-in (docs §7.1b). Skipping leaves the gate off, the
+    // same as never having seen it: the default is what the user decided, not
+    // what they failed to do. Both paths write the setting explicitly before
+    // moving on, so going Back and changing your mind cannot leave a stale
+    // `true` behind.
+    private var agentVoice: some View {
+        AgentVoiceOnboardingPage(settings: settings,
+                                 onEnable: { advance() },
+                                 onSkip: { advance() })
+    }
+
     private func advance() {
         var raw = step.rawValue + 1
         while let candidate = Step(rawValue: raw), isSatisfied(candidate) { raw += 1 }
@@ -739,7 +796,7 @@ struct OnboardingView: View {
         switch s {
         case .access: return Permissions.allGranted
         case .voice: return controller.transcriberState == .ready
-        case .welcome, .tryIt, .cleanUp, .features: return false
+        case .welcome, .tryIt, .cleanUp, .agentVoice, .features: return false
         }
     }
 }

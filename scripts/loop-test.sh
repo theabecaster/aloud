@@ -23,6 +23,24 @@ BUNDLE_ID="com.abrahamgonzalez.aloud"
 
 [ -x "$APP_BIN" ] || { echo "error: $APP_BIN not found — install the app first" >&2; exit 1; }
 
+# This test drives the installed app through --simulate-hold, which is a
+# development verb. scripts/make-app.sh compiles those out by default, so the
+# installed bundle has to have been staged with ALOUD_DEV_CLI=1. Fail here with
+# the fix rather than 90 seconds later with an empty TextEdit window. Probed via
+# --doctor, which is gated by the same flag and has no side effects — probing
+# with --simulate-hold itself would post a real synthetic hotkey press.
+if ! "$CLI_BIN" --doctor >/dev/null 2>&1; then
+  cat >&2 <<'MSG'
+error: the installed app was built without the development CLI verbs.
+       Restage and reinstall it with:
+
+         ALOUD_DEV_CLI=1 CODESIGN_IDENTITY="$CODESIGN_IDENTITY" bash scripts/make-app.sh
+         pkill -x Aloud; rm -rf /Applications/Aloud.app \
+           && cp -R dist/Aloud.app /Applications/Aloud.app && open -a /Applications/Aloud.app
+MSG
+  exit 1
+fi
+
 TMP=""
 cleanup() {
   [ -n "$TMP" ] && rm -rf "$TMP"

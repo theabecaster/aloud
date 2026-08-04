@@ -13,13 +13,17 @@ final class CorrectionLearnerTests: XCTestCase {
             .appendingPathComponent("aloud-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("corrections.json")
-        suite = "aloud-tests-\(UUID().uuidString)"
+        // Fixed name, emptied on the way in: a fresh UUID per run leaves a
+        // plist in ~/Library/Preferences each time, because cfprefsd rewrites
+        // it after removePersistentDomain has emptied the domain.
+        suite = "aloud-tests-correction-learner"
         defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
         settings = SettingsStore(defaults: defaults)
     }
 
     override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: suite)
+        forgetTestDefaults(suite)
         try? FileManager.default.removeItem(at: dir)
     }
 

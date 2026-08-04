@@ -1,2 +1,2 @@
-"NSMicrophoneUsageDescription" = "Aloud verwendet das Mikrofon, um zu hören, was Sie sagen, während Sie die Diktiertaste gedrückt halten. Audio verlässt Ihren Mac nie.";
+"NSMicrophoneUsageDescription" = "Aloud verwendet das Mikrofon, um zu hören, was Sie sagen — während Sie die Diktiertaste gedrückt halten und wenn Ihnen ein Coding-Agent auf diesem Mac eine Frage stellt. Audio verlässt Ihren Mac nie.";
 "NSSpeechRecognitionUsageDescription" = "Aloud kann das integrierte Diktat Ihres Mac vorübergehend nutzen, während die eigene Spracherkennung fertig eingerichtet wird. Audio verlässt Ihren Mac nie.";
