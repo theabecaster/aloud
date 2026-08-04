@@ -14,6 +14,11 @@ final class RecordingIndicatorPanel {
     // assert on the phase — which is where a completed turn's tick lives, and
     // which nothing could see from outside when it was being silently wiped.
     var agentPhaseForTesting: AgentIndicatorPhase { model.agentPhase }
+
+    // Whether a pill is logically up. Same reason as the phase above: a pill
+    // that comes back on its own after being taken down is invisible to every
+    // other assertion a test can make.
+    var isOnScreenForTesting: Bool { isShowing }
     private var levelTimer: Timer?
     // Bumped by present() and hide() so a pending or in-flight hide can tell
     // whether a show snuck in behind it (hands-free is a cancel immediately

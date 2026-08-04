@@ -95,6 +95,86 @@ final class IndicatorLockTests: XCTestCase {
     }
 }
 
+// The 300 ms grace in front of the spinner, and the session that ends inside it.
+//
+// `showTranscribing`/`showWorking` do not switch the pill straight away: a
+// commit that settles quickly should just land the text, with no "Polishing…"
+// blinking through on its way out. So the switch is armed on a task and the
+// live meter stays up for 300 ms.
+//
+// The session can be over before that lands — an empty transcript, a command
+// that came back with nothing, a hold too short to keep — and every one of
+// those paths calls `hide()`. What stops the armed task firing into a pill
+// that has already gone is a single `announceTask?.cancel()` on hide's first
+// line, and nothing about that line announces how much rests on it: without
+// it, the task calls `present()` and puts a spinner back up for a session
+// that no longer exists, with no `hide()` left to take it down until the next
+// session minutes later — and it would re-set `isCommand` behind the end
+// cue's back on the way. Pinned here because it is one easily-deleted line
+// and the failure it prevents is invisible in every other test.
+@MainActor
+final class IndicatorAnnounceGraceTests: XCTestCase {
+
+    // Long enough to cover the 300 ms grace and land after it.
+    private func waitOutTheGrace() async {
+        try? await Task.sleep(for: .milliseconds(500))
+    }
+
+    func testACommandThatEndsInsideTheGraceLeavesNoPillBehind() async {
+        let panel = RecordingIndicatorPanel()
+        panel.show(levelProvider: { 0 }, command: true)
+        panel.showWorking()
+        panel.hide()
+
+        await waitOutTheGrace()
+
+        XCTAssertFalse(panel.isOnScreenForTesting,
+                       "the spinner was armed for a session that ended before it landed")
+    }
+
+    func testADictationThatEndsInsideTheGraceLeavesNoPillBehind() async {
+        let panel = RecordingIndicatorPanel()
+        panel.show(levelProvider: { 0 })
+        panel.showTranscribing()
+        panel.hide()
+
+        await waitOutTheGrace()
+
+        XCTAssertFalse(panel.isOnScreenForTesting)
+    }
+
+    // The cue half of the same line: a spinner that came back would come back
+    // with `isCommand` set, and the next hide — an unrelated pill, a different
+    // session entirely — would announce the end of this one.
+    func testTheGhostSpinnerDoesNotArmAStrayEndCue() async {
+        let panel = RecordingIndicatorPanel()
+        var ended = 0
+        panel.show(levelProvider: { 0 }, command: true)
+        panel.showWorking()
+        panel.hide()
+        await waitOutTheGrace()
+
+        // Whatever comes next, it is not this session, and it is not hands-free.
+        panel.onHandsFreeEnd = { ended += 1 }
+        panel.showHint("Finish setup to start dictating")
+        panel.hide()
+
+        XCTAssertEqual(ended, 0, "an unrelated hint pill does not end a command session")
+    }
+
+    // And the case the grace exists for still works: a session that runs past
+    // it gets its spinner.
+    func testASessionThatOutlivesTheGraceStillGetsItsSpinner() async {
+        let panel = RecordingIndicatorPanel()
+        panel.show(levelProvider: { 0 })
+        panel.showTranscribing()
+
+        await waitOutTheGrace()
+
+        XCTAssertTrue(panel.isOnScreenForTesting)
+    }
+}
+
 // The tick at the end of an agent turn, and the teardown that used to erase it.
 //
 // `sendDraft` is the moment the user's words go to the agent, and the
@@ -140,3 +220,4 @@ final class AgentTurnCompletionTests: XCTestCase {
         XCTAssertEqual(panel.agentPhaseForTesting, .listening)
     }
 }
+
